@@ -8,3 +8,4 @@ export { Activity, type ActivityDoc } from "./Activity";
 export { ApiClient, type ApiClientDoc } from "./ApiClient";
 export { Counter } from "./Counter";
 export { RateLimit } from "./RateLimit";
+export { RefreshToken, type RefreshTokenDoc } from "./RefreshToken";
