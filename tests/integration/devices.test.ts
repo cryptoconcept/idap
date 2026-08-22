@@ -57,6 +57,34 @@ describe("device registration", () => {
     expect(await Device.countDocuments({})).toBe(1);
   });
 
+  it("reassigns the device to the new user and institution when a token changes hands", async () => {
+    // A device can change hands between users (and even institutions); FCM keeps
+    // handing back the same token. A second registration must overwrite the
+    // owner, not just avoid creating a duplicate row — otherwise the old owner
+    // stays subscribed to someone else's push notifications.
+    const firstUser = await makeUser("INS0001");
+    const secondUser = await makeUser("INS0002");
+
+    await DeviceService.register({
+      userId: String(firstUser._id),
+      institutionId: "INS0001",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+
+    await DeviceService.register({
+      userId: String(secondUser._id),
+      institutionId: "INS0002",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+
+    expect(await Device.countDocuments({})).toBe(1);
+    const device = await Device.findOne({ pushToken: "fcm-token-1" }).lean();
+    expect(String(device!.userId)).toBe(String(secondUser._id));
+    expect(device!.institutionId).toBe("INS0002");
+  });
+
   it("ignores an institutionId supplied in the request body", async () => {
     // The schema does not accept one, so this is structurally impossible rather
     // than merely unchecked. The test pins that so a future schema edit cannot
@@ -70,7 +98,10 @@ describe("device registration", () => {
     expect(parsed.institutionId).toBeUndefined();
   });
 
-  it("removes dead tokens", async () => {
+  it("removes dead tokens without touching devices not named", async () => {
+    // A single-device fixture can't distinguish "removed the named token" from
+    // "removed everything" — a `deleteMany({})` bug would pass it just the same.
+    // A second, untouched device makes the assertion mean what it says.
     const user = await makeUser("INS0001");
     await DeviceService.register({
       userId: String(user._id),
@@ -78,8 +109,17 @@ describe("device registration", () => {
       pushToken: "fcm-token-1",
       platform: "android",
     });
+    await DeviceService.register({
+      userId: String(user._id),
+      institutionId: "INS0001",
+      pushToken: "fcm-token-2",
+      platform: "android",
+    });
 
     await DeviceService.remove(["fcm-token-1"]);
-    expect(await Device.countDocuments({})).toBe(0);
+
+    expect(await Device.countDocuments({})).toBe(1);
+    const remaining = await Device.findOne({}).lean();
+    expect(remaining!.pushToken).toBe("fcm-token-2");
   });
 });
