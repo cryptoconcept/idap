@@ -11,7 +11,17 @@ function expiryDate(): Date {
 }
 
 export const RefreshTokenService = {
-  async issue(input: { userId: string; deviceId: string; familyId?: string }) {
+  /**
+   * `sessionVersion` is the user's value at the moment the chain starts. It is
+   * required rather than defaulted so a caller cannot silently issue a token
+   * that survives the next "sign out everywhere".
+   */
+  async issue(input: {
+    userId: string;
+    deviceId: string;
+    sessionVersion: number;
+    familyId?: string;
+  }) {
     await connectToDatabase();
     const token = randomToken(32);
     const familyId = input.familyId ?? randomToken(16);
@@ -20,12 +30,13 @@ export const RefreshTokenService = {
       userId: new Types.ObjectId(input.userId),
       familyId,
       deviceId: input.deviceId,
+      sessionVersion: input.sessionVersion,
       tokenHash: hashSecret(token),
       expiresAt: expiryDate(),
       createdAt: new Date(),
     });
 
-    return { token, familyId };
+    return { token, familyId, sessionVersion: input.sessionVersion };
   },
 
   /**
@@ -56,9 +67,13 @@ export const RefreshTokenService = {
     ).lean();
 
     if (claimed) {
+      // The successor inherits the version the chain was issued at, never the
+      // user's current one: re-reading it here would let a rotation launder a
+      // revoked session back into a live one.
       const next = await RefreshTokenService.issue({
         userId: String(claimed.userId),
         deviceId: claimed.deviceId,
+        sessionVersion: claimed.sessionVersion ?? 0,
         familyId: claimed.familyId,
       });
 
@@ -104,12 +119,18 @@ export const RefreshTokenService = {
     );
   },
 
-  async revokeToken(token: string) {
+  /**
+   * Sign-out. Returns the row's owner and device so the caller can also drop
+   * that installation's push registrations, or null when there was nothing live
+   * to revoke.
+   */
+  async revokeToken(token: string): Promise<{ userId: string; deviceId: string } | null> {
     await connectToDatabase();
-    const result = await RefreshToken.updateOne(
+    const revoked = await RefreshToken.findOneAndUpdate(
       { tokenHash: hashSecret(token), revokedAt: { $exists: false } },
       { $set: { revokedAt: new Date() } },
-    );
-    return result.modifiedCount === 1;
+    ).lean();
+    if (!revoked) return null;
+    return { userId: String(revoked.userId), deviceId: revoked.deviceId };
   },
 };

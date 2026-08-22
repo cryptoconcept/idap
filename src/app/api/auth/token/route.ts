@@ -70,6 +70,7 @@ export async function POST(request: NextRequest) {
     const { token: refreshToken } = await RefreshTokenService.issue({
       userId: String(user._id),
       deviceId: credentials.deviceId,
+      sessionVersion: user.sessionVersion ?? 0,
     });
 
     await User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } });

@@ -13,7 +13,7 @@ describe("refresh tokens", () => {
   beforeEach(clearDatabase);
 
   it("issues an opaque token and stores only a hash of it", async () => {
-    const { token } = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const { token } = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
 
     expect(token).toMatch(/^[A-Za-z0-9_-]{20,}$/);
     const stored = await RefreshToken.findOne({}).lean();
@@ -22,7 +22,7 @@ describe("refresh tokens", () => {
   });
 
   it("rotates: the old token stops working and a new one is returned", async () => {
-    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
 
     const rotated = await RefreshTokenService.rotate(first.token);
     expect(rotated?.token).toBeTruthy();
@@ -33,7 +33,7 @@ describe("refresh tokens", () => {
   });
 
   it("keeps the family id across rotations", async () => {
-    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
     const second = await RefreshTokenService.rotate(first.token);
     expect(second?.familyId).toBe(first.familyId);
   });
@@ -41,7 +41,7 @@ describe("refresh tokens", () => {
   it("revokes the whole family when a consumed token is presented again", async () => {
     // Reuse means the token was copied. Revoking only the presented token would
     // leave the thief refreshing alongside the real user indefinitely.
-    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
     const second = await RefreshTokenService.rotate(first.token);
 
     expect(await RefreshTokenService.rotate(first.token)).toBeNull();
@@ -56,15 +56,48 @@ describe("refresh tokens", () => {
   });
 
   it("rejects an expired token", async () => {
-    const { token } = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const { token } = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
     await RefreshToken.updateOne({}, { $set: { expiresAt: new Date(Date.now() - 1000) } });
     expect(await RefreshTokenService.rotate(token)).toBeNull();
   });
 
-  it("revokes a single token on logout", async () => {
-    const { token } = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
-    expect(await RefreshTokenService.revokeToken(token)).toBe(true);
+  it("revokes a single token on logout and names the device it belonged to", async () => {
+    // The device id is what lets sign-out unregister that installation's push
+    // subscription; a bare boolean would leave the caller nothing to scope it by.
+    const { token } = await RefreshTokenService.issue({
+      userId: USER,
+      deviceId: "device-1",
+      sessionVersion: 0,
+    });
+
+    expect(await RefreshTokenService.revokeToken(token)).toEqual({
+      userId: USER,
+      deviceId: "device-1",
+    });
     expect(await RefreshTokenService.rotate(token)).toBeNull();
+    // A second revoke has nothing live to act on, so there is no device to drop.
+    expect(await RefreshTokenService.revokeToken(token)).toBeNull();
+  });
+
+  it("pins the chain to the session version it was issued at", async () => {
+    // A successor must inherit the issuing version rather than re-reading the
+    // user's current one. If it re-read it, a "sign out everywhere" bump would
+    // be laundered away by the very next rotation.
+    const first = await RefreshTokenService.issue({
+      userId: USER,
+      deviceId: "device-1",
+      sessionVersion: 3,
+    });
+
+    const second = await RefreshTokenService.rotate(first.token);
+    expect(second?.sessionVersion).toBe(3);
+
+    const third = await RefreshTokenService.rotate(second!.token);
+    expect(third?.sessionVersion).toBe(3);
+
+    const rows = await RefreshToken.find({}).lean();
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.sessionVersion === 3)).toBe(true);
   });
 
   it("under concurrent presentation of the same token, never more than one rotation wins and the family ends up fully revoked", async () => {
@@ -83,7 +116,7 @@ describe("refresh tokens", () => {
     // is also correct here, not a bug. What must always hold is the ceiling
     // (at most one live successor ever) and that the family is left fully
     // revoked either way.
-    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
 
     const results = await Promise.all(
       Array.from({ length: 5 }, () => RefreshTokenService.rotate(first.token)),
@@ -106,7 +139,7 @@ describe("refresh tokens", () => {
     // and run the family-burning revoke immediately before it actually lands,
     // pinning the exact interleaving instead of hoping a Promise.all race
     // reproduces it.
-    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1", sessionVersion: 0 });
 
     const originalCreate = RefreshToken.create.bind(RefreshToken);
     const createSpy = vi

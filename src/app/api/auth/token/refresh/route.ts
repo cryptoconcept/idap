@@ -30,6 +30,16 @@ export async function POST(request: NextRequest) {
       return jsonError("UNAUTHORIZED", "Session expired. Please sign in again.");
     }
 
+    // "Sign out everywhere" is a `sessionVersion` bump. It kills access tokens
+    // within 15 minutes on its own, but the refresh chain outlives them by 30
+    // days, so without this the app would quietly refresh back into a working
+    // session. The chain is pinned to the version it was issued at; once the
+    // user's value moves past it, the chain is dead. Same message as every
+    // other failure here so it is not a way to probe a token's state.
+    if ((user.sessionVersion ?? 0) !== (rotated.sessionVersion ?? 0)) {
+      return jsonError("UNAUTHORIZED", "Session expired. Please sign in again.");
+    }
+
     // Same boundary the issue endpoint enforces: a refresh must not let a
     // user from a since-deactivated institution keep minting access tokens.
     const institution = await Institution.findOne({ institutionId: user.institutionId })

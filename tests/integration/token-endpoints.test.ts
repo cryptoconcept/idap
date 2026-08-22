@@ -143,6 +143,63 @@ describe("mobile token endpoints", () => {
     expect(response.status).toBe(401);
   });
 
+  it("refuses to refresh once the user's session version has been bumped", async () => {
+    // "Sign out everywhere" is a sessionVersion bump. It kills access tokens
+    // within 15 minutes, but the refresh chain lives 30 days: without pinning
+    // the chain to its issuing version, the app refreshes straight back into a
+    // working session and the sign-out silently expires instead of holding.
+    // The institution stays active and the role stays INSTITUTION_ADMIN, so the
+    // version check is the only guard that can produce the refusal.
+    const issued = await (
+      await issueToken(
+        post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
+      )
+    ).json();
+
+    await User.updateOne({ email: "staff@example.test" }, { $inc: { sessionVersion: 1 } });
+
+    const response = await refreshToken(post({ refreshToken: issued.refreshToken }));
+    expect(response.status).toBe(401);
+    // The same uniform failure as every other refresh rejection: a caller must
+    // not be able to tell a revoked session from an unknown token.
+    expect((await response.json()).error.message).toBe("Session expired. Please sign in again.");
+  });
+
+  it("issues a usable chain to a user who has signed out everywhere before", async () => {
+    // The counterpart to the two tests above: the chain is pinned to the
+    // version at issue, not to zero. Pinning it to a constant would make every
+    // token issued after the first "sign out everywhere" refuse to refresh —
+    // a sign-in that silently expires 15 minutes later.
+    await User.updateOne({ email: "staff@example.test" }, { $set: { sessionVersion: 2 } });
+
+    const issued = await (
+      await issueToken(
+        post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
+      )
+    ).json();
+
+    const response = await refreshToken(post({ refreshToken: issued.refreshToken }));
+    expect(response.status).toBe(200);
+  });
+
+  it("a bumped session version stays dead across the whole chain, not just the next refresh", async () => {
+    // Rotating before the bump proves the check reads the chain's pinned
+    // version rather than whatever the freshest row happened to be written
+    // with — a successor that re-read the user would restore access here.
+    const issued = await (
+      await issueToken(
+        post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
+      )
+    ).json();
+
+    const rotated = await (await refreshToken(post({ refreshToken: issued.refreshToken }))).json();
+    expect(rotated.refreshToken).toBeTruthy();
+
+    await User.updateOne({ email: "staff@example.test" }, { $inc: { sessionVersion: 1 } });
+
+    expect((await refreshToken(post({ refreshToken: rotated.refreshToken }))).status).toBe(401);
+  });
+
   it("shares its sign-in rate-limit bucket with the dashboard login endpoint", async () => {
     // Both endpoints bucket on `login:${ip}:${email}`. Exhausting the budget
     // through the dashboard endpoint must already block the mobile one for
