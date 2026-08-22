@@ -254,6 +254,15 @@ The API client owns token refresh: on a `401` it refreshes once, retries the
 original request, and signs out if the refresh itself fails. Screens never handle
 tokens.
 
+**Refresh must be single-flight — this is a hard requirement, not an
+optimisation.** Exactly one refresh may be in flight per app instance; concurrent
+`401`s await that one result rather than each starting their own. Reuse detection
+cannot tell two simultaneous refreshes of the same token from a stolen token being
+replayed, so it burns the family and signs the user out. An app that fires several
+requests on resume and refreshes for each would sign the user out on every resume.
+The correct place to fix this is the client; weakening detection server-side would
+give back the property the rotation exists to provide.
+
 Visual language matches the web platform — monochrome, identifiers in monospace,
 status by fill weight rather than colour.
 
