@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { User } from "@/models";
+import { Institution, User } from "@/models";
 import { refreshTokenSchema } from "@/lib/validation/user";
 import { signAccessToken } from "@/lib/auth/session";
 import { RefreshTokenService } from "@/services/refresh-token.service";
@@ -20,9 +20,22 @@ export async function POST(request: NextRequest) {
     // nothing that would let them tell those apart.
     if (!rotated) return jsonError("UNAUTHORIZED", "Session expired. Please sign in again.");
 
+    // From this point on, `rotated` is already a live row in storage: any
+    // early return below leaves that successor token orphaned rather than
+    // handed to a caller. That is fine — it is never disclosed to anyone, so
+    // it cannot be used, and its family can still be revoked normally later.
     await connectToDatabase();
     const user = await User.findById(rotated.userId).lean();
     if (!user || !user.active || user.role === "SUPER_ADMIN" || !user.institutionId) {
+      return jsonError("UNAUTHORIZED", "Session expired. Please sign in again.");
+    }
+
+    // Same boundary the issue endpoint enforces: a refresh must not let a
+    // user from a since-deactivated institution keep minting access tokens.
+    const institution = await Institution.findOne({ institutionId: user.institutionId })
+      .select("active")
+      .lean();
+    if (!institution?.active) {
       return jsonError("UNAUTHORIZED", "Session expired. Please sign in again.");
     }
 

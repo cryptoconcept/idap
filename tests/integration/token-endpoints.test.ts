@@ -3,6 +3,9 @@ import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/d
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { POST as issueToken } from "@/app/api/auth/token/route";
 import { POST as refreshToken } from "@/app/api/auth/token/refresh/route";
+import { POST as login } from "@/app/api/auth/login/route";
+import { Institution, User } from "@/models";
+import { LOGIN_RATE_LIMIT } from "@/lib/constants";
 import type { NextRequest } from "next/server";
 
 function post(body: unknown) {
@@ -56,6 +59,17 @@ describe("mobile token endpoints", () => {
     expect(response.status).toBe(403);
   });
 
+  it("refuses to issue a token when the institution is inactive", async () => {
+    // Same boundary the dashboard login enforces: a deactivated institution's
+    // staff must not be able to obtain a mobile session from scratch.
+    await Institution.updateOne({ institutionId: "INS0001" }, { $set: { active: false } });
+
+    const response = await issueToken(
+      post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
+    );
+    expect(response.status).toBe(403);
+  });
+
   it("exchanges a refresh token for a new pair", async () => {
     const issued = await (
       await issueToken(
@@ -81,5 +95,53 @@ describe("mobile token endpoints", () => {
     await refreshToken(post({ refreshToken: issued.refreshToken }));
     const replay = await refreshToken(post({ refreshToken: issued.refreshToken }));
     expect(replay.status).toBe(401);
+  });
+
+  it("refuses to refresh once the account has become a platform admin", async () => {
+    // A user who held a live refresh token could in principle be promoted to
+    // SUPER_ADMIN afterwards. Refresh must re-check the boundary, not just
+    // trust whatever role was true at issue time.
+    const issued = await (
+      await issueToken(
+        post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
+      )
+    ).json();
+
+    await User.updateOne(
+      { email: "staff@example.test" },
+      { $set: { role: "SUPER_ADMIN" }, $unset: { institutionId: "" } },
+    );
+
+    const response = await refreshToken(post({ refreshToken: issued.refreshToken }));
+    expect(response.status).toBe(401);
+  });
+
+  it("refuses to refresh once the institution has become inactive", async () => {
+    const issued = await (
+      await issueToken(
+        post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
+      )
+    ).json();
+
+    await Institution.updateOne({ institutionId: "INS0001" }, { $set: { active: false } });
+
+    const response = await refreshToken(post({ refreshToken: issued.refreshToken }));
+    expect(response.status).toBe(401);
+  });
+
+  it("shares its sign-in rate-limit bucket with the dashboard login endpoint", async () => {
+    // Both endpoints bucket on `login:${ip}:${email}`. Exhausting the budget
+    // through the dashboard endpoint must already block the mobile one for
+    // the same IP + email, proving the bucket is shared rather than merely
+    // present on each endpoint independently.
+    const email = "staff@example.test";
+    for (let attempt = 0; attempt < LOGIN_RATE_LIMIT.limit; attempt += 1) {
+      await login(post({ email, password: "wrong" }));
+    }
+
+    const response = await issueToken(
+      post({ email, password: "Password!2026", deviceId: "device-1" }),
+    );
+    expect(response.status).toBe(429);
   });
 });
