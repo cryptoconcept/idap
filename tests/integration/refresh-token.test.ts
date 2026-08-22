@@ -66,4 +66,25 @@ describe("refresh tokens", () => {
     expect(await RefreshTokenService.revokeToken(token)).toBe(true);
     expect(await RefreshTokenService.rotate(token)).toBeNull();
   });
+
+  it("under concurrent presentation of the same token, exactly one rotation wins and the family is fully revoked", async () => {
+    // A copied token and a legitimate retry look identical to the server: both
+    // present the same live token at the same time. Rotation must let exactly
+    // one succeed — a check-then-act consume (read, then a separate write) lets
+    // every concurrent caller read "unconsumed" before any of them writes,
+    // so all of them would pass and all would mint a successor.
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () => RefreshTokenService.rotate(first.token)),
+    );
+
+    const winners = results.filter((result) => result !== null);
+    const losers = results.filter((result) => result === null);
+    expect(winners).toHaveLength(1);
+    expect(losers).toHaveLength(4);
+
+    const live = await RefreshToken.countDocuments({ revokedAt: { $exists: false } });
+    expect(live).toBe(0);
+  });
 });
