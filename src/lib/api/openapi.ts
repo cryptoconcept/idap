@@ -234,6 +234,11 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
         description:
           "Called from your own backend with an API key and secret. Never from browser JavaScript.",
       },
+      {
+        name: "Staff app",
+        description:
+          "Used by the institution staff mobile app. Bearer tokens, obtained with a staff email and password. Not for external integrations.",
+      },
     ],
     paths: {
       [`${publicBase}/leads`]: {
@@ -557,6 +562,154 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
           },
         },
       },
+
+      "/api/auth/token": {
+        post: {
+          tags: ["Staff app"],
+          summary: "Exchange staff credentials for tokens",
+          description:
+            "Returns a 15-minute access token and a 30-day refresh token. Refresh tokens are single-use and rotate on every refresh. Platform administrators are refused.",
+          operationId: "issueStaffToken",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["email", "password", "deviceId"],
+                  properties: {
+                    email: { type: "string", format: "email" },
+                    password: { type: "string" },
+                    deviceId: {
+                      type: "string",
+                      description: "Stable per-installation id, so one device can be signed out alone.",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Tokens issued.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean", const: true },
+                      accessToken: { type: "string" },
+                      refreshToken: { type: "string" },
+                      expiresIn: { type: "integer", example: 900 },
+                    },
+                  },
+                },
+              },
+            },
+            ...errorResponses([
+              "VALIDATION_ERROR",
+              "UNAUTHORIZED",
+              "FORBIDDEN",
+              "RATE_LIMITED",
+              "INTERNAL_ERROR",
+            ]),
+          },
+        },
+      },
+
+      "/api/auth/token/refresh": {
+        post: {
+          tags: ["Staff app"],
+          summary: "Rotate a refresh token",
+          description:
+            "Consumes the refresh token and returns a new pair. Presenting an already-used token revokes every token for that device.",
+          operationId: "refreshStaffToken",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["refreshToken"],
+                  properties: { refreshToken: { type: "string" } },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "New token pair.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean", const: true },
+                      accessToken: { type: "string" },
+                      refreshToken: { type: "string" },
+                      expiresIn: { type: "integer", example: 900 },
+                    },
+                  },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "UNAUTHORIZED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      "/api/devices": {
+        post: {
+          tags: ["Staff app"],
+          summary: "Register this device for push notifications",
+          description:
+            "The institution is taken from the access token, never from the body. Re-registering the same push token updates the existing record.",
+          operationId: "registerDevice",
+          security: [{ staffAuth: [] }],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["pushToken"],
+                  properties: {
+                    pushToken: { type: "string" },
+                    platform: { type: "string", enum: ["android", "ios"], default: "android" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            "201": {
+              description: "Device registered.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean", const: true },
+                      device: {
+                        type: "object",
+                        properties: { id: { type: "string" } },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            ...errorResponses([
+              "VALIDATION_ERROR",
+              "UNAUTHORIZED",
+              "FORBIDDEN",
+              "INTERNAL_ERROR",
+            ]),
+          },
+        },
+      },
     },
 
     components: {
@@ -577,6 +730,13 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
           in: "header",
           name: "X-API-SECRET",
           description: "The secret. Send alongside `X-API-KEY`.",
+        },
+        staffAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT",
+          description:
+            "Access token from `POST /api/auth/token`. Expires after 15 minutes; refresh with `POST /api/auth/token/refresh`.",
         },
       },
 

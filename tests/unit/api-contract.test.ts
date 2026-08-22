@@ -147,4 +147,32 @@ describe("OpenAPI document", () => {
       expect(schemas).toContain(ref);
     }
   });
+
+  it("documents the staff app endpoints", () => {
+    expect(paths(scoped)).toContain("/api/auth/token");
+    expect(paths(scoped)).toContain("/api/auth/token/refresh");
+    expect(paths(scoped)).toContain("/api/devices");
+  });
+
+  it("marks token issue as needing no prior credential", () => {
+    const operation = (
+      scoped.paths as Record<string, Record<string, { security?: unknown[]; tags?: string[] }>>
+    )["/api/auth/token"].post;
+    expect(operation.security).toEqual([]);
+    expect(operation.tags).toContain("Staff app");
+  });
+
+  it("requires the staff bearer scheme on device registration", () => {
+    const operation = (
+      scoped.paths as Record<string, Record<string, { security?: { staffAuth?: unknown[] }[] }>>
+    )["/api/devices"].post;
+    expect(operation.security).toEqual([{ staffAuth: [] }]);
+  });
+
+  it("declares the staff bearer security scheme", () => {
+    const schemes = (
+      scoped.components as { securitySchemes: Record<string, unknown> }
+    ).securitySchemes;
+    expect(schemes).toHaveProperty("staffAuth");
+  });
 });
