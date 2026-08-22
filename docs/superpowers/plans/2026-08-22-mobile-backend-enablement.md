@@ -1245,6 +1245,15 @@ import { LeadService } from "@/services/lead.service";
 import { createLeadSchema } from "@/lib/validation/lead";
 import * as fcm from "@/lib/push/fcm";
 
+// `vi.mock` is hoisted and swaps the module before anything imports it. A
+// `vi.spyOn` would not work here: ES module namespaces are sealed, and
+// notification.service.ts holds a static binding to sendPush.
+vi.mock("@/lib/push/fcm", () => ({
+  sendPush: vi.fn(async () => ({ deadTokens: [] as string[] })),
+}));
+
+const sendPush = vi.mocked(fcm.sendPush);
+
 const leadInput = createLeadSchema.parse({
   studentName: "Rahul Kumar",
   phone: "9876543210",
@@ -1261,7 +1270,8 @@ describe("notifications", () => {
     await clearDatabase();
     await makeInstitution("INS0001");
     await makeInstitution("INS0002");
-    vi.restoreAllMocks();
+    sendPush.mockReset();
+    sendPush.mockResolvedValue({ deadTokens: [] });
   });
 
   async function registerDevice(institutionId: string, pushToken: string) {
@@ -1278,7 +1288,6 @@ describe("notifications", () => {
     await registerDevice("INS0001", "token-a");
     await registerDevice("INS0002", "token-b");
 
-    const send = vi.spyOn(fcm, "sendPush").mockResolvedValue({ deadTokens: [] });
     await NotificationService.notifyNewApplication({
       institutionId: "INS0001",
       applicationNumber: "INS0001-APP-000001",
@@ -1286,13 +1295,12 @@ describe("notifications", () => {
       applyingFor: "Grade 5",
     });
 
-    const messages = send.mock.calls[0][0];
+    const messages = sendPush.mock.calls[0][0];
     expect(messages.map((m) => m.pushToken)).toEqual(["token-a"]);
   });
 
   it("includes the student's name and deep-link data", async () => {
     await registerDevice("INS0001", "token-a");
-    const send = vi.spyOn(fcm, "sendPush").mockResolvedValue({ deadTokens: [] });
 
     await NotificationService.notifyNewApplication({
       institutionId: "INS0001",
@@ -1301,7 +1309,7 @@ describe("notifications", () => {
       applyingFor: "Grade 5",
     });
 
-    const [message] = send.mock.calls[0][0];
+    const [message] = sendPush.mock.calls[0][0];
     expect(message.body).toContain("Rahul Kumar");
     expect(message.data).toMatchObject({
       type: "application",
@@ -1311,7 +1319,7 @@ describe("notifications", () => {
 
   it("prunes tokens FCM reports as dead", async () => {
     await registerDevice("INS0001", "token-a");
-    vi.spyOn(fcm, "sendPush").mockResolvedValue({ deadTokens: ["token-a"] });
+    sendPush.mockResolvedValue({ deadTokens: ["token-a"] });
 
     await NotificationService.notifyNewApplication({
       institutionId: "INS0001",
@@ -1324,20 +1332,19 @@ describe("notifications", () => {
   });
 
   it("does nothing when the institution has no devices", async () => {
-    const send = vi.spyOn(fcm, "sendPush").mockResolvedValue({ deadTokens: [] });
     await NotificationService.notifyNewApplication({
       institutionId: "INS0001",
       applicationNumber: "INS0001-APP-000001",
       studentName: "Rahul Kumar",
       applyingFor: "Grade 5",
     });
-    expect(send).not.toHaveBeenCalled();
+    expect(sendPush).not.toHaveBeenCalled();
   });
 
   it("never fails the submission it is reporting", async () => {
     // A family submitting at 11pm must not see an error because FCM is down.
     await registerDevice("INS0001", "token-a");
-    vi.spyOn(fcm, "sendPush").mockRejectedValue(new Error("FCM unavailable"));
+    sendPush.mockRejectedValue(new Error("FCM unavailable"));
 
     const lead = await LeadService.createLead({
       institutionId: "INS0001",
@@ -1350,7 +1357,6 @@ describe("notifications", () => {
 
   it("fires on enquiry creation", async () => {
     await registerDevice("INS0001", "token-a");
-    const send = vi.spyOn(fcm, "sendPush").mockResolvedValue({ deadTokens: [] });
 
     await LeadService.createLead({
       institutionId: "INS0001",
@@ -1359,7 +1365,7 @@ describe("notifications", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(send).toHaveBeenCalled();
+    expect(sendPush).toHaveBeenCalled();
   });
 });
 ```
