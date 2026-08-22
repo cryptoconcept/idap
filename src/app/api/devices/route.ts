@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
     const device = await DeviceService.register({
       userId: user.id,
       institutionId: clause.institutionId,
+      deviceId: data.deviceId,
       pushToken: data.pushToken,
       platform: data.platform,
     });

@@ -665,7 +665,7 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
           tags: ["Staff app"],
           summary: "Register this device for push notifications",
           description:
-            "The institution is taken from the access token, never from the body. Re-registering the same push token updates the existing record.",
+            "The institution is taken from the access token, never from the body. Re-registering the same push token updates the existing record. Send the same `deviceId` used at token issue: signing out drops that installation's registrations by it.",
           operationId: "registerDevice",
           security: [{ staffAuth: [] }],
           requestBody: {
@@ -674,8 +674,12 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               "application/json": {
                 schema: {
                   type: "object",
-                  required: ["pushToken"],
+                  required: ["deviceId", "pushToken"],
                   properties: {
+                    deviceId: {
+                      type: "string",
+                      description: "The same stable per-installation id sent to `POST /api/auth/token`.",
+                    },
                     pushToken: { type: "string" },
                     platform: { type: "string", enum: ["android", "ios"], default: "android" },
                   },

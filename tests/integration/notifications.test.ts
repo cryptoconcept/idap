@@ -53,6 +53,7 @@ describe("notifications", () => {
     await DeviceService.register({
       userId: String(user._id),
       institutionId,
+      deviceId: `install-${pushToken}`,
       pushToken,
       platform: "android",
     });

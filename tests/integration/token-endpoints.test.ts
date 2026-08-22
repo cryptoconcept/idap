@@ -3,8 +3,10 @@ import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/d
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { POST as issueToken } from "@/app/api/auth/token/route";
 import { POST as refreshToken } from "@/app/api/auth/token/refresh/route";
+import { POST as revokeToken } from "@/app/api/auth/token/revoke/route";
 import { POST as login } from "@/app/api/auth/login/route";
-import { Institution, User } from "@/models";
+import { Device, Institution, User } from "@/models";
+import { DeviceService } from "@/services/device.service";
 import { LOGIN_RATE_LIMIT } from "@/lib/constants";
 import type { NextRequest } from "next/server";
 
@@ -198,6 +200,64 @@ describe("mobile token endpoints", () => {
     await User.updateOne({ email: "staff@example.test" }, { $inc: { sessionVersion: 1 } });
 
     expect((await refreshToken(post({ refreshToken: rotated.refreshToken }))).status).toBe(401);
+  });
+
+  it("signing out unregisters that installation's push devices", async () => {
+    // The only other path that deletes a Device is FCM dead-token pruning, so
+    // without this a signed-out phone keeps receiving notifications — which
+    // carry applicant names to the lock screen by design (spec §6) — until the
+    // app is uninstalled.
+    const user = await User.findOne({ email: "staff@example.test" }).lean();
+    const issued = await (
+      await issueToken(
+        post({ email: "staff@example.test", password: "Password!2026", deviceId: "install-1" }),
+      )
+    ).json();
+
+    await DeviceService.register({
+      userId: String(user!._id),
+      institutionId: "INS0001",
+      deviceId: "install-1",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+    // A second handset belonging to the same person, signed in separately.
+    await DeviceService.register({
+      userId: String(user!._id),
+      institutionId: "INS0001",
+      deviceId: "install-2",
+      pushToken: "fcm-token-2",
+      platform: "android",
+    });
+
+    const response = await revokeToken(post({ refreshToken: issued.refreshToken }));
+    expect(response.status).toBe(200);
+
+    // Only the handset that signed out; the other phone stays subscribed.
+    const remaining = await Device.find({}).lean();
+    expect(remaining.map((row) => row.pushToken)).toEqual(["fcm-token-2"]);
+  });
+
+  it("still reports success, and unregisters nothing, for a token it does not know", async () => {
+    // The endpoint must not become an oracle, and an unknown token names no
+    // device — a blanket delete triggered by any string would be worse than
+    // the bug this fixes.
+    const user = await User.findOne({ email: "staff@example.test" }).lean();
+    await DeviceService.register({
+      userId: String(user!._id),
+      institutionId: "INS0001",
+      deviceId: "install-1",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+
+    const response = await revokeToken(
+      post({ refreshToken: "not-a-real-token-but-long-enough-to-parse" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).message).toBe("Signed out");
+    expect(await Device.countDocuments({})).toBe(1);
   });
 
   it("shares its sign-in rate-limit bucket with the dashboard login endpoint", async () => {

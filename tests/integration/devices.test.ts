@@ -21,6 +21,7 @@ describe("device registration", () => {
     const user = await makeUser("INS0001");
     await DeviceService.register({
       userId: String(user._id),
+      deviceId: "install-1",
       institutionId: "INS0001",
       pushToken: "fcm-token-1",
       platform: "android",
@@ -35,6 +36,7 @@ describe("device registration", () => {
     const user = await makeUser("INS0001");
     await DeviceService.register({
       userId: String(user._id),
+      deviceId: "install-1",
       institutionId: "INS0001",
       pushToken: "fcm-token-1",
       platform: "android",
@@ -49,6 +51,7 @@ describe("device registration", () => {
     for (let index = 0; index < 3; index += 1) {
       await DeviceService.register({
         userId: String(user._id),
+        deviceId: "install-1",
         institutionId: "INS0001",
         pushToken: "fcm-token-1",
         platform: "android",
@@ -67,6 +70,7 @@ describe("device registration", () => {
 
     await DeviceService.register({
       userId: String(firstUser._id),
+      deviceId: "install-1",
       institutionId: "INS0001",
       pushToken: "fcm-token-1",
       platform: "android",
@@ -74,6 +78,7 @@ describe("device registration", () => {
 
     await DeviceService.register({
       userId: String(secondUser._id),
+      deviceId: "install-1",
       institutionId: "INS0002",
       pushToken: "fcm-token-1",
       platform: "android",
@@ -90,12 +95,74 @@ describe("device registration", () => {
     // than merely unchecked. The test pins that so a future schema edit cannot
     // reintroduce the hole silently.
     const parsed = registerDeviceSchema.parse({
+      deviceId: "install-1",
       pushToken: "fcm-token-1",
       platform: "android",
       institutionId: "INS0002",
     }) as Record<string, unknown>;
 
     expect(parsed.institutionId).toBeUndefined();
+  });
+
+  it("drops only the signing-out installation's rows, not the user's other phones", async () => {
+    // Sign-out has to unregister the handset it happened on. Wiping every
+    // device for the user would silence their other phones; wiping none leaves
+    // applicant names arriving on a phone that is signed out.
+    const user = await makeUser("INS0001");
+    await DeviceService.register({
+      userId: String(user._id),
+      deviceId: "install-1",
+      institutionId: "INS0001",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+    // FCM rotates push tokens, so one installation can leave several rows.
+    await DeviceService.register({
+      userId: String(user._id),
+      deviceId: "install-1",
+      institutionId: "INS0001",
+      pushToken: "fcm-token-1-rotated",
+      platform: "android",
+    });
+    await DeviceService.register({
+      userId: String(user._id),
+      deviceId: "install-2",
+      institutionId: "INS0001",
+      pushToken: "fcm-token-2",
+      platform: "android",
+    });
+
+    await DeviceService.removeForDevice(String(user._id), "install-1");
+
+    const remaining = await Device.find({}).lean();
+    expect(remaining.map((row) => row.pushToken)).toEqual(["fcm-token-2"]);
+  });
+
+  it("leaves the new owner registered when a signed-out user's handset changed hands", async () => {
+    // register() rewrites the row to whoever registered last. The previous
+    // owner signing out afterwards must not cancel the current owner's
+    // notifications, so the delete is scoped by user as well as installation.
+    const firstUser = await makeUser("INS0001");
+    const secondUser = await makeUser("INS0002");
+
+    await DeviceService.register({
+      userId: String(firstUser._id),
+      deviceId: "install-1",
+      institutionId: "INS0001",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+    await DeviceService.register({
+      userId: String(secondUser._id),
+      deviceId: "install-1",
+      institutionId: "INS0002",
+      pushToken: "fcm-token-1",
+      platform: "android",
+    });
+
+    await DeviceService.removeForDevice(String(firstUser._id), "install-1");
+
+    expect(await Device.countDocuments({})).toBe(1);
   });
 
   it("removes dead tokens without touching devices not named", async () => {
@@ -105,12 +172,14 @@ describe("device registration", () => {
     const user = await makeUser("INS0001");
     await DeviceService.register({
       userId: String(user._id),
+      deviceId: "install-1",
       institutionId: "INS0001",
       pushToken: "fcm-token-1",
       platform: "android",
     });
     await DeviceService.register({
       userId: String(user._id),
+      deviceId: "install-1",
       institutionId: "INS0001",
       pushToken: "fcm-token-2",
       platform: "android",

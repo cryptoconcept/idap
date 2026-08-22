@@ -7,6 +7,7 @@ export const DeviceService = {
   async register(input: {
     userId: string;
     institutionId: string;
+    deviceId: string;
     pushToken: string;
     platform: "android" | "ios";
   }) {
@@ -19,6 +20,7 @@ export const DeviceService = {
         $set: {
           userId: new Types.ObjectId(input.userId),
           institutionId: input.institutionId,
+          deviceId: input.deviceId,
           platform: input.platform,
           lastSeenAt: new Date(),
         },
@@ -34,6 +36,19 @@ export const DeviceService = {
     await connectToDatabase();
     const rows = await Device.find({ institutionId }).select("pushToken").lean();
     return rows.map((row) => ({ id: String(row._id), pushToken: row.pushToken }));
+  },
+
+  /**
+   * Sign-out. Scoped to the user as well as the installation: if the handset
+   * changed hands, `register` will have rewritten the row to its new owner, and
+   * the previous owner signing out must not cancel that person's notifications.
+   *
+   * FCM rotates push tokens, so one installation can leave more than one row
+   * behind; all of them go.
+   */
+  async removeForDevice(userId: string, deviceId: string) {
+    await connectToDatabase();
+    await Device.deleteMany({ userId: new Types.ObjectId(userId), deviceId });
   },
 
   async remove(pushTokens: string[]) {
