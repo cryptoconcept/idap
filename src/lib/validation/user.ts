@@ -24,3 +24,14 @@ export const changePasswordSchema = z
     message: "New password must be different from the current password",
     path: ["newPassword"],
   });
+
+export const mobileTokenSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, "Password is required").max(128),
+  // Identifies the installation so one device's tokens can be revoked alone.
+  deviceId: requiredText("Device id", 128),
+});
+
+export const refreshTokenSchema = z.object({
+  refreshToken: z.string().min(20, "Refresh token is required").max(512),
+});
