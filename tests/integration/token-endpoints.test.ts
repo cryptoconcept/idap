@@ -59,6 +59,20 @@ describe("mobile token endpoints", () => {
     expect(response.status).toBe(403);
   });
 
+  it("refuses a platform admin even when institutionId is populated", async () => {
+    // A real SUPER_ADMIN never carries an institutionId (see the User model
+    // comment), so the test above is satisfied either by the role check or
+    // by the institutionId check alone — it doesn't prove the role check
+    // itself works. Isolate it: give the platform admin an institutionId
+    // pointing at an institution that is still active, so the role check is
+    // the only guard that can produce the refusal.
+    await makeUser("INS0001", "SUPER_ADMIN", "platform@example.test");
+    const response = await issueToken(
+      post({ email: "platform@example.test", password: "Password!2026", deviceId: "device-1" }),
+    );
+    expect(response.status).toBe(403);
+  });
+
   it("refuses to issue a token when the institution is inactive", async () => {
     // Same boundary the dashboard login enforces: a deactivated institution's
     // staff must not be able to obtain a mobile session from scratch.
@@ -99,18 +113,18 @@ describe("mobile token endpoints", () => {
 
   it("refuses to refresh once the account has become a platform admin", async () => {
     // A user who held a live refresh token could in principle be promoted to
-    // SUPER_ADMIN afterwards. Refresh must re-check the boundary, not just
-    // trust whatever role was true at issue time.
+    // SUPER_ADMIN afterwards. Refresh must re-check the role itself. Deliberately
+    // leave institutionId populated and pointing at an institution that is still
+    // active, so the only guard that can produce the refusal is the role check
+    // — not the institution lookup finding nothing, which would pass even with
+    // the role check removed and prove nothing about it.
     const issued = await (
       await issueToken(
         post({ email: "staff@example.test", password: "Password!2026", deviceId: "device-1" }),
       )
     ).json();
 
-    await User.updateOne(
-      { email: "staff@example.test" },
-      { $set: { role: "SUPER_ADMIN" }, $unset: { institutionId: "" } },
-    );
+    await User.updateOne({ email: "staff@example.test" }, { $set: { role: "SUPER_ADMIN" } });
 
     const response = await refreshToken(post({ refreshToken: issued.refreshToken }));
     expect(response.status).toBe(401);
