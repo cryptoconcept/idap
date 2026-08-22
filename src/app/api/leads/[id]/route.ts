@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { requireUser, tenantFilter } from "@/lib/tenant";
+import { requireApiUser, tenantFilter } from "@/lib/tenant";
 import { updateLeadSchema } from "@/lib/validation/lead";
 import { LeadService } from "@/services/lead.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -8,9 +8,9 @@ import { validationError } from "@/lib/api/errors";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: NextRequest, context: RouteContext<"/api/leads/[id]">) {
+export async function GET(request: NextRequest, context: RouteContext<"/api/leads/[id]">) {
   try {
-    const user = await requireUser();
+    const { user } = await requireApiUser(request);
     const { id } = await context.params;
     const lead = await LeadService.getById(tenantFilter(user), id);
     return jsonSuccess({ lead });
@@ -21,8 +21,8 @@ export async function GET(_request: NextRequest, context: RouteContext<"/api/lea
 
 export async function PATCH(request: NextRequest, context: RouteContext<"/api/leads/[id]">) {
   try {
-    assertSameOrigin(request);
-    const user = await requireUser();
+    const { user, viaBearer } = await requireApiUser(request);
+    assertSameOrigin(request, { viaBearer });
     const { id } = await context.params;
     const body = await request.json().catch(() => ({}));
     const patch = updateLeadSchema.parse(body);

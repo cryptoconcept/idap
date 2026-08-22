@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { requireUser, tenantFilter } from "@/lib/tenant";
+import { requireApiUser, tenantFilter } from "@/lib/tenant";
 import { createNoteSchema } from "@/lib/validation/note";
 import { ApplicationService } from "@/services/application.service";
 import { NoteService } from "@/services/note.service";
@@ -10,11 +10,11 @@ import { handleApiError, jsonSuccess } from "@/lib/api/response";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: RouteContext<"/api/applications/[applicationNumber]/notes">,
 ) {
   try {
-    const user = await requireUser();
+    const { user } = await requireApiUser(request);
     const { applicationNumber } = await context.params;
     const application = await ApplicationService.getApplication(
       tenantFilter(user),
@@ -32,8 +32,8 @@ export async function POST(
   context: RouteContext<"/api/applications/[applicationNumber]/notes">,
 ) {
   try {
-    assertSameOrigin(request);
-    const user = await requireUser();
+    const { user, viaBearer } = await requireApiUser(request);
+    assertSameOrigin(request, { viaBearer });
     const { applicationNumber } = await context.params;
     const body = await request.json().catch(() => ({}));
     const { note } = createNoteSchema.parse(body);

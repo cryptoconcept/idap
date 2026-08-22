@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { requireUser, tenantFilter } from "@/lib/tenant";
+import { requireApiUser, tenantFilter } from "@/lib/tenant";
 import { leadQuerySchema, createLeadSchema } from "@/lib/validation/lead";
 import { LeadService } from "@/services/lead.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
   try {
-    const user = await requireUser();
+    const { user } = await requireApiUser(request);
     const query = leadQuerySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
     const clause = tenantFilter(user);
 
@@ -25,8 +25,8 @@ export async function GET(request: NextRequest) {
 /** Manual enquiry entry from the dashboard. */
 export async function POST(request: NextRequest) {
   try {
-    assertSameOrigin(request);
-    const user = await requireUser();
+    const { user, viaBearer } = await requireApiUser(request);
+    assertSameOrigin(request, { viaBearer });
     if (!user.institutionId) {
       throw forbidden("Select an institution before adding an enquiry");
     }

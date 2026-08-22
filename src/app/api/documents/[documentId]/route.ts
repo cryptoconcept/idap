@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { requireTenantUser } from "@/lib/tenant";
+import { requireApiUser, tenantFilter } from "@/lib/tenant";
 import { DocumentService } from "@/services/document.service";
 import { handleApiError } from "@/lib/api/response";
 
@@ -16,7 +16,8 @@ export async function GET(
   context: RouteContext<"/api/documents/[documentId]">,
 ) {
   try {
-    const { clause } = await requireTenantUser();
+    const { user } = await requireApiUser(request);
+    const clause = tenantFilter(user);
     const { documentId } = await context.params;
 
     const document = await DocumentService.read(clause.institutionId, documentId);

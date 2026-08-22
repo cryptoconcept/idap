@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Institution } from "@/models";
-import { requireUser, serializeInstitution, tenantFilter } from "@/lib/tenant";
+import { requireApiUser, serializeInstitution, tenantFilter } from "@/lib/tenant";
 import { ApplicationService } from "@/services/application.service";
 import { ActivityService } from "@/services/activity.service";
 import { buildApplicationPdf } from "@/lib/pdf/application-pdf";
@@ -17,7 +17,7 @@ export async function GET(
   context: RouteContext<"/api/applications/[applicationNumber]/pdf">,
 ) {
   try {
-    const user = await requireUser();
+    const { user } = await requireApiUser(request);
     const { applicationNumber } = await context.params;
 
     const application = await ApplicationService.getApplication(
