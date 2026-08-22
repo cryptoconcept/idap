@@ -5,6 +5,7 @@ import { connectToDatabase } from "@/lib/db/mongoose";
 import { Lead, type LeadDoc } from "@/models";
 import { generateLeadNumber } from "./sequence.service";
 import { ActivityService } from "./activity.service";
+import { NotificationService } from "./notification.service";
 import { notFound } from "@/lib/api/errors";
 import { dateRangeFilter, escapeRegex, requiredIso } from "@/lib/utils/serialize";
 import type { LeadDTO, Paginated } from "@/lib/types";
@@ -99,6 +100,15 @@ export const LeadService = {
       performedByName: input.actor?.name,
       ipAddress: input.ipAddress,
     });
+
+    // Fire-and-forget, exactly like the audit write above: a push failure must
+    // never fail the submission it is reporting.
+    void NotificationService.notifyNewLead({
+      institutionId: input.institutionId,
+      leadNumber,
+      studentName: input.data.studentName,
+      classInterested: input.data.classInterested,
+    }).catch((error) => console.error("[push] enquiry notification failed", error));
 
     return serialize(created.toObject() as LeadRow);
   },
