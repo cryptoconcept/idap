@@ -119,8 +119,13 @@ alongside the real user indefinitely.
 
 ### What comes free from the existing design
 
-- `User.sessionVersion` already invalidates sessions. Bumping it kills access
-  tokens too, so "sign out everywhere" needs no new machinery.
+- `User.sessionVersion` already invalidates sessions, and bumping it kills access
+  tokens within 15 minutes for free. Refresh tokens need one piece of machinery
+  on top: each `RefreshToken` row records the `sessionVersion` its chain was
+  issued at, successors inherit it rather than re-reading the user, and refresh
+  is refused once the user's current value has moved past it. Without that, a
+  bump would revoke mobile access for 15 minutes and the app would then refresh
+  straight back into a working session for up to 30 days.
 - The login rate limiter (8 attempts / 5 min per IP + account) sits in front of
   token issue unchanged.
 - `SUPER_ADMIN` is refused at token issue, so the platform-admin boundary has no
@@ -152,6 +157,8 @@ POST /api/auth/token/refresh   refresh           → new access + new refresh
 POST /api/auth/token/revoke    refresh           → revoked (logout)
 ```
 
+Revoke also unregisters that installation's push devices — see §6.
+
 ---
 
 ## 6. Push pipeline
@@ -169,7 +176,11 @@ notifies and no path that does not.
 ### Failure is always silent
 
 `ActivityService` establishes the pattern: side effects are wrapped and swallowed
-so they cannot fail the action they describe. Push follows it exactly.
+so they cannot fail the action they describe. Push swallows its failures the same
+way, but does not run inline: it is registered with `after()` from `next/server`
+so it runs once the response has gone out. A bare floating promise would not do —
+on Vercel, work still outstanding when the response is sent is not guaranteed to
+run at all, which would make push silently never fire.
 
 A family submitting at 11pm must never see an error because Firebase is
 unavailable. A missing `FIREBASE_SERVICE_ACCOUNT` disables push cleanly rather
@@ -184,8 +195,18 @@ request body**. Otherwise a modified client could subscribe itself to another
 institution's applications — a tenant-isolation hole that bypasses `tenantFilter()`
 entirely.
 
+A device also carries the same stable per-installation `deviceId` the app sends at
+token issue. That is the handle `POST /api/auth/token/revoke` uses to drop this
+installation's registrations at sign-out — scoped to the signing-out user *and*
+device, so the user's other phones stay subscribed and a handset that has changed
+hands keeps its new owner's registration. Without it a signed-out phone keeps
+receiving applicant names on its lock screen indefinitely.
+
 Dead tokens are deleted when FCM reports `UNREGISTERED`, so the table does not
-accumulate uninstalled devices.
+accumulate uninstalled devices. That is read from FCM's error body, never from the
+HTTP status: FCM v1 answers `400 INVALID_ARGUMENT` for a malformed *message* as
+well as for a malformed token, so pruning on the status would let one payload
+regression delete an entire institution's registrations in a single submission.
 
 ### Notification content
 
@@ -200,8 +221,10 @@ the natural escape hatch if that changes.
 
 ### Tap-through
 
-The payload carries `{ type, applicationNumber }` as data, and Expo Router
-deep-links to that record — not to a generic inbox.
+The payload carries `{ type, reference }` as data, and Expo Router deep-links to
+that record — not to a generic inbox. One key rather than a per-entity one:
+`type` is `"application"` or `"lead"`, and `reference` is that record's
+application number or lead number, so a single handler serves both.
 
 ---
 
@@ -211,8 +234,12 @@ New models:
 
 | Model | Purpose |
 | --- | --- |
-| `RefreshToken` | Hashed token, user, device, family id, `expiresAt` (TTL), `replacedBy`, `revokedAt` |
-| `Device` | FCM token, user, institution, platform, `lastSeenAt` |
+| `RefreshToken` | Hashed token, user, device, family id, `sessionVersion`, `expiresAt` (TTL), `consumedAt`, `revokedAt` |
+| `Device` | FCM token, user, institution, device id, platform, `lastSeenAt` |
+
+No `replacedBy` pointer: revocation is family-based, so a chain is burned through
+its `familyId` and a forward link would be a second, redundant way to walk the
+same set. `consumedAt` is what makes a token single-use.
 
 New service:
 

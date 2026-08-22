@@ -5,7 +5,6 @@ import { LeadService } from "@/services/lead.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 import { getClientIp } from "@/lib/security/request";
-import { forbidden } from "@/lib/api/errors";
 
 export const dynamic = "force-dynamic";
 
@@ -27,15 +26,19 @@ export async function POST(request: NextRequest) {
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
-    if (!user.institutionId) {
-      throw forbidden("Select an institution before adding an enquiry");
-    }
+    // Through tenantFilter like every other tenant-touching path, rather than
+    // reading user.institutionId directly. The platform's isolation story rests
+    // on that single function, and these two were the last write paths outside
+    // it — a check of their own is an exception that has to be re-argued every
+    // time the boundary moves, and it also let a platform admin who happened to
+    // carry an institutionId through.
+    const clause = tenantFilter(user);
 
     const body = await request.json().catch(() => ({}));
     const data = createLeadSchema.parse(body);
 
     const lead = await LeadService.createLead({
-      institutionId: user.institutionId,
+      institutionId: clause.institutionId,
       data,
       source: "MANUAL",
       actor: { id: user.id, name: user.name },

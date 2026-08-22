@@ -602,6 +602,17 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                       accessToken: { type: "string" },
                       refreshToken: { type: "string" },
                       expiresIn: { type: "integer", example: 900 },
+                      user: {
+                        type: "object",
+                        description:
+                          "The signed-in member of staff. Returned so the app can show an account without decoding the access token.",
+                        properties: {
+                          id: { type: "string" },
+                          name: { type: "string" },
+                          email: { type: "string", format: "email" },
+                          institutionId: { type: "string", example: "INS0001" },
+                        },
+                      },
                     },
                   },
                 },
@@ -656,6 +667,46 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               },
             },
             ...errorResponses(["VALIDATION_ERROR", "UNAUTHORIZED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      "/api/auth/token/revoke": {
+        post: {
+          tags: ["Staff app"],
+          summary: "Sign out",
+          description:
+            "Revokes the refresh token and unregisters that installation's push devices. Always reports success, whether or not the token was live, so it cannot be used to probe a token's state.",
+          operationId: "revokeStaffToken",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["refreshToken"],
+                  properties: { refreshToken: { type: "string" } },
+                },
+              },
+            },
+          },
+          responses: {
+            "200": {
+              description: "Signed out.",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      success: { type: "boolean", const: true },
+                      message: { type: "string", example: "Signed out" },
+                    },
+                  },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "INTERNAL_ERROR"]),
           },
         },
       },

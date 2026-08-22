@@ -151,7 +151,78 @@ describe("OpenAPI document", () => {
   it("documents the staff app endpoints", () => {
     expect(paths(scoped)).toContain("/api/auth/token");
     expect(paths(scoped)).toContain("/api/auth/token/refresh");
+    expect(paths(scoped)).toContain("/api/auth/token/revoke");
     expect(paths(scoped)).toContain("/api/devices");
+  });
+
+  it("documents the user object token issue actually returns", () => {
+    // The app's types are generated from this document, so a field the route
+    // returns and the document omits is a field the client cannot see. Named
+    // one by one rather than by count, so adding a field cannot mask a
+    // renamed one.
+    const success = (
+      scoped.paths as Record<
+        string,
+        Record<
+          string,
+          {
+            responses: Record<
+              string,
+              { content: Record<string, { schema: { properties: Record<string, unknown> } }> }
+            >;
+          }
+        >
+      >
+    )["/api/auth/token"].post.responses["200"].content["application/json"].schema;
+
+    const user = success.properties.user as { properties: Record<string, unknown> };
+    expect(Object.keys(user.properties).sort()).toEqual([
+      "email",
+      "id",
+      "institutionId",
+      "name",
+    ]);
+  });
+
+  it("documents sign-out, including that it takes a refresh token", () => {
+    const operation = (
+      scoped.paths as Record<
+        string,
+        Record<
+          string,
+          {
+            security?: unknown[];
+            tags?: string[];
+            requestBody: {
+              content: Record<string, { schema: { required: string[] } }>;
+            };
+            responses: Record<string, unknown>;
+          }
+        >
+      >
+    )["/api/auth/token/revoke"].post;
+
+    expect(operation.tags).toContain("Staff app");
+    // The refresh token is the credential; there is no prior bearer to send.
+    expect(operation.security).toEqual([]);
+    expect(operation.requestBody.content["application/json"].schema.required).toEqual([
+      "refreshToken",
+    ]);
+    expect(Object.keys(operation.responses)).toContain("200");
+  });
+
+  it("documents the deviceId sign-out needs to find the installation again", () => {
+    const schema = (
+      scoped.paths as Record<
+        string,
+        Record<
+          string,
+          { requestBody: { content: Record<string, { schema: { required: string[] } }> } }
+        >
+      >
+    )["/api/devices"].post.requestBody.content["application/json"].schema;
+
+    expect(schema.required).toContain("deviceId");
   });
 
   it("marks token issue as needing no prior credential", () => {

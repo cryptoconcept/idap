@@ -8,8 +8,10 @@ import { signAccessToken, signSession, SESSION_COOKIE } from "@/lib/auth/session
 import { cookies } from "next/headers";
 import { LeadService } from "@/services/lead.service";
 import { createLeadSchema } from "@/lib/validation/lead";
-import { GET as listLeads } from "@/app/api/leads/route";
+import { GET as listLeads, POST as createLead } from "@/app/api/leads/route";
+import { POST as createApplication } from "@/app/api/applications/route";
 import { PATCH as patchLead } from "@/app/api/leads/[id]/route";
+import { Application, Lead } from "@/models";
 import type { NextRequest } from "next/server";
 
 const leadInput = createLeadSchema.parse({
@@ -142,6 +144,65 @@ describe("routes accept bearer tokens", () => {
 
     expect(response.status).toBe(200);
     expect((await response.json()).lead.status).toBe("CONTACTED");
+  });
+
+  it("refuses a platform admin creating an enquiry, even with an institutionId to hand", async () => {
+    // POST /api/leads and POST /api/applications were the only write paths
+    // reaching tenant data through user.institutionId rather than
+    // tenantFilter(user) — the one function the isolation guarantee rests on.
+    // Their own `!user.institutionId` guard passes for a platform admin who
+    // carries one, so the record would be created under that institution.
+    // The institutionId is populated deliberately: it makes the role refusal
+    // in tenantFilter the only thing that can produce the 403.
+    const token = await tokenFor("INS0001", "SUPER_ADMIN", "platform@example.test");
+
+    const response = await createLead(
+      bearerRequest(token, {
+        url: "http://localhost/api/leads",
+        body: { studentName: "Rahul Kumar", phone: "9876543210" },
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+    expect(await Lead.countDocuments({})).toBe(0);
+  });
+
+  it("refuses a platform admin creating an application, even with an institutionId to hand", async () => {
+    const token = await tokenFor("INS0001", "SUPER_ADMIN", "platform@example.test");
+
+    const response = await createApplication(
+      bearerRequest(token, {
+        url: "http://localhost/api/applications",
+        body: {
+          academicYear: "2026-27",
+          student: { firstName: "Rahul", lastName: "Kumar" },
+          parent: { fatherName: "Rajesh Kumar", phone: "9876543210" },
+          admission: { applyingFor: "Grade 5" },
+        },
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+    expect(await Application.countDocuments({})).toBe(0);
+  });
+
+  it("lets ordinary staff create an enquiry, scoped to their own institution", async () => {
+    // The control for the two refusals above: they must not be satisfied by a
+    // route that refuses everybody.
+    const token = await tokenFor("INS0001", "INSTITUTION_ADMIN", "staff@example.test");
+
+    const response = await createLead(
+      bearerRequest(token, {
+        url: "http://localhost/api/leads",
+        body: { studentName: "Rahul Kumar", phone: "9876543210" },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const created = await Lead.findOne({}).lean();
+    expect(created!.institutionId).toBe("INS0001");
   });
 
   it("still refuses a cross-origin mutation when it is cookie-authenticated", async () => {
