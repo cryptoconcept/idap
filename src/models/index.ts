@@ -4,6 +4,7 @@ export { Lead, type LeadDoc } from "./Lead";
 export { Application, type ApplicationDoc } from "./Application";
 export { DocumentRecord, type DocumentRecordDoc } from "./Document";
 export { Note, type NoteDoc } from "./Note";
+export { Device, type DeviceDoc } from "./Device";
 export { Activity, type ActivityDoc } from "./Activity";
 export { ApiClient, type ApiClientDoc } from "./ApiClient";
 export { Counter } from "./Counter";
