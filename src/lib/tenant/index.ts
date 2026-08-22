@@ -1,9 +1,11 @@
 import "server-only";
 import { cache } from "react";
 import { redirect } from "next/navigation";
+import type { NextRequest } from "next/server";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Institution } from "@/models";
 import { getCurrentUser, type CurrentUser } from "@/lib/auth/current-user";
+import { resolveBearerUser } from "@/lib/auth/bearer";
 import { forbidden, unauthorized } from "@/lib/api/errors";
 
 export type TenantInstitution = {
@@ -169,4 +171,20 @@ export function credentialScope(
   }
   if (!user.institutionId) throw forbidden();
   return { institutionId: user.institutionId };
+}
+
+/**
+ * The guard every API route uses. Tries the bearer token first so a mobile
+ * request is never mistaken for a browser one, then falls back to the cookie.
+ * `viaBearer` tells the caller whether the CSRF check applies.
+ */
+export async function requireApiUser(
+  request: NextRequest,
+): Promise<{ user: CurrentUser; viaBearer: boolean }> {
+  const bearerUser = await resolveBearerUser(request);
+  if (bearerUser) return { user: bearerUser, viaBearer: true };
+
+  const cookieUser = await getCurrentUser();
+  if (!cookieUser) throw unauthorized();
+  return { user: cookieUser, viaBearer: false };
 }
