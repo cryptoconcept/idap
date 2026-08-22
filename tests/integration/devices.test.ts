@@ -3,7 +3,37 @@ import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/d
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { DeviceService } from "@/services/device.service";
 import { registerDeviceSchema } from "@/lib/validation/device";
+import { signAccessToken } from "@/lib/auth/session";
+import { POST as registerDevice } from "@/app/api/devices/route";
 import { Device } from "@/models";
+import type { NextRequest } from "next/server";
+
+/** A request as the native app makes it: bearer token, no cookie. */
+function bearerRequest(token: string, body: unknown) {
+  const url = new URL("http://localhost/api/devices");
+  return {
+    headers: new Headers({ authorization: `Bearer ${token}`, host: "localhost" }),
+    nextUrl: url,
+    url: url.toString(),
+    json: async () => body,
+  } as unknown as NextRequest;
+}
+
+async function tokenFor(
+  institutionId: string | undefined,
+  role: "INSTITUTION_ADMIN" | "SUPER_ADMIN",
+  email: string,
+) {
+  const user = await makeUser(institutionId, role, email);
+  return signAccessToken({
+    sub: String(user._id),
+    role,
+    institutionId,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+}
 
 describe("device registration", () => {
   beforeAll(async () => {
@@ -163,6 +193,71 @@ describe("device registration", () => {
     await DeviceService.removeForDevice(String(firstUser._id), "install-1");
 
     expect(await Device.countDocuments({})).toBe(1);
+  });
+
+  describe("POST /api/devices", () => {
+    it("stores the session's institution, not one supplied in the body", async () => {
+      // Spec §6 names this: the institutionId on a device comes from the
+      // session, never the request. Otherwise a modified client subscribes
+      // itself to another institution's applicants — a tenant hole that
+      // bypasses tenantFilter() entirely. Asserting Zod strips the key is not
+      // the same claim: it says nothing about what the route does with a value
+      // that reaches it.
+      const token = await tokenFor("INS0001", "INSTITUTION_ADMIN", "staff@example.test");
+
+      const response = await registerDevice(
+        bearerRequest(token, {
+          deviceId: "install-1",
+          pushToken: "fcm-token-1",
+          platform: "android",
+          institutionId: "INS0002",
+        }),
+      );
+
+      expect(response.status).toBe(201);
+      const stored = await Device.findOne({ pushToken: "fcm-token-1" }).lean();
+      expect(stored!.institutionId).toBe("INS0001");
+      expect(await DeviceService.forInstitution("INS0002")).toHaveLength(0);
+    });
+
+    it("refuses a platform admin even when their institutionId is populated", async () => {
+      // The route must reach its tenant through tenantFilter(), which is where
+      // the platform-admin refusal lives. Deriving it as
+      // `{ institutionId: user.institutionId! }` instead looks identical for
+      // ordinary staff and quietly registers a platform admin here. A real
+      // SUPER_ADMIN carries no institutionId, so it is populated deliberately:
+      // the role check is then the only thing that can produce the refusal.
+      const token = await tokenFor("INS0001", "SUPER_ADMIN", "platform@example.test");
+
+      const response = await registerDevice(
+        bearerRequest(token, {
+          deviceId: "install-1",
+          pushToken: "fcm-token-1",
+          platform: "android",
+        }),
+      );
+
+      expect(response.status).toBe(403);
+      expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+      expect(await Device.countDocuments({})).toBe(0);
+    });
+
+    it("registers the caller's own device", async () => {
+      // The control: without it the two refusals above could both be satisfied
+      // by a route that never registers anything.
+      const token = await tokenFor("INS0001", "INSTITUTION_ADMIN", "staff@example.test");
+
+      const response = await registerDevice(
+        bearerRequest(token, {
+          deviceId: "install-1",
+          pushToken: "fcm-token-1",
+          platform: "android",
+        }),
+      );
+
+      expect(response.status).toBe(201);
+      expect(await DeviceService.forInstitution("INS0001")).toHaveLength(1);
+    });
   });
 
   it("removes dead tokens without touching devices not named", async () => {

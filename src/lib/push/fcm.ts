@@ -47,10 +47,61 @@ async function accessToken(account: ServiceAccount): Promise<string> {
   return payload.access_token;
 }
 
+type FcmErrorBody = {
+  error?: {
+    status?: string;
+    message?: string;
+    details?: {
+      errorCode?: string;
+      fieldViolations?: { field?: string }[];
+    }[];
+  };
+};
+
+/**
+ * Whether FCM is condemning *this registration token*, as opposed to the
+ * message we built or the credentials we sent.
+ *
+ * Read from the error body, never from the HTTP status. FCM v1 answers 400
+ * `INVALID_ARGUMENT` for a malformed message exactly as it does for a malformed
+ * token, so a payload regression returns the same status for every device at
+ * once — and pruning on the status would delete an entire institution's
+ * registrations in a single submission. Devices only re-register at app start,
+ * so push would then stay dark until every member of staff relaunched the app.
+ *
+ * Erring the other way costs a stale row that receives nothing and is pruned on
+ * the next properly-reported failure, which is the cheaper mistake by far.
+ */
+function isDeadToken(body: FcmErrorBody | null): boolean {
+  const details = body?.error?.details ?? [];
+
+  // FCM's own name for "that registration is gone" — an uninstall, or a token
+  // replaced. Exactly the case spec §6 asks us to prune on.
+  if (details.some((detail) => detail.errorCode === "UNREGISTERED")) return true;
+
+  // The other way FCM singles out the token: a field violation naming it, on a
+  // 400 whose other violations would all be about the message.
+  return details.some((detail) =>
+    (detail.fieldViolations ?? []).some((violation) => violation.field === "message.token"),
+  );
+}
+
+async function errorBody(response: Response): Promise<FcmErrorBody | null> {
+  try {
+    return (await response.json()) as FcmErrorBody;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Sends one message per device and reports tokens FCM no longer recognises so
  * the caller can prune them. A missing service account disables push rather than
  * throwing: the platform stays usable without Firebase configured.
+ *
+ * Everything else that comes back non-2xx is logged. An expired service account
+ * or a revoked key answers 401/403 for every message, and without a log that
+ * failure mode is completely invisible — push simply stops.
  */
 export async function sendPush(messages: PushMessage[]): Promise<{ deadTokens: string[] }> {
   const account = serviceAccount();
@@ -78,9 +129,20 @@ export async function sendPush(messages: PushMessage[]): Promise<{ deadTokens: s
         }),
       });
 
-      if (response.status === 404 || response.status === 400) {
+      if (response.ok) return;
+
+      const body = await errorBody(response);
+      if (isDeadToken(body)) {
         deadTokens.push(message.pushToken);
+        return;
       }
+
+      // Deliberately without the push token: this goes to a shared log.
+      console.error("[push] FCM rejected a message", {
+        httpStatus: response.status,
+        status: body?.error?.status,
+        message: body?.error?.message,
+      });
     }),
   );
 
