@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { RefreshTokenService } from "@/services/refresh-token.service";
 import { RefreshToken } from "@/models";
@@ -67,12 +67,22 @@ describe("refresh tokens", () => {
     expect(await RefreshTokenService.rotate(token)).toBeNull();
   });
 
-  it("under concurrent presentation of the same token, exactly one rotation wins and the family is fully revoked", async () => {
+  it("under concurrent presentation of the same token, never more than one rotation wins and the family ends up fully revoked", async () => {
     // A copied token and a legitimate retry look identical to the server: both
-    // present the same live token at the same time. Rotation must let exactly
-    // one succeed — a check-then-act consume (read, then a separate write) lets
-    // every concurrent caller read "unconsumed" before any of them writes,
-    // so all of them would pass and all would mint a successor.
+    // present the same live token at the same time. The atomic claim in
+    // rotate() guarantees a hard ceiling of one winner — a check-then-act
+    // consume (read, then a separate write) would instead let every
+    // concurrent caller read "unconsumed" before any of them writes, so all
+    // of them would pass and all would mint a successor.
+    //
+    // The exact count below one is not fixed at exactly one, though: whoever
+    // wins the claim still races the losers' family-wide revoke against its
+    // own successor insert, and if a loser's revoke lands first, the winner's
+    // own post-insert check now catches that and returns null too rather than
+    // hand back a token already dead in the database — so an all-null outcome
+    // is also correct here, not a bug. What must always hold is the ceiling
+    // (at most one live successor ever) and that the family is left fully
+    // revoked either way.
     const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
 
     const results = await Promise.all(
@@ -80,11 +90,45 @@ describe("refresh tokens", () => {
     );
 
     const winners = results.filter((result) => result !== null);
-    const losers = results.filter((result) => result === null);
-    expect(winners).toHaveLength(1);
-    expect(losers).toHaveLength(4);
+    expect(winners.length).toBeLessThanOrEqual(1);
 
     const live = await RefreshToken.countDocuments({ revokedAt: { $exists: false } });
+    expect(live).toBe(0);
+  });
+
+  it("closes the window between claiming a token and its successor's insert: a family revoke landing exactly there still leaves no live token", async () => {
+    // revokeFamily's updateMany only matches rows that exist when it runs. If a
+    // concurrent reuse detection finishes burning the family in the gap between
+    // this rotation claiming the old token and its successor actually being
+    // inserted, the successor didn't exist yet and would be skipped entirely —
+    // a durable, undetected live token in a family the system believes is dead.
+    // Constructed directly rather than raced: intercept the successor's insert
+    // and run the family-burning revoke immediately before it actually lands,
+    // pinning the exact interleaving instead of hoping a Promise.all race
+    // reproduces it.
+    const first = await RefreshTokenService.issue({ userId: USER, deviceId: "device-1" });
+
+    const originalCreate = RefreshToken.create.bind(RefreshToken);
+    const createSpy = vi
+      .spyOn(RefreshToken, "create")
+      .mockImplementation(async (...args: Parameters<typeof RefreshToken.create>) => {
+        await RefreshTokenService.revokeFamily(first.familyId);
+        return originalCreate(...args);
+      });
+
+    let result: Awaited<ReturnType<typeof RefreshTokenService.rotate>>;
+    try {
+      result = await RefreshTokenService.rotate(first.token);
+    } finally {
+      createSpy.mockRestore();
+    }
+
+    expect(result).toBeNull();
+
+    const live = await RefreshToken.countDocuments({
+      familyId: first.familyId,
+      revokedAt: { $exists: false },
+    });
     expect(live).toBe(0);
   });
 });

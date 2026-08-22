@@ -61,6 +61,23 @@ export const RefreshTokenService = {
         deviceId: claimed.deviceId,
         familyId: claimed.familyId,
       });
+
+      // revokeFamily's updateMany only matches rows that exist at query time,
+      // so a concurrent reuse detection racing this rotation could finish
+      // burning the family before the successor row above was inserted, and
+      // never touch it. Re-check after the insert: if any sibling in this
+      // family is now revoked, the family was (or is being) burned, so finish
+      // the job on the just-created successor too rather than hand back a
+      // live token from a family the system otherwise believes is dead.
+      const familyBurned = await RefreshToken.exists({
+        familyId: claimed.familyId,
+        revokedAt: { $exists: true },
+      });
+      if (familyBurned) {
+        await RefreshTokenService.revokeFamily(claimed.familyId);
+        return null;
+      }
+
       return { ...next, userId: String(claimed.userId), deviceId: claimed.deviceId };
     }
 
