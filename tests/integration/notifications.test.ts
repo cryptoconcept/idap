@@ -138,7 +138,10 @@ describe("notifications", () => {
       source: "API",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // No sleep: the push is registered work, not an abandoned promise, so by
+    // the time createLead resolves it has either run (no request scope here) or
+    // been handed to the platform. A floating `void ...` would still be
+    // suspended on its first await at this point and fail here.
     expect(sendPush).toHaveBeenCalled();
   });
 
@@ -151,7 +154,8 @@ describe("notifications", () => {
       source: "API",
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // Same as the enquiry hook above: no sleep, because the work is not
+    // abandoned at the point createApplication resolves.
     const messages = sendPush.mock.calls[0][0];
     expect(messages.map((m) => m.pushToken)).toEqual(["token-a"]);
     expect(messages[0].data).toMatchObject({ type: "application" });

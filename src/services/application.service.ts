@@ -6,6 +6,7 @@ import { Application, type ApplicationDoc } from "@/models";
 import { generateApplicationNumber } from "./sequence.service";
 import { ActivityService } from "./activity.service";
 import { NotificationService } from "./notification.service";
+import { afterResponse } from "@/lib/after-response";
 import { notFound } from "@/lib/api/errors";
 import { dateRangeFilter, escapeRegex, requiredIso, toIso } from "@/lib/utils/serialize";
 import type { ApplicationDTO, Paginated } from "@/lib/types";
@@ -156,12 +157,19 @@ export const ApplicationService = {
       ipAddress: input.ipAddress,
     });
 
-    void NotificationService.notifyNewApplication({
-      institutionId: input.institutionId,
-      applicationNumber,
-      studentName: studentFullName(data.student),
-      applyingFor: data.admission.applyingFor,
-    }).catch((error) => console.error("[push] application notification failed", error));
+    // Deferred, not fire-and-forget — see the matching comment in
+    // lead.service.ts. A floating promise here is abandoned when the handler
+    // returns and may never run on Vercel; `afterResponse` registers it with
+    // the platform, and the catch keeps a push failure away from the family
+    // that just submitted.
+    await afterResponse(() =>
+      NotificationService.notifyNewApplication({
+        institutionId: input.institutionId,
+        applicationNumber,
+        studentName: studentFullName(data.student),
+        applyingFor: data.admission.applyingFor,
+      }).catch((error) => console.error("[push] application notification failed", error)),
+    );
 
     return serialize(created.toObject() as ApplicationRow);
   },

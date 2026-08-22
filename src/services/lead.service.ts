@@ -6,6 +6,7 @@ import { Lead, type LeadDoc } from "@/models";
 import { generateLeadNumber } from "./sequence.service";
 import { ActivityService } from "./activity.service";
 import { NotificationService } from "./notification.service";
+import { afterResponse } from "@/lib/after-response";
 import { notFound } from "@/lib/api/errors";
 import { dateRangeFilter, escapeRegex, requiredIso } from "@/lib/utils/serialize";
 import type { LeadDTO, Paginated } from "@/lib/types";
@@ -101,14 +102,19 @@ export const LeadService = {
       ipAddress: input.ipAddress,
     });
 
-    // Fire-and-forget, exactly like the audit write above: a push failure must
-    // never fail the submission it is reporting.
-    void NotificationService.notifyNewLead({
-      institutionId: input.institutionId,
-      leadNumber,
-      studentName: input.data.studentName,
-      classInterested: input.data.classInterested,
-    }).catch((error) => console.error("[push] enquiry notification failed", error));
+    // Deferred rather than fire-and-forget. The audit write above is awaited
+    // and swallows its own failures; a floating promise here would instead be
+    // abandoned the moment the handler returns, and on Vercel may never run at
+    // all. `afterResponse` hands it to the platform to finish after the
+    // response, and the catch keeps a push failure away from the submission.
+    await afterResponse(() =>
+      NotificationService.notifyNewLead({
+        institutionId: input.institutionId,
+        leadNumber,
+        studentName: input.data.studentName,
+        classInterested: input.data.classInterested,
+      }).catch((error) => console.error("[push] enquiry notification failed", error)),
+    );
 
     return serialize(created.toObject() as LeadRow);
   },
