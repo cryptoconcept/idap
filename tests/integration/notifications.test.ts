@@ -4,7 +4,9 @@ import { makeInstitution, makeUser } from "../helpers/factories";
 import { DeviceService } from "@/services/device.service";
 import { NotificationService } from "@/services/notification.service";
 import { LeadService } from "@/services/lead.service";
+import { ApplicationService } from "@/services/application.service";
 import { createLeadSchema } from "@/lib/validation/lead";
+import { createApplicationSchema } from "@/lib/validation/application";
 import * as fcm from "@/lib/push/fcm";
 
 // `vi.mock` is hoisted and swaps the module before anything imports it. A
@@ -20,6 +22,16 @@ const leadInput = createLeadSchema.parse({
   studentName: "Rahul Kumar",
   phone: "9876543210",
   classInterested: "Grade 5",
+});
+
+// Parsed through the real schema, matching the pattern in
+// application-lifecycle.test.ts, so the fixture matches what a route hands
+// the service, transforms and all.
+const applicationInput = createApplicationSchema.parse({
+  academicYear: "2026-27",
+  student: { firstName: "Rahul", lastName: "Kumar" },
+  parent: { fatherName: "Rajesh Kumar", phone: "9876543210" },
+  admission: { applyingFor: "Grade 5" },
 });
 
 describe("notifications", () => {
@@ -128,5 +140,36 @@ describe("notifications", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(sendPush).toHaveBeenCalled();
+  });
+
+  it("fires on application creation", async () => {
+    await registerDevice("INS0001", "token-a");
+
+    await ApplicationService.createApplication({
+      institutionId: "INS0001",
+      data: applicationInput,
+      source: "API",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const messages = sendPush.mock.calls[0][0];
+    expect(messages.map((m) => m.pushToken)).toEqual(["token-a"]);
+    expect(messages[0].data).toMatchObject({ type: "application" });
+  });
+
+  it("never fails the application submission it is reporting", async () => {
+    // The higher-stakes counterpart to the lead-side guarantee above: a family
+    // submitting a full application at 11pm must not see an error because FCM
+    // is down.
+    await registerDevice("INS0001", "token-a");
+    sendPush.mockRejectedValue(new Error("FCM unavailable"));
+
+    const application = await ApplicationService.createApplication({
+      institutionId: "INS0001",
+      data: applicationInput,
+      source: "WEBSITE",
+    });
+
+    expect(application.applicationNumber).toBe("INS0001-APP-000001");
   });
 });
