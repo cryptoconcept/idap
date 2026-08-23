@@ -5,17 +5,26 @@ import type { StorageAdapter } from "./types";
 /**
  * Vercel Blob adapter for production.
  *
- * Uploads are stored with `access: "private"`, so a blob URL alone is not
- * enough to read a document: the read goes through the app's authenticated,
- * tenant-checked route. `put` returns the blob's own URL, which becomes the
- * stored handle — never assume the key you passed in is the key you read back
- * with.
+ * Two separate stores, two separate tokens — never one store serving both
+ * roles. Admission documents live in a private-access-only store
+ * (`DOCUMENTS_BLOB_READ_WRITE_TOKEN`): a blob URL alone is not enough to read
+ * one, the read goes through the app's authenticated, tenant-checked route.
+ * Institution media lives in a public-access store (`BLOB_READ_WRITE_TOKEN`,
+ * the SDK's default var), hot-linked directly by third-party websites. Kept
+ * on separate tokens on purpose — a bug in the public path can only ever
+ * reach the public store, never the store holding admission documents.
+ *
+ * `put` returns the blob's own URL, which becomes the stored handle — never
+ * assume the key you passed in is the key you read back with.
  */
+const DOCUMENTS_TOKEN = process.env.DOCUMENTS_BLOB_READ_WRITE_TOKEN;
+
 export const blobStorageAdapter: StorageAdapter = {
   async put({ key, body, contentType }) {
     const blob = await put(key, body, {
       access: "private",
       contentType,
+      token: DOCUMENTS_TOKEN,
       // The key is already unique (a generated ObjectId), and a stable handle
       // makes the stored reference predictable.
       addRandomSuffix: false,
@@ -26,7 +35,7 @@ export const blobStorageAdapter: StorageAdapter = {
 
   async get(key) {
     try {
-      const result = await get(key, { access: "private" });
+      const result = await get(key, { access: "private", token: DOCUMENTS_TOKEN });
       // A 304 carries no stream; this read is unconditional, so treat it as a miss.
       if (!result || result.statusCode !== 200) return null;
 
@@ -41,7 +50,7 @@ export const blobStorageAdapter: StorageAdapter = {
   },
 
   async delete(key) {
-    await del(key).catch(() => undefined);
+    await del(key, { token: DOCUMENTS_TOKEN }).catch(() => undefined);
   },
 
   async putPublic({ key, body, contentType }) {

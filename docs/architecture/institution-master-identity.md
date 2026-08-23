@@ -183,9 +183,12 @@ interface StorageAdapter {
 ```
 
 - **Vercel Blob adapter** (`src/lib/storage/blob.ts`): `put()` stores with
-  `access: "private"` (unchanged); `putPublic()` stores with `access: "public"` and a
-  random URL suffix (so one institution's media can't be enumerated from another's URL)
-  and returns a CDN-served URL.
+  `access: "private"` (unchanged), on the **documents** store
+  (`DOCUMENTS_BLOB_READ_WRITE_TOKEN`, passed explicitly on every call); `putPublic()`
+  stores with `access: "public"` and a random URL suffix (so one institution's media can't
+  be enumerated from another's URL) and returns a CDN-served URL, on the **media** store
+  (the SDK's default `BLOB_READ_WRITE_TOKEN` var). Two stores, two tokens, deliberately —
+  see below.
 - **Local adapter** (`src/lib/storage/local.ts`): `put()` writes under `.uploads/`, read
   only through the authenticated document route (unchanged). `putPublic()` writes under a
   *separate* root, `.uploads-public/`, served by the unauthenticated
@@ -208,23 +211,35 @@ viral on results day, or simply being a popular school with a lot of daily site 
 now has a direct storage cost that a plan priced around admission volume did not
 anticipate. This is a cost-shape change worth monitoring after rollout, not a defect.
 
-### Known deployment gap: this project's Blob store is private-access-only
+### Two Blob stores, not one — and why
 
-`putPublic()` on the Vercel Blob adapter calls `put(key, body, { access: "public", ... })`.
-That call will **fail** against a Blob store that was provisioned in private-access mode —
-which is the mode the store currently backing this project's `BLOB_READ_WRITE_TOKEN` is
-in. This is not a code defect: `putPublic`/`deletePublic` are implemented correctly against
-the documented Vercel Blob API, and every other path (`put`/`get`/`delete` for admission
-documents) works unchanged against the same token.
+A Blob store's access mode is fixed at creation; Vercel provides no way to change an
+existing store from private to public or back. `putPublic()` calling
+`put(key, body, { access: "public", ... })` against a private-access store fails outright
+with `Cannot use public access on a private store` — this is not a code defect against the
+documented Vercel Blob API, it is what the API is supposed to do.
 
-It is an infrastructure prerequisite that has not yet been satisfied: either this
-project's existing Blob store needs its access mode changed to allow public objects, or a
-second, explicitly public-access Blob store needs to be provisioned and its token wired to
-the media upload path. Until one of those happens, `POST /api/settings/institution/media`
-will fail in any environment using the Blob adapter (i.e., anywhere `BLOB_READ_WRITE_TOKEN`
-is set) — the local-disk adapter used in plain `next dev` is unaffected, since its "public"
-root is just a second directory with no access-mode concept. See the README's
-"Before you can upload institution media" note for the operational step this implies.
+This project provisions two stores for exactly this reason:
+
+| Store | Access mode | Env var | Holds |
+| --- | --- | --- | --- |
+| `admissions-documents` | private | `DOCUMENTS_BLOB_READ_WRITE_TOKEN` | Admission documents, read only through the authenticated route |
+| `institution-media` | public | `BLOB_READ_WRITE_TOKEN` (the SDK's default) | Logo, cover, gallery — hot-linked by third-party websites |
+
+Separate tokens, not just separate stores under one token, for a second reason beyond the
+access-mode requirement: keeping them apart means a bug reachable through the public media
+path can only ever touch the public store. It structurally cannot reach a document, however
+that bug is shaped, because the document store's token is never in scope for that code
+path. `src/lib/storage/blob.ts` passes `DOCUMENTS_BLOB_READ_WRITE_TOKEN` explicitly on every
+document-store call rather than relying on the SDK's implicit default — that default now
+names the *other* store, so leaving it implicit would silently misroute document operations.
+
+Provisioning: `vercel blob create-store <name> --access <public|private>` creates a store
+and attempts to auto-connect it to the project under the fixed name
+`BLOB_READ_WRITE_TOKEN`; a second store needs its token added under a different name
+explicitly (`vercel env add <NAME> <environment>`), since the auto-connect step cannot
+target a name you choose. The local-disk adapter used in plain `next dev` is unaffected —
+its "public" root is just a second directory with no access-mode concept.
 
 ---
 

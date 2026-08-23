@@ -48,7 +48,8 @@ Change these before deploying anywhere real.
 | `NEXT_PUBLIC_APP_URL` | no | Fallback public origin for generated snippets. The request's own host is preferred. |
 | `SESSION_TTL_HOURS` | no | Dashboard session lifetime. Default `12`. |
 | `UPLOAD_DIR` | no | Where the local storage adapter writes uploads. Default `.uploads/`, outside `public/`. Ignored when `BLOB_READ_WRITE_TOKEN` is set. |
-| `BLOB_READ_WRITE_TOKEN` | no | Provisioned by Vercel Blob. Its presence switches document storage from local disk to Blob. |
+| `BLOB_READ_WRITE_TOKEN` | no | The **public**-access Blob store — institution logo/cover/gallery media. Its presence switches that path from local disk to Blob. |
+| `DOCUMENTS_BLOB_READ_WRITE_TOKEN` | no | The **private**-access Blob store — admission documents. Its presence switches document storage from local disk to Blob. A separate store from the one above on purpose — see [Institution media — the public path](#institution-media--the-public-path). |
 
 ---
 
@@ -468,14 +469,17 @@ runtime:
 
 | Condition | Adapter | Where files live |
 | --- | --- | --- |
-| `BLOB_READ_WRITE_TOKEN` is set | Vercel Blob | Blob store, `access: "private"` |
+| `DOCUMENTS_BLOB_READ_WRITE_TOKEN` is set | Vercel Blob | The **documents** Blob store, `access: "private"` |
 | otherwise | Local disk | `UPLOAD_DIR`, default `.uploads/`, outside `public/` |
 
 Selecting on the token rather than `NODE_ENV` means `vercel dev` and preview deployments use the same
 storage as production, while a plain `next dev` works with nothing configured.
 
 Documents are private under both. A Blob URL is not a way in: reads go through
-`GET /api/documents/{id}`, which authenticates and checks the tenant first.
+`GET /api/documents/{id}`, which authenticates and checks the tenant first. The Blob adapter passes
+`DOCUMENTS_BLOB_READ_WRITE_TOKEN` explicitly on every call rather than relying on the SDK's default
+`BLOB_READ_WRITE_TOKEN` var — that default now names the *other* store (see below), so document
+operations would silently land in the wrong store if this were left implicit.
 
 `put()` returns the handle to read back with, which is **not** necessarily the key it was given —
 Blob returns a URL. `DocumentService` persists what the adapter returns, so a different adapter can
@@ -488,21 +492,24 @@ school website hot-links these directly, so they need URLs that load with no aut
 adapter interface gains `putPublic()`/`deletePublic()` for exactly this, and only
 `InstitutionService` calls them — `DocumentService` (admission documents) never does.
 
-- **Vercel Blob:** `putPublic()` stores with `access: "public"` and returns a CDN URL.
+- **Vercel Blob:** `putPublic()` stores with `access: "public"` and returns a CDN URL. This uses the
+  SDK's default `BLOB_READ_WRITE_TOKEN` var, bound to a store provisioned in **public-access** mode —
+  a *different* store, and a *different* env var, from the one backing admission documents
+  (`DOCUMENTS_BLOB_READ_WRITE_TOKEN`, above). A store's access mode is fixed at creation and Vercel
+  provides no way to change it afterward, and a store can serve only one access mode — so this has to
+  be two stores, not one store with two write paths. Kept on separate tokens for a second reason
+  beyond the access-mode requirement: it also means a bug in the public media path can only ever
+  reach the public store, never the one holding admission documents.
 - **Local disk:** `putPublic()` writes under a *separate* public root
   (`PUBLIC_UPLOAD_DIR`, default `.uploads-public/`) served by the unauthenticated
   `/api/media/[...key]` route — a distinct directory so a bug in the private path's key-escape
   check could never expose a document through the public route.
 
-> **Before you can upload institution media:** `putPublic()` requires a Vercel Blob store
-> provisioned in **public-access** mode. A store created in the default private-access mode will
-> reject the `access: "public"` write outright. If your `BLOB_READ_WRITE_TOKEN` points at a
-> private-access-only store — which is the case for this project as shipped — either change that
-> store's access mode, or provision a second, explicitly public-access store and point institution
-> media uploads at its token. This is an infrastructure step, not a code change: `POST
-> /api/settings/institution/media` is implemented correctly against the documented Blob API and will
-> start working the moment the store's access mode matches. The local-disk adapter (plain `next dev`,
-> no `BLOB_READ_WRITE_TOKEN`) is unaffected.
+**Provisioning both stores** (`vercel blob create-store <name> --access <public|private>`, then bind
+each store's token to the project under its own var name — the CLI's own `create-store` auto-connect
+only offers the fixed name `BLOB_READ_WRITE_TOKEN`, so the second store's token needs an explicit
+`vercel env add` under a name of your choosing, matching whatever this deployment's code reads for
+that store). The local-disk adapter (plain `next dev`, neither token set) is unaffected either way.
 
 Egress for institution media scales with **website visitor traffic** rather than admission volume —
 see [`docs/architecture/institution-master-identity.md`](docs/architecture/institution-master-identity.md#5-storage-split--public-vs-private-media)
@@ -543,6 +550,7 @@ scoped API clients — are already in place.
   a dry-run report of what it would set. Every pre-existing institution's `profileStatus` stays
   `DRAFT` until its own admin publishes — the public profile API will correctly 404 for all of them
   immediately after this step, which is expected, not a bug.
-- Ensure the Blob store backing `BLOB_READ_WRITE_TOKEN` allows public-access objects before
-  institution admins try to upload a logo, cover or gallery image — see
+- Ensure both Blob stores are provisioned before institution admins try to upload documents or
+  institution media — a public-access store bound to `BLOB_READ_WRITE_TOKEN` and a private-access
+  store bound to `DOCUMENTS_BLOB_READ_WRITE_TOKEN` — see
   [Institution media — the public path](#institution-media--the-public-path) above.
