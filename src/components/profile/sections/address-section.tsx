@@ -8,6 +8,7 @@ import { updateProfileSchema } from "@/lib/validation/institution";
 import {
   FieldGroup,
   FieldRow,
+  reportSectionErrors,
   SectionForm,
   TextField,
   TextareaField,
@@ -61,7 +62,7 @@ export function AddressSection({ profile, onSave, onDirtyChange }: SectionProps)
     <SectionForm
       title="Address"
       description="Where you are. District is one of the details the completion score looks for."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >

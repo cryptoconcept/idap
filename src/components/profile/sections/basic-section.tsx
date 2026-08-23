@@ -10,6 +10,7 @@ import type { ProfileDTO } from "@/lib/types";
 import {
   FieldGroup,
   FieldRow,
+  reportSectionErrors,
   SectionForm,
   SelectField,
   TextField,
@@ -65,7 +66,7 @@ export function BasicSection({
     <SectionForm
       title="Basic information"
       description="Who you are, in the words a parent searching for you would use."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >

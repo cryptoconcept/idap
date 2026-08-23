@@ -2,6 +2,8 @@
 
 import { useId, useState } from "react";
 import { X } from "lucide-react";
+import { toast } from "sonner";
+import type { FieldErrors, FieldValues } from "react-hook-form";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -220,6 +222,7 @@ export function TagsField({
   error,
   hint,
   max = 60,
+  maxLength,
 }: {
   id: string;
   label: string;
@@ -228,7 +231,10 @@ export function TagsField({
   placeholder?: string;
   error?: string;
   hint?: string;
+  /** Most entries the list may hold. */
   max?: number;
+  /** Longest a single entry may be — the schema's own limit for this list. */
+  maxLength: number;
 }) {
   const [draft, setDraft] = useState("");
   const listId = useId();
@@ -280,6 +286,7 @@ export function TagsField({
           id={id}
           value={draft}
           placeholder={placeholder}
+          maxLength={maxLength}
           aria-describedby={values.length > 0 ? listId : undefined}
           aria-invalid={Boolean(error)}
           onChange={(event) => setDraft(event.target.value)}
@@ -309,6 +316,42 @@ export function toFacilityCode(label: string): string {
     .replace(/[^A-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 40);
+}
+
+/**
+ * Depth-first search for the first message `react-hook-form` produced. Errors
+ * on an array item live at a path no section renders — `facilities.0.note`,
+ * `academic.coursesOffered.2` — so without this a failed submit would be
+ * silent. `ref` holds a DOM node and `types` a duplicate map; neither is walked.
+ */
+export function firstErrorMessage(node: unknown, depth = 0): string | undefined {
+  if (depth > 8 || node === null || typeof node !== "object") return undefined;
+
+  const record = node as Record<string, unknown>;
+  if (typeof record.message === "string" && record.message.trim().length > 0) {
+    return record.message.trim();
+  }
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "ref" || key === "types") continue;
+    const found = firstErrorMessage(value, depth + 1);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
+ * The `onInvalid` half of every section's `handleSubmit`. Without it a blocked
+ * save looks like a dead button: the request never goes out and, for an error
+ * with no per-field slot to render into, nothing on screen changes.
+ */
+export function reportSectionErrors<T extends FieldValues>(errors: FieldErrors<T>): void {
+  const message = firstErrorMessage(errors);
+  toast.error(
+    message
+      ? `Check the highlighted fields — ${message}`
+      : "Check the highlighted fields and try again.",
+  );
 }
 
 /**

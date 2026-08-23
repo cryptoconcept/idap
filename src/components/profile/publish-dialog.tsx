@@ -22,14 +22,41 @@ import type { ProfileDTO } from "@/lib/types";
  * is the one that is wrong.
  */
 const GOES_PUBLIC: { label: string; detail: string }[] = [
-  { label: "Identity", detail: "Name, legal and short name, type, tagline, description, year established, your slug and region code" },
-  { label: "Images", detail: "Logo, cover image and every gallery image that is not hidden" },
-  { label: "Address", detail: "Street, locality, area, city, taluk, district, state, country, pincode, map location" },
-  { label: "Contact", detail: "Phone, secondary phone, WhatsApp, email, alternate email, website, contact person" },
-  { label: "Academics", detail: "Board, affiliation, recognition, UDISE code, medium, classes and courses offered" },
-  { label: "Management", detail: "Management type, trust or society, principal and head designation — names only" },
-  { label: "Facilities", detail: "Every facility you have listed, with its note" },
-  { label: "Social links", detail: "Facebook, Instagram, YouTube, LinkedIn, X and any link you added" },
+  {
+    label: "Identity",
+    detail:
+      "Institution ID and slug, name, legal name, short name, type, region code, tagline, description, year established",
+  },
+  {
+    label: "Images",
+    detail:
+      "Logo, cover image, and every gallery image that is not hidden — with its title and description",
+  },
+  {
+    label: "Address",
+    detail:
+      "Street address and second line, locality, area, city, taluk, district, state, country, pincode, and your map coordinates and link",
+  },
+  {
+    label: "Contact",
+    detail:
+      "Phone, secondary phone, WhatsApp, email, alternate email, website, contact person",
+  },
+  {
+    label: "Academics",
+    detail:
+      "Board, affiliation and affiliation number, recognition, UDISE code, medium, who you admit, current academic year, classes and courses offered",
+  },
+  {
+    label: "Management",
+    detail:
+      "Management type, management, trust and society names, principal and head designation — names only",
+  },
+  { label: "Facilities", detail: "Every facility you have listed, whether it is available, and its note" },
+  {
+    label: "Social links",
+    detail: "Facebook, Instagram, YouTube, LinkedIn, X, and every extra link you added",
+  },
 ];
 
 const STAYS_PRIVATE =

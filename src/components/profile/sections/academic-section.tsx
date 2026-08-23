@@ -9,6 +9,7 @@ import { GENDER_TYPES, GENDER_TYPE_LABELS } from "@/lib/constants";
 import {
   FieldGroup,
   FieldRow,
+  reportSectionErrors,
   SectionForm,
   SelectField,
   TagsField,
@@ -63,7 +64,7 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
     <SectionForm
       title="Academic information"
       description="What you are affiliated to, and what you teach."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >
@@ -137,6 +138,7 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
               label="Medium of instruction"
               values={field.value ?? []}
               onChange={field.onChange}
+              maxLength={40}
               placeholder="English"
               max={12}
               error={errors.academic?.medium?.message}
@@ -153,6 +155,7 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
               label="Classes offered"
               values={field.value ?? []}
               onChange={field.onChange}
+              maxLength={40}
               placeholder="Grade 1"
               max={60}
               error={errors.academic?.classesOffered?.message}
@@ -169,6 +172,7 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
               label="Courses offered"
               values={field.value ?? []}
               onChange={field.onChange}
+              maxLength={120}
               placeholder="B.Sc Computer Science"
               max={120}
               error={errors.academic?.coursesOffered?.message}

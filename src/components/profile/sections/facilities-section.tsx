@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import {
   FieldGroup,
+  reportSectionErrors,
   SectionForm,
   toFacilityCode,
   type SectionProps,
@@ -62,7 +63,7 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
     <SectionForm
       title="Facilities"
       description="Three or more counts towards your completion score. Every one you list is published."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >
@@ -132,6 +133,7 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                       id="facilities-draft"
                       value={draft}
                       placeholder="Robotics Lab"
+                      maxLength={80}
                       disabled={selected.length >= MAX_FACILITIES}
                       onChange={(event) => setDraft(event.target.value)}
                       onKeyDown={(event) => {
@@ -210,6 +212,7 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                         <Input
                           value={facility.note ?? ""}
                           placeholder="Note — e.g. 12,000 titles, open until 6pm"
+                          maxLength={200}
                           aria-label={`Note for ${facility.label}`}
                           onChange={(event) => update(index, { note: event.target.value })}
                         />

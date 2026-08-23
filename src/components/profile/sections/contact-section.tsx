@@ -8,6 +8,7 @@ import { updateProfileSchema } from "@/lib/validation/institution";
 import {
   FieldGroup,
   FieldRow,
+  reportSectionErrors,
   SectionForm,
   TextField,
   type SectionProps,
@@ -51,7 +52,7 @@ export function ContactSection({ profile, onSave, onDirtyChange }: SectionProps)
     <SectionForm
       title="Contact"
       description="How an interested parent reaches you. All of it is published."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >

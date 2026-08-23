@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
   FieldGroup,
   FieldRow,
+  reportSectionErrors,
   SectionForm,
   TextField,
   type SectionProps,
@@ -60,7 +61,7 @@ export function SocialSection({ profile, onSave, onDirtyChange }: SectionProps) 
     <SectionForm
       title="Social links"
       description="Every link here is published. Full URLs, starting with https://."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >
@@ -119,6 +120,7 @@ export function SocialSection({ profile, onSave, onDirtyChange }: SectionProps) 
                     id={`social-other-label-${index}`}
                     label="Label"
                     placeholder="Alumni"
+                    maxLength={40}
                     error={errors.social?.other?.[index]?.label?.message}
                     {...register(`social.other.${index}.label` as const)}
                   />

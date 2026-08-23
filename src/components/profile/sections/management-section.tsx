@@ -9,6 +9,7 @@ import { MANAGEMENT_TYPES } from "@/lib/constants";
 import {
   FieldGroup,
   FieldRow,
+  reportSectionErrors,
   SectionForm,
   SelectField,
   TextField,
@@ -64,7 +65,7 @@ export function ManagementSection({ profile, onSave, onDirtyChange }: SectionPro
     <SectionForm
       title="Management"
       description="Who runs the institution, and who heads it."
-      onSubmit={handleSubmit(onSubmit)}
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
       isSubmitting={isSubmitting}
       isDirty={isDirty}
     >
