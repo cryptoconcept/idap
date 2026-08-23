@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
-import { makeInstitution, makeUser } from "../helpers/factories";
+import { makeInstitution, makeProfiledInstitution, makeUser } from "../helpers/factories";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
 // Aliased to tests/helpers/next-headers-stub.ts, whose cookie store is a plain
 // module-level Map — so a test can put a real signed session cookie in front of
@@ -72,7 +72,9 @@ describe("platform-admin institution routes", () => {
   });
 
   it("returns the full profile of any institution to a platform admin", async () => {
-    await makeInstitution("INS0001", { academic: { board: "State Board" } });
+    // A genuinely full profile — academic, management, facilities, tagline —
+    // not just one field, since this is what the test claims to exercise.
+    await makeProfiledInstitution("INS0001", { academic: { board: "State Board" } });
     await signInPlatformAdmin();
 
     const response = await GET(cookieRequest(), contextFor("INS0001"));
@@ -82,6 +84,8 @@ describe("platform-admin institution routes", () => {
     expect(payload.success).toBe(true);
     expect(payload.institution.institutionId).toBe("INS0001");
     expect(payload.profile.academic.board).toBe("State Board");
+    expect(payload.profile.management.principalName).toBeTruthy();
+    expect(payload.profile.facilities.length).toBeGreaterThan(0);
     expect(payload.completion.percent).toBeGreaterThanOrEqual(0);
   });
 

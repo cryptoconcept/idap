@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
-import { makeInstitution, makeApiClient } from "../helpers/factories";
+import { makeInstitution, makeProfiledInstitution, makeApiClient } from "../helpers/factories";
 import { Institution } from "@/models";
 import { DashboardService } from "@/services/dashboard.service";
 
@@ -13,12 +13,14 @@ describe("dashboard profile + integration summary", () => {
   beforeEach(clearDatabase);
 
   it("returns a numeric completion percent alongside the profile status", async () => {
-    await makeInstitution("INS0001", { institutionName: "Complete-ish School" });
+    // A genuinely filled-in profile, so "Complete-ish" is an accurate name and
+    // the percent this asserts on is not just the trivial near-empty case.
+    await makeProfiledInstitution("INS0001", { institutionName: "Complete-ish School" });
 
     const stats = await DashboardService.getStats({ institutionId: "INS0001" });
 
     expect(typeof stats.profile.completionPercent).toBe("number");
-    expect(stats.profile.completionPercent).toBeGreaterThanOrEqual(0);
+    expect(stats.profile.completionPercent).toBeGreaterThan(0);
     expect(stats.profile.completionPercent).toBeLessThanOrEqual(100);
     expect(stats.profile.status).toBe("DRAFT");
   });
