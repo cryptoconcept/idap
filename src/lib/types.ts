@@ -220,4 +220,6 @@ export type DashboardStats = {
   underReview: number;
   approved: number;
   admitted: number;
+  profile: { status: ProfileStatus; completionPercent: number };
+  integration: { activeCredentials: number; lastUsedAt?: string };
 };

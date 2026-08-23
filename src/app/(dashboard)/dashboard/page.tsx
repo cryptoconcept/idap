@@ -15,6 +15,9 @@ import { LeadsTable } from "@/components/leads/leads-table";
 import { ApplicationsTable } from "@/components/applications/applications-table";
 import { Ref } from "@/components/shared/ref";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { formatRelative } from "@/lib/utils/format";
+import { PROFILE_STATUS_LABELS, type ProfileStatus } from "@/lib/constants";
 
 export const metadata: Metadata = { title: "Dashboard" };
 export const dynamic = "force-dynamic";
@@ -64,6 +67,38 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
           </Button>
         }
       />
+
+      <section aria-label="Profile and integration" className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <Link
+          href="/profile"
+          className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-foreground/30 hover:bg-muted/40"
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className="eyebrow">Profile</span>
+            <ProfileStatusChip status={stats.profile.status} />
+          </div>
+          <span className="tabular text-[32px] leading-none font-semibold tracking-tight text-foreground">
+            {stats.profile.completionPercent}%
+          </span>
+          <span className="text-xs text-muted-foreground">Profile completion</span>
+        </Link>
+
+        <Link
+          href="/integration"
+          className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:border-foreground/30 hover:bg-muted/40"
+        >
+          <span className="eyebrow">Integration</span>
+          <span className="tabular text-[32px] leading-none font-semibold tracking-tight text-foreground">
+            {stats.integration.activeCredentials}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {stats.integration.activeCredentials === 1 ? "Active credential" : "Active credentials"}
+            {stats.integration.lastUsedAt
+              ? ` · Last used ${formatRelative(stats.integration.lastUsedAt)}`
+              : ""}
+          </span>
+        </Link>
+      </section>
 
       <section aria-label="Summary" className="grid grid-cols-2 gap-3 lg:grid-cols-6">
         <StatCard label="Total enquiries" value={stats.totalEnquiries} href="/enquiries" />
@@ -198,6 +233,32 @@ function RecentPanel({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * Same fill-weight idiom as the lead/application status chips
+ * (`components/shared/status-badge.tsx`): PUBLISHED is the one solid,
+ * positive state; SUSPENDED/ARCHIVED read as terminal-negative; DRAFT is
+ * open, waiting on the institution.
+ */
+function ProfileStatusChip({ status }: { status: ProfileStatus }) {
+  const tone =
+    status === "PUBLISHED"
+      ? "border-transparent bg-foreground text-background"
+      : status === "SUSPENDED" || status === "ARCHIVED"
+        ? "border-dashed border-border bg-background text-muted-foreground"
+        : "border-foreground/25 bg-background text-foreground";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium whitespace-nowrap",
+        tone,
+      )}
+    >
+      {PROFILE_STATUS_LABELS[status]}
+    </span>
   );
 }
 

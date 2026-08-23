@@ -30,6 +30,7 @@ const INSTITUTION_NAV: NavGroup[] = [
   },
   {
     items: [
+      { href: "/profile", label: "Institution Profile", icon: Building2 },
       { href: "/integration", label: "Integration", icon: Plug },
       { href: "/settings", label: "Settings", icon: Settings },
     ],
