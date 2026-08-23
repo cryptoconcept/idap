@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     return new Response(JSON.stringify(document, null, 2), {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Disposition": 'inline; filename="admissions-api.openapi.json"',
+        "Content-Disposition": 'inline; filename="lead-platform-api.openapi.json"',
         "Access-Control-Allow-Origin": "*",
         "Cache-Control": "public, max-age=300",
       },

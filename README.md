@@ -1,4 +1,4 @@
-# Admission & Enquiry Management Platform
+# Lead Platform
 
 A multi-tenant admission engine for schools, PU colleges, degree colleges, universities and other
 institutions. External websites push admission enquiries and applications in over an authenticated

@@ -215,8 +215,8 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
     openapi: "3.1.0",
     info: {
       title: scoped
-        ? `Admissions API · ${options.institutionName ?? institutionId}`
-        : "Admissions API",
+        ? `Lead Platform API · ${options.institutionName ?? institutionId}`
+        : "Lead Platform API",
       version: "1.0.0",
       summary: "Admission enquiries and applications for educational institutions.",
       description,

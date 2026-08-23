@@ -18,10 +18,10 @@ export default function LoginPage() {
             className="flex size-6 items-center justify-center rounded bg-foreground text-[11px] font-semibold text-background"
             aria-hidden
           >
-            A
+            L
           </span>
           <span className="text-[11px] font-semibold tracking-[0.14em] uppercase">
-            Admissions Platform
+            Lead Platform
           </span>
         </div>
 
@@ -55,7 +55,7 @@ export default function LoginPage() {
         <div className="w-full max-w-[360px] space-y-7">
           <div className="space-y-1.5 lg:hidden">
             <span className="flex size-7 items-center justify-center rounded bg-foreground text-xs font-semibold text-background">
-              A
+              L
             </span>
           </div>
 

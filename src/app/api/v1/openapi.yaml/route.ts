@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     return new Response(stringify(document, { lineWidth: 0 }), {
       headers: {
         "Content-Type": "application/yaml; charset=utf-8",
-        "Content-Disposition": 'inline; filename="admissions-api.openapi.yaml"',
+        "Content-Disposition": 'inline; filename="lead-platform-api.openapi.yaml"',
         "Access-Control-Allow-Origin": "*",
         "Cache-Control": "public, max-age=300",
       },

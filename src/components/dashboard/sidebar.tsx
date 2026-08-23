@@ -34,7 +34,7 @@ export function SidebarBody({
           className="flex size-6 items-center justify-center rounded bg-foreground text-[11px] font-semibold text-background"
           aria-hidden
         >
-          A
+          L
         </span>
         <span className="text-[11px] font-semibold tracking-[0.14em] uppercase">{title}</span>
       </Link>
