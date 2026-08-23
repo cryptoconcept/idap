@@ -23,6 +23,7 @@ import type { z } from "zod";
 import { mediaUploadSchema } from "@/lib/validation/institution";
 import type {
   createInstitutionSchema,
+  galleryItemPatchSchema,
   platformInstitutionPatchSchema,
   updateInstitutionSchema,
   updateProfileSchema,
@@ -531,6 +532,56 @@ export const InstitutionService = {
       entityId: updated._id,
       entityRef: institutionId,
       action: parsed.kind === "LOGO" ? "Logo updated" : "Cover image updated",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated as InstitutionRow);
+  },
+
+  /**
+   * Edits one gallery item in place — the only way to hide an image without
+   * deleting it. Addressed by `_id` through an array filter, so a concurrent
+   * upload or delete cannot shift the write onto a different item the way a
+   * positional index would.
+   */
+  async updateGalleryItem(
+    institutionId: string,
+    mediaId: string,
+    patch: z.infer<typeof galleryItemPatchSchema>,
+    actor: { id: string; name: string },
+  ): Promise<ProfileDTO> {
+    if (!Types.ObjectId.isValid(mediaId)) throw notFound("Gallery item not found");
+
+    await connectToDatabase();
+
+    const set: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === undefined) continue;
+      set[`gallery.$[item].${key}`] = value;
+    }
+
+    const objectId = new Types.ObjectId(mediaId);
+
+    if (Object.keys(set).length === 0) {
+      const row = await Institution.findOne({ institutionId, "gallery._id": objectId }).lean();
+      if (!row) throw notFound("Gallery item not found");
+      return serialize(row as InstitutionRow);
+    }
+
+    const updated = await Institution.findOneAndUpdate(
+      { institutionId, "gallery._id": objectId },
+      { $set: set },
+      { new: true, arrayFilters: [{ "item._id": objectId }] },
+    ).lean();
+    if (!updated) throw notFound("Gallery item not found");
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "INSTITUTION",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: patch.status === "HIDDEN" ? "Gallery image hidden" : "Gallery image updated",
       performedBy: actor.id,
       performedByName: actor.name,
     });

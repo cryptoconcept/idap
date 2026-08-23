@@ -9,6 +9,7 @@ const PROTECTED_PREFIXES = [
   "/enquiries",
   "/applications",
   "/integration",
+  "/profile",
   "/settings",
   "/admin",
 ];
@@ -19,7 +20,14 @@ const PROTECTED_PREFIXES = [
  * they are turned away here — before anything renders — as well as by the
  * server-side guards in `lib/tenant`, which remain the authoritative check.
  */
-const TENANT_PREFIXES = ["/dashboard", "/enquiries", "/applications", "/integration", "/settings"];
+const TENANT_PREFIXES = [
+  "/dashboard",
+  "/enquiries",
+  "/applications",
+  "/integration",
+  "/profile",
+  "/settings",
+];
 
 const ADMIN_PREFIX = "/admin";
 
@@ -90,6 +98,7 @@ export const config = {
     "/enquiries/:path*",
     "/applications/:path*",
     "/integration/:path*",
+    "/profile/:path*",
     "/settings/:path*",
     "/admin/:path*",
     "/login",

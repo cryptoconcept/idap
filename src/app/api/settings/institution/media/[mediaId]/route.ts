@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireInstitution } from "@/lib/tenant";
+import { galleryItemPatchSchema } from "@/lib/validation/institution";
 import { InstitutionService } from "@/services/institution.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
@@ -20,6 +21,34 @@ export async function DELETE(
       id: user.id,
       name: user.name,
     });
+
+    return jsonSuccess({ profile });
+  } catch (error) {
+    return handleApiError(error);
+  }
+}
+
+/**
+ * Edits one gallery item — title, description, order, and the ACTIVE/HIDDEN
+ * flag the public projection filters on. Hiding is how an image leaves the
+ * public profile without leaving the gallery.
+ */
+export async function PATCH(
+  request: NextRequest,
+  context: RouteContext<"/api/settings/institution/media/[mediaId]">,
+) {
+  try {
+    assertSameOrigin(request);
+    const { user, institution } = await requireInstitution();
+    const { mediaId } = await context.params;
+    const patch = galleryItemPatchSchema.parse(await request.json().catch(() => ({})));
+
+    const profile = await InstitutionService.updateGalleryItem(
+      institution.institutionId,
+      mediaId,
+      patch,
+      { id: user.id, name: user.name },
+    );
 
     return jsonSuccess({ profile });
   } catch (error) {
