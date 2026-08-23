@@ -1,8 +1,12 @@
-# Lead Platform
+# I-DAP
 
-A multi-tenant admission engine for schools, PU colleges, degree colleges, universities and other
-institutions. External websites push admission enquiries and applications in over an authenticated
-API; each institution reviews, decides on and prints them from its own dashboard.
+**Institute Digital Appearance Platform.** A multi-tenant admission engine for schools, PU colleges,
+degree colleges, universities and other institutions, built around one master `Institution` record
+per tenant. External websites push admission enquiries and applications in over an authenticated
+API; each institution reviews, decides on and prints them from its own dashboard. Every institution
+also owns a headless **profile** — identity, contact, academics, facilities, gallery — that it
+publishes once and any authorised consumer, starting with its own website, reads over the API. See
+[Institution profile](#institution-profile) below.
 
 Every record is scoped to an `institutionId` (`INS0001`, `INS0002`, …) that is always derived from
 the authenticated session or API credential — never from the request body.
@@ -51,7 +55,7 @@ Change these before deploying anywhere real.
 ## Verifying it works
 
 ```bash
-npm test          # 123 tests, ~6s, no server needed
+npm test          # 289 tests, ~18s, no server needed
 npm run typecheck
 npm run lint
 npm run build
@@ -98,21 +102,23 @@ src/
   app/
     (auth)/login              sign in
     (dashboard)/              sidebar shell — institution and super admin screens
-      dashboard  enquiries  applications  integration  settings
+      dashboard  enquiries  applications  profile  integration  settings
       admin/     institutions  api-clients  settings
     (print)/applications/[applicationNumber]/print   A4 print view, no app chrome
     (public)/apply/[institutionId]                   hosted enquiry + application forms
     api/
       auth/          login, logout, me
       v1/            external API (API-key authenticated)
-      public/        hosted-form submission (IP rate limited)
+      public/        hosted-form submission (IP rate limited), public profile (cached, credential-free)
+      settings/institution/  institute admin's own profile — read, write, publish, media
+      institutions/  platform admin — create, list, view any profile, provision-only patch
       …              dashboard + admin APIs (cookie authenticated)
     widget.js        embeddable script
-  components/  ui/ dashboard/ leads/ applications/ institutions/ integration/ public/ shared/
-  lib/         auth/ api/ db/ pdf/ security/ storage/ tenant/ utils/ validation/
+  components/  ui/ dashboard/ leads/ applications/ institutions/ integration/ profile/ public/ shared/
+  lib/         auth/ api/ db/ pdf/ profile/ security/ storage/ tenant/ utils/ validation/
   models/      Institution User Lead Application Document Note Activity ApiClient Counter RateLimit
   services/    LeadService ApplicationService InstitutionService ApiClientService
-               DocumentService ActivityService NoteService DashboardService
+               DocumentService ActivityService NoteService DashboardService slug.service
 
 tests/
   unit/        tenant guards, validation, security primitives, API contract
@@ -183,6 +189,41 @@ INS0001-APP-000001   admission application
 
 ---
 
+## Institution profile
+
+I-DAP is **headless**: every institution has one master profile — identity, contact, address,
+academic detail, management, facilities, social links and a gallery, layered onto the existing
+`Institution` record — and I-DAP exposes it over an API rather than rendering it. The institution's
+own website, or any other authorised consumer, reads the API and does the presenting.
+
+The profile has its own publication lifecycle, and it is **independent of `active`** in one
+sentence: `active` governs login and whether the Lead Network accepts enquiries, `profileStatus`
+governs whether the public API serves the profile, and publishing or unpublishing one never touches
+the other — a `DRAFT` institution keeps logging in and taking enquiries exactly as before.
+
+- Institute admins edit their own profile at **Institution Profile** in the dashboard (`/profile`),
+  across eight sections, with an explicit, deliberate **Publish** action —
+  `POST /api/settings/institution/publish`.
+- Platform admins can view any institution's profile (`GET /api/institutions/{institutionId}`) but
+  can never write its content — only provisioning fields (`institutionName`, `institutionType`,
+  `active`, `regionCode`), enforced by a narrower schema on the server.
+- Anyone, with no credentials, can read a **published** profile:
+
+  ```bash
+  curl https://your-domain.com/api/public/INS0001/profile
+  curl https://your-domain.com/api/public/institutions/infinity-school-of-excellence-mysore
+  ```
+
+  A draft, suspended, archived, deactivated, or unknown institution all return an identical `404` —
+  never `403` — so the response can never be used to confirm which institutions exist privately.
+
+Full endpoint reference, request/response shapes and curl examples:
+[`docs/api/institution-profile.md`](docs/api/institution-profile.md). Architecture, the allow-list
+public projection rule, the slug contract, the storage split, and two known limitations recorded
+honestly rather than glossed over: [`docs/architecture/institution-master-identity.md`](docs/architecture/institution-master-identity.md).
+
+---
+
 ## External API
 
 Base path `/api/v1`. Credentials come from **Integration → API credentials** in the dashboard.
@@ -207,7 +248,9 @@ Browser-safe endpoints, for websites with no backend of their own:
 | --- | --- |
 | `POST /api/public/{institutionId}/leads` | none — rate limited per visitor IP |
 | `POST /api/public/{institutionId}/applications` | none — rate limited per visitor IP |
-| `GET /api/public/{institutionId}` | none — public profile only |
+| `GET /api/public/{institutionId}` | none — branding only (name, address, phone, logo) |
+| `GET /api/public/{institutionId}/profile` | none — full **published** profile; cached, not rate limited |
+| `GET /api/public/institutions/{slug}` | none — same, looked up by slug |
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/leads \
@@ -274,12 +317,19 @@ GET    /api/applications/{applicationNumber}/documents
 POST   /api/applications/{applicationNumber}/documents
 GET    /api/applications/{applicationNumber}/pdf
 GET    /api/documents/{documentId}
-PATCH  /api/settings/institution
+GET    /api/settings/institution                    PATCH  /api/settings/institution
+POST   /api/settings/institution/publish             (institution admin — full profile, {"action":"publish"|"unpublish"})
+POST   /api/settings/institution/media                     PATCH  /api/settings/institution/media/{mediaId}
+DELETE /api/settings/institution/media/{mediaId}
 GET    /api/institutions                            POST   /api/institutions       (platform admin)
 GET    /api/institutions/{institutionId}            PATCH  /api/institutions/{institutionId}
+                                                       (platform admin — GET reads any profile, PATCH is provisioning-fields-only)
 GET    /api/api-clients                             POST   /api/api-clients   (institution admin)
 DELETE /api/api-clients/{id}                                                  (either role)
 ```
+
+Full request/response detail, including which section fields `PATCH /api/settings/institution`
+accepts and the media upload contract: [`docs/api/institution-profile.md`](docs/api/institution-profile.md).
 
 ---
 
@@ -431,6 +481,33 @@ Documents are private under both. A Blob URL is not a way in: reads go through
 Blob returns a URL. `DocumentService` persists what the adapter returns, so a different adapter can
 key storage however it likes. `tests/integration/documents.test.ts` covers that round trip.
 
+### Institution media — the public path
+
+Logo, cover and gallery images are the one exception to "storage is always private": a third-party
+school website hot-links these directly, so they need URLs that load with no authentication. The
+adapter interface gains `putPublic()`/`deletePublic()` for exactly this, and only
+`InstitutionService` calls them — `DocumentService` (admission documents) never does.
+
+- **Vercel Blob:** `putPublic()` stores with `access: "public"` and returns a CDN URL.
+- **Local disk:** `putPublic()` writes under a *separate* public root
+  (`PUBLIC_UPLOAD_DIR`, default `.uploads-public/`) served by the unauthenticated
+  `/api/media/[...key]` route — a distinct directory so a bug in the private path's key-escape
+  check could never expose a document through the public route.
+
+> **Before you can upload institution media:** `putPublic()` requires a Vercel Blob store
+> provisioned in **public-access** mode. A store created in the default private-access mode will
+> reject the `access: "public"` write outright. If your `BLOB_READ_WRITE_TOKEN` points at a
+> private-access-only store — which is the case for this project as shipped — either change that
+> store's access mode, or provision a second, explicitly public-access store and point institution
+> media uploads at its token. This is an infrastructure step, not a code change: `POST
+> /api/settings/institution/media` is implemented correctly against the documented Blob API and will
+> start working the moment the store's access mode matches. The local-disk adapter (plain `next dev`,
+> no `BLOB_READ_WRITE_TOKEN`) is unaffected.
+
+Egress for institution media scales with **website visitor traffic** rather than admission volume —
+see [`docs/architecture/institution-master-identity.md`](docs/architecture/institution-master-identity.md#5-storage-split--public-vs-private-media)
+for the cost note.
+
 ---
 
 ## Deliberately not built
@@ -453,3 +530,19 @@ scoped API clients — are already in place.
   regex search handles comfortably.
 - Mongoose caches compiled models on the global object, so **schema changes need a dev-server restart**
   to take effect.
+- After the application deploys, and before or alongside seeding, run the slug backfill once against
+  production data:
+
+  ```bash
+  npm run backfill:slugs -- --apply
+  ```
+
+  This gives every pre-existing institution a `slug` (institutions created from now on already get
+  one at creation). It is idempotent — it only writes where `slug` is absent, so re-running it is
+  safe and a second run reports `0 institution(s) without a slug`. Run it without `--apply` first for
+  a dry-run report of what it would set. Every pre-existing institution's `profileStatus` stays
+  `DRAFT` until its own admin publishes — the public profile API will correctly 404 for all of them
+  immediately after this step, which is expected, not a bug.
+- Ensure the Blob store backing `BLOB_READ_WRITE_TOKEN` allows public-access objects before
+  institution admins try to upload a logo, cover or gallery image — see
+  [Institution media — the public path](#institution-media--the-public-path) above.

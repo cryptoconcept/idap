@@ -22,6 +22,24 @@ config({ path: ".env" });
 
 const WITH_DEMO = process.argv.includes("--demo");
 
+/**
+ * A minimal, standalone copy of `slug.service.ts`'s `slugify()`. Not imported
+ * from there directly: that module starts with `import "server-only"`, which
+ * only resolves to a no-op under Next's build (the `react-server` export
+ * condition); run standalone via plain `tsx` — as `npm run seed` does, unlike
+ * `npm run backfill:slugs` — the same import throws immediately. Good enough
+ * for the two fixed, ASCII institution names seeded here; not a general
+ * replacement for the real service, which also handles collisions.
+ */
+function slugify(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 90)
+    .replace(/-+$/g, "");
+}
+
 async function nextSequence(scope: string): Promise<number> {
   const counter = await Counter.findOneAndUpdate(
     { _id: scope },
@@ -43,13 +61,25 @@ async function ensureInstitution(input: {
   email: string;
   website: string;
   contactPerson: string;
+  // --- profile fields, so /profile and the dashboard aren't empty locally ---
+  regionCode?: string;
+  tagline?: string;
+  description?: string;
+  establishedYear?: number;
+  academic?: Record<string, unknown>;
+  management?: Record<string, unknown>;
+  facilities?: Array<Record<string, unknown>>;
 }) {
   const existing = await Institution.findOne({ institutionId: input.institutionId }).lean();
   if (existing) {
     console.log(`  · ${input.institutionId} already exists — skipped`);
     return;
   }
-  await Institution.create({ ...input, active: true });
+  // Real institutions get their slug from `allocateSlug` at creation time
+  // (`InstitutionService.create`); this script bypasses that service (see the
+  // `slugify` note above) and assigns one directly from name + city.
+  const slug = slugify(`${input.institutionName} ${input.city}`);
+  await Institution.create({ ...input, active: true, slug });
 
   const numeric = Number(input.institutionId.replace("INS", ""));
   await Counter.updateOne(
@@ -187,6 +217,28 @@ async function main() {
     email: "admissions@infinityschool.edu.in",
     website: "https://infinityschool.edu.in",
     contactPerson: "Admissions Office",
+    regionCode: "KA-MYS",
+    tagline: "Learning that lasts",
+    description:
+      "A CBSE school in Mysore teaching Nursery through Grade 12, known for its science " +
+      "and robotics programmes.",
+    establishedYear: 1998,
+    academic: {
+      board: "CBSE",
+      genderType: "CO_ED",
+      classesOffered: ["Nursery", "Grade 1", "Grade 10", "Grade 12"],
+    },
+    management: {
+      managementType: "TRUST",
+      managementName: "Infinity Education Trust",
+      principalName: "Dr. Latha Rao",
+      headDesignation: "Principal",
+    },
+    facilities: [
+      { code: "LIBRARY", label: "Library", available: true, note: "12,000 titles" },
+      { code: "SCIENCE_LAB", label: "Science Lab", available: true },
+      { code: "TRANSPORT", label: "Transport", available: true, note: "12 routes across Mysore" },
+    ],
   });
   await ensureInstitution({
     institutionId: "INS0002",
@@ -200,6 +252,24 @@ async function main() {
     email: "office@intelligentpublic.edu.in",
     website: "https://intelligentpublic.edu.in",
     contactPerson: "Front Office",
+    regionCode: "KA-BLR",
+    tagline: "Where every student thrives",
+    description: "An ICSE school in Jayanagar, Bengaluru, from Kindergarten through Grade 10.",
+    establishedYear: 2005,
+    academic: {
+      board: "ICSE",
+      genderType: "CO_ED",
+      classesOffered: ["Kindergarten", "Grade 1", "Grade 10"],
+    },
+    management: {
+      managementType: "SOCIETY",
+      principalName: "Mrs. Kavya Nair",
+      headDesignation: "Principal",
+    },
+    facilities: [
+      { code: "LIBRARY", label: "Library", available: true },
+      { code: "PLAYGROUND", label: "Playground", available: true },
+    ],
   });
 
   console.log("\nUsers");
