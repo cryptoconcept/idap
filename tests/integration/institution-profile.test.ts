@@ -140,6 +140,60 @@ describe("institution profile service", () => {
     expect(row!.slug).toMatch(/^green-valley-public-school/);
   });
 
+  it("clears a logo and a cover when the patch sends an explicit null", async () => {
+    await makeInstitution("INS0001", {
+      logoUrl: "https://cdn.test/logo.png",
+      coverImageUrl: "https://cdn.test/cover.jpg",
+      tagline: "Kept",
+    });
+
+    await InstitutionService.updateProfile(
+      "INS0001",
+      updateProfileSchema.parse({ logoUrl: null, coverImageUrl: null }),
+      ACTOR,
+    );
+
+    // `$unset`, not `$set: null` — the field is gone, not stored as a null the
+    // DTO would have to keep translating back.
+    const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
+    expect(row).not.toHaveProperty("logoUrl");
+    expect(row).not.toHaveProperty("coverImageUrl");
+    expect(row!.tagline).toBe("Kept");
+  });
+
+  it("leaves an image alone when the patch does not mention it", async () => {
+    await makeInstitution("INS0001", {
+      logoUrl: "https://cdn.test/logo.png",
+      coverImageUrl: "https://cdn.test/cover.jpg",
+    });
+
+    await InstitutionService.updateProfile(
+      "INS0001",
+      updateProfileSchema.parse({ logoUrl: null, tagline: "New" }),
+      ACTOR,
+    );
+
+    // `undefined` (absent) and `null` (clear) are different instructions: only
+    // the field the patch actually named is cleared.
+    const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
+    expect(row).not.toHaveProperty("logoUrl");
+    expect(row!.coverImageUrl).toBe("https://cdn.test/cover.jpg");
+    expect(row!.tagline).toBe("New");
+  });
+
+  it("accepts a patch that touches nothing", async () => {
+    // The update object is now assembled operator by operator, so the
+    // all-undefined patch has to stay a harmless no-op rather than an empty
+    // `$set` the server would reject.
+    await makeInstitution("INS0001", { tagline: "Kept" });
+    const profile = await InstitutionService.updateProfile(
+      "INS0001",
+      updateProfileSchema.parse({}),
+      ACTOR,
+    );
+    expect(profile.tagline).toBe("Kept");
+  });
+
   it("never deletes another institution's media when a hijacked logoUrl is replaced", async () => {
     await makeInstitution("INS0001");
     await makeInstitution("INS0002");

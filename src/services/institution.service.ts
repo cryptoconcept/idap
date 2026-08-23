@@ -119,28 +119,47 @@ function validateImage(input: { contentType: string; bytes: Buffer }): { extensi
 }
 
 /**
- * Builds a dotted-path `$set` from a parsed profile patch. Block fields
+ * Builds the dotted-path update from a parsed profile patch. Block fields
  * (`contact`, `geo`, `academic`, `management`, `social`) are walked one level
  * deep so a patch touching one field of a block never erases its siblings.
  * Everything else — top-level scalars and arrays (`facilities`), and arrays
  * nested one level inside a block (`academic.medium`, `social.other`) — is
  * `$set` as a whole value: arrays always replace wholesale, never merge
  * element-by-element.
+ *
+ * Three states, not two. A key absent from the patch arrives as `undefined`
+ * and is left alone — that is the guarantee that patching `academic.board`
+ * does not erase `academic.classesOffered`. A key carrying a value is `$set`.
+ * A key explicitly `null` — which only `logoUrl` and `coverImageUrl` accept —
+ * is `$unset`, the documented way to clear an image, so the field goes away
+ * entirely rather than being stored as a literal null the DTO would have to
+ * keep translating back.
  */
-function buildProfileSet(patch: z.infer<typeof updateProfileSchema>): Record<string, unknown> {
+function buildProfileUpdate(patch: z.infer<typeof updateProfileSchema>): {
+  set: Record<string, unknown>;
+  unset: Record<string, "">;
+} {
   const set: Record<string, unknown> = {};
+  const unset: Record<string, ""> = {};
+
+  const assign = (path: string, value: unknown) => {
+    if (value === null) unset[path] = "";
+    else set[path] = value;
+  };
+
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if ((PROFILE_BLOCK_KEYS as readonly string[]).includes(key)) {
+    // A null block would clear the whole block; it never has entries to walk.
+    if (value !== null && (PROFILE_BLOCK_KEYS as readonly string[]).includes(key)) {
       for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
         if (subValue === undefined) continue;
-        set[`${key}.${subKey}`] = subValue;
+        assign(`${key}.${subKey}`, subValue);
       }
     } else {
-      set[key] = value;
+      assign(key, value);
     }
   }
-  return set;
+  return { set, unset };
 }
 
 function serialize(row: InstitutionRow): ProfileDTO {
@@ -385,7 +404,8 @@ export const InstitutionService = {
    * Section-scoped save. Merges by dotted path so a patch touching only one
    * field of a block (e.g. `academic.board`) never erases its siblings
    * (`academic.classesOffered`). Arrays always replace wholesale — that is the
-   * editing model the UI presents, never an element-by-element merge.
+   * editing model the UI presents, never an element-by-element merge. An
+   * explicit `null` on `logoUrl` / `coverImageUrl` clears that image.
    */
   async updateProfile(
     institutionId: string,
@@ -396,13 +416,17 @@ export const InstitutionService = {
     const before = await Institution.findOne({ institutionId }).select("_id").lean();
     if (!before) throw notFound("Institution not found");
 
-    const set = buildProfileSet(patch);
+    const { set, unset } = buildProfileUpdate(patch);
 
-    const updated = await Institution.findOneAndUpdate(
-      { institutionId },
-      { $set: set },
-      { new: true },
-    ).lean();
+    // Only the operators that actually have work in them: an empty `$set` is
+    // rejected by the server, and a patch may legitimately be clear-only.
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length > 0) update.$set = set;
+    if (Object.keys(unset).length > 0) update.$unset = unset;
+
+    const updated = await Institution.findOneAndUpdate({ institutionId }, update, {
+      new: true,
+    }).lean();
     if (!updated) throw notFound("Institution not found");
 
     await ActivityService.record({

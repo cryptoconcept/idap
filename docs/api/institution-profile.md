@@ -98,13 +98,20 @@ Response: same shape as `GET`, re-fetched after the write so `completion` reflec
 Errors: `400 VALIDATION_ERROR` (a field fails its schema — see field limits in
 [§5](#5-field-reference)), `401`, `403` (cross-origin, or a platform-admin session).
 
-> **Known limitation — clearing a text field is currently a no-op.** Every optional text
+**Clearing a field.** `logoUrl` and `coverImageUrl` accept an explicit `null`, which
+clears them — the field is `$unset`, so it comes back absent rather than as a stored
+`null`. Omitting a key still means "leave it alone": `null` and `undefined` are different
+instructions, and a patch naming only `logoUrl` never touches the cover.
+
+> **Known limitation — clearing a *text* field is still a no-op.** Every optional text
 > field trims and normalises an empty string to `undefined` before validation, and the
-> service filters out `undefined` values before building the `$set`. The practical effect:
+> service skips `undefined` values when building the update. The practical effect:
 > sending `{ "tagline": "" }` does not clear an existing tagline — it is silently dropped
 > from the update, and the stored value is unchanged. There is currently no way to blank a
 > previously-set text field through this API; replacing it with a new value works fine.
-> See the architecture doc for the reasoning and what a fix would need.
+> The two image fields above are the exception, because removing a logo has no
+> "replace it with something else" alternative. See the architecture doc for the
+> reasoning and what a wider fix would need.
 
 ### `POST /api/settings/institution/publish`
 
@@ -143,9 +150,10 @@ Errors: `400 VALIDATION_ERROR` (`action` missing or not `publish`/`unpublish`), 
 `LOGO` and `COVER` **replace** the existing image — the old object is deleted (best
 effort) after the new one is stored. `GALLERY` **appends**, capped at 60 items; a 61st
 upload returns `409 CONFLICT` and the just-uploaded object is cleaned up so nothing
-orphans. To remove a logo or cover entirely, `PATCH` the field to `null` through
-`/api/settings/institution` — there is no delete route for `LOGO`/`COVER`, only for
-gallery items.
+orphans. To remove a logo or cover entirely, `PATCH` `{"logoUrl": null}` or
+`{"coverImageUrl": null}` through `/api/settings/institution` — there is no delete route
+for `LOGO`/`COVER`, only for gallery items. Clearing the field leaves the stored object in
+place; only a *replacement* upload cleans the old one up.
 
 ```bash
 curl -X POST https://your-domain.com/api/settings/institution/media \
@@ -394,6 +402,7 @@ explicitly named above.
 | `addressLine2` | 200 chars |
 | `locality`, `area`, `taluk`, `district` | 120 chars |
 | `country` | 80 chars |
+| `logoUrl`, `coverImageUrl` | `http(s)` URL, or `null` to clear |
 | `academic.medium[]` | ≤12 items, 40 chars each |
 | `academic.classesOffered[]` | ≤60 items, 40 chars each |
 | `academic.coursesOffered[]` | ≤120 items, 120 chars each |

@@ -11,6 +11,7 @@ import { POST as publishProfile } from "@/app/api/settings/institution/publish/r
 import { POST as uploadMedia } from "@/app/api/settings/institution/media/route";
 import { DELETE as deleteMedia } from "@/app/api/settings/institution/media/[mediaId]/route";
 import { InstitutionService } from "@/services/institution.service";
+import { Institution } from "@/models";
 import type { NextRequest } from "next/server";
 
 /** Seeds a gallery item directly through the service, bypassing the route
@@ -126,6 +127,29 @@ describe("institution profile self-service routes", () => {
     expect(response.status).toBe(200);
     expect(payload.profile.academic.board).toBe("CBSE");
     expect(payload.completion).toBeDefined();
+  });
+
+  it("clears the logo and cover through a PATCH carrying an explicit null", async () => {
+    await Institution.updateOne(
+      { institutionId: "INS0001" },
+      { $set: { logoUrl: "https://cdn.test/logo.png", coverImageUrl: "https://cdn.test/cover.jpg" } },
+    );
+    await signInWithCookie("INS0001");
+
+    const response = await patchProfile(
+      cookieRequest({ body: { logoUrl: null, coverImageUrl: null }, origin: "http://localhost" }),
+    );
+    const payload = await response.json();
+
+    // Documented as the way to remove a logo or cover, so `null` has to survive
+    // the route's own schema parse rather than 400 on it.
+    expect(response.status).toBe(200);
+    expect(payload.profile.logoUrl).toBeUndefined();
+    expect(payload.profile.coverImageUrl).toBeUndefined();
+
+    const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
+    expect(row).not.toHaveProperty("logoUrl");
+    expect(row).not.toHaveProperty("coverImageUrl");
   });
 
   it("refuses a platform admin session at the route level", async () => {

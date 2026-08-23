@@ -119,6 +119,18 @@ export const updateProfileSchema = z.object({
 
   ...brandingFields,
 
+  /**
+   * The two image fields are the only ones that accept an explicit `null`, and
+   * it means *clear this image* — the documented way to remove a logo or cover,
+   * since the media endpoint only ever replaces or appends. `undefined` (the
+   * key simply absent) still means "don't touch it"; the service turns the
+   * `null` into an `$unset`. Declared after the `brandingFields` spread so this
+   * widened `logoUrl` replaces the plain one for this schema only: the platform
+   * admin's and the create form's `logoUrl` stay non-nullable.
+   */
+  logoUrl: optionalUrlSchema.nullable(),
+  coverImageUrl: optionalUrlSchema.nullable(),
+
   addressLine2: optionalText(200),
   locality: optionalText(120),
   area: optionalText(120),
