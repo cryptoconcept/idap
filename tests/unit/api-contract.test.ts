@@ -92,7 +92,7 @@ describe("OpenAPI document", () => {
 
   it("marks the browser-safe operations as requiring no credentials", () => {
     const publicPaths = paths(scoped).filter((path) => path.startsWith("/api/public"));
-    expect(publicPaths).toHaveLength(3);
+    expect(publicPaths).toHaveLength(5);
 
     for (const path of publicPaths) {
       const operations = (scoped.paths as Record<string, Record<string, { security?: unknown[]; tags?: string[] }>>)[path];
