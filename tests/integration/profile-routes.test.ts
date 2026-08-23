@@ -9,7 +9,34 @@ import { cookies } from "next/headers";
 import { GET as getProfile, PATCH as patchProfile } from "@/app/api/settings/institution/route";
 import { POST as publishProfile } from "@/app/api/settings/institution/publish/route";
 import { POST as uploadMedia } from "@/app/api/settings/institution/media/route";
+import { DELETE as deleteMedia } from "@/app/api/settings/institution/media/[mediaId]/route";
+import { InstitutionService } from "@/services/institution.service";
 import type { NextRequest } from "next/server";
+
+/** Seeds a gallery item directly through the service, bypassing the route
+ * under test, so DELETE tests exercise only the route's own guards. */
+async function seedGalleryItem(institutionId: string): Promise<string> {
+  const profile = await InstitutionService.addMedia(
+    institutionId,
+    { kind: "GALLERY", fileName: "seed.png", contentType: "image/png", bytes: PNG, title: "Seed" },
+    { id: "6a8880f3446c577c470cd06c", name: "Seed Actor" },
+  );
+  return profile.gallery![0]!.id;
+}
+
+/** A request carrying only a session cookie, shaped for a dynamic-route handler
+ * (formData routes and DELETE both need this instead of cookieRequest's json()). */
+function mediaFormRequest(form: FormData, init: { origin?: string; host?: string } = {}) {
+  const headers = new Headers();
+  if (init.origin) headers.set("origin", init.origin);
+  headers.set("host", init.host ?? "localhost");
+  return {
+    headers,
+    nextUrl: new URL("http://localhost/api/settings/institution/media"),
+    url: "http://localhost/api/settings/institution/media",
+    formData: async () => form,
+  } as unknown as NextRequest;
+}
 
 // A real PNG header followed by padding — passes the magic-byte sniff. Same
 // bytes as tests/integration/institution-profile.test.ts.
@@ -167,6 +194,107 @@ describe("institution profile self-service routes", () => {
         body: { academic: { board: "CBSE" } },
         origin: "https://not-the-app.test",
       }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+  });
+
+  it("refuses a platform admin session on publish", async () => {
+    await signInPlatformAdmin();
+
+    const response = await publishProfile(
+      cookieRequest({
+        url: "http://localhost/api/settings/institution/publish",
+        body: { action: "publish" },
+        origin: "http://localhost",
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+  });
+
+  it("rejects a cross-origin publish even with a valid session — CSRF still enforced", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await publishProfile(
+      cookieRequest({
+        url: "http://localhost/api/settings/institution/publish",
+        body: { action: "publish" },
+        origin: "https://not-the-app.test",
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+  });
+
+  it("refuses a platform admin session on media upload", async () => {
+    await signInPlatformAdmin();
+
+    const form = new FormData();
+    form.set("file", new File([PNG], "photo.png", { type: "image/png" }));
+    form.set("kind", "GALLERY");
+
+    const response = await uploadMedia(mediaFormRequest(form, { origin: "http://localhost" }));
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+  });
+
+  it("rejects a cross-origin media upload even with a valid session — CSRF still enforced", async () => {
+    await signInWithCookie("INS0001");
+
+    const form = new FormData();
+    form.set("file", new File([PNG], "photo.png", { type: "image/png" }));
+    form.set("kind", "GALLERY");
+
+    const response = await uploadMedia(
+      mediaFormRequest(form, { origin: "https://not-the-app.test" }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+  });
+
+  it("deletes a gallery item the institution admin owns", async () => {
+    const mediaId = await seedGalleryItem("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await deleteMedia(
+      cookieRequest({ origin: "http://localhost" }),
+      { params: Promise.resolve({ mediaId }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.profile.gallery ?? []).toHaveLength(0);
+  });
+
+  it("refuses a platform admin session on media delete", async () => {
+    const mediaId = await seedGalleryItem("INS0001");
+    await signInPlatformAdmin();
+
+    const response = await deleteMedia(
+      cookieRequest({ origin: "http://localhost" }),
+      { params: Promise.resolve({ mediaId }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+  });
+
+  it("rejects a cross-origin media delete even with a valid session — CSRF still enforced", async () => {
+    // Same rule as every other mutating route here: a browser attaches the
+    // session cookie to a DELETE fetch() automatically too, so the CSRF check
+    // has to apply to it exactly like PATCH and the two POSTs.
+    const mediaId = await seedGalleryItem("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await deleteMedia(
+      cookieRequest({ origin: "https://not-the-app.test" }),
+      { params: Promise.resolve({ mediaId }) } as never,
     );
 
     expect(response.status).toBe(403);
