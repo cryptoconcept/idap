@@ -8,6 +8,7 @@ import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
 import { cookies } from "next/headers";
 import { GET, PATCH } from "@/app/api/institutions/[institutionId]/route";
 import { Institution } from "@/models";
+import { platformInstitutionPatchSchema } from "@/lib/validation/institution";
 import type { NextRequest } from "next/server";
 
 /** A request carrying only a session cookie, like the web dashboard. */
@@ -53,6 +54,22 @@ async function signInInstitutionAdmin(institutionId: string, email = "admin@exam
     v: 0,
   });
   (await cookies()).set(SESSION_COOKIE, token);
+}
+
+/**
+ * The only four fields a platform admin may change, per decision 3. Sorted, so
+ * it can be compared straight against a sorted diff.
+ */
+const PROVISIONING_FIELDS = ["active", "institutionName", "institutionType", "regionCode"];
+
+/** Field names whose values differ between two lean rows, ignoring bookkeeping. */
+function changedFields(before: object, after: object): string[] {
+  const rowBefore = before as Record<string, unknown>;
+  const rowAfter = after as Record<string, unknown>;
+  return [...new Set([...Object.keys(rowBefore), ...Object.keys(rowAfter)])]
+    .filter((key) => key !== "updatedAt" && key !== "__v")
+    .filter((key) => JSON.stringify(rowBefore[key]) !== JSON.stringify(rowAfter[key]))
+    .sort();
 }
 
 describe("platform-admin institution routes", () => {
@@ -109,19 +126,55 @@ describe("platform-admin institution routes", () => {
   });
 
   it("strips profile-content fields from a platform-admin patch instead of applying them", async () => {
-    await makeInstitution("INS0001", {
+    // A full profile, so every block the patch below tries to hijack has a
+    // real prior value to be caught overwriting.
+    await makeProfiledInstitution("INS0001", {
       description: "Original description",
       academic: { board: "State Board" },
       logoUrl: "https://original.example.test/logo.png",
+      coverImageUrl: "https://original.example.test/cover.png",
     });
     await signInPlatformAdmin();
+
+    const before = await Institution.findOne({ institutionId: "INS0001" }).lean();
 
     const response = await PATCH(
       cookieRequest({
         body: {
+          // The four provisioning fields the schema allows, each given a value
+          // that differs from the seed so it has to show up in the diff...
+          institutionName: "Renamed",
+          institutionType: "PU_COLLEGE",
+          regionCode: "KA-MYS",
+          active: false,
+          // ...and every other field `updateProfileSchema` accepts.
+          legalName: "Hijacked Legal Name",
+          shortName: "Hijacked",
+          tagline: "Hijacked tagline",
           description: "Hijacked description",
-          academic: { board: "CBSE" },
+          establishedYear: 1999,
           logoUrl: "https://hijacked.example.test/logo.png",
+          coverImageUrl: "https://hijacked.example.test/cover.png",
+          address: "Hijacked address",
+          city: "Hijacked city",
+          state: "Hijacked state",
+          contactPerson: "Hijacked Person",
+          phone: "9999999999",
+          email: "hijacked@example.test",
+          website: "https://hijacked.example.test",
+          addressLine2: "Hijacked line 2",
+          locality: "Hijacked locality",
+          district: "Hijacked district",
+          country: "Hijackistan",
+          contact: { whatsapp: "9999999999" },
+          geo: { latitude: 1, longitude: 1 },
+          academic: { board: "CBSE" },
+          management: { principalName: "Hijacked Principal" },
+          facilities: [{ code: "POOL", label: "Pool", available: true }],
+          social: { facebook: "https://facebook.test/hijacked" },
+          gallery: [{ imageUrl: "https://hijacked.example.test/g.png", status: "ACTIVE" }],
+          slug: "hijacked-slug",
+          profileStatus: "PUBLISHED",
         },
         origin: "http://localhost",
       }),
@@ -130,10 +183,23 @@ describe("platform-admin institution routes", () => {
 
     expect(response.status).toBe(200);
 
-    const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
-    expect(row?.description).toBe("Original description");
-    expect(row?.academic?.board).toBe("State Board");
-    expect(row?.logoUrl).toBe("https://original.example.test/logo.png");
+    const after = await Institution.findOne({ institutionId: "INS0001" }).lean();
+
+    // Exhaustive, not a probe of a few named keys: whatever moved in the stored
+    // row has to be exactly the provisioning set and nothing else. Widening
+    // `platformInstitutionPatchSchema` by one field fails here.
+    expect(changedFields(before!, after!)).toEqual(PROVISIONING_FIELDS);
+
+    // The allow-list this test compares against is the one the schema declares,
+    // so the two can never silently drift apart.
+    expect(Object.keys(platformInstitutionPatchSchema.shape).sort()).toEqual(PROVISIONING_FIELDS);
+
+    // The provisioning fields really did apply — otherwise the diff above would
+    // pass just as well on a route that wrote nothing at all.
+    expect(after?.institutionName).toBe("Renamed");
+    expect(after?.active).toBe(false);
+    expect(after?.regionCode).toBe("KA-MYS");
+    expect(after?.institutionType).toBe("PU_COLLEGE");
   });
 
   it("refuses an institution admin's patch with 403", async () => {
