@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { toPublicProfile } from "@/lib/profile/public-projection";
+import { toPublicProfile, PublicProfile } from "@/lib/profile/public-projection";
 
 const DOC = {
   _id: "6a8880f3446c577c470cd06c",
@@ -67,15 +67,15 @@ describe("public profile projection", () => {
   });
 
   it("withholds the head's direct email and phone", () => {
-    const out = toPublicProfile(DOC) as any;
-    expect(out.management.principalName).toBe("R. Shashidhar");
-    expect(out.management.headDesignation).toBe("Principal");
+    const out = toPublicProfile(DOC) as PublicProfile;
+    expect(out.management!.principalName).toBe("R. Shashidhar");
+    expect(out.management!.headDesignation).toBe("Principal");
     expect(out.management).not.toHaveProperty("headEmail");
     expect(out.management).not.toHaveProperty("headPhone");
   });
 
   it("omits hidden gallery items", () => {
-    const out = toPublicProfile(DOC) as any;
+    const out = toPublicProfile(DOC) as PublicProfile;
     expect(out.gallery).toHaveLength(1);
     expect(out.gallery[0].title).toBe("Campus");
   });
@@ -100,7 +100,7 @@ describe("public profile projection", () => {
       institutionName: "Bare",
       institutionType: "SCHOOL",
       slug: "bare",
-    }) as any;
+    }) as PublicProfile;
 
     expect(out.institutionName).toBe("Bare");
     expect(out.facilities).toEqual([]);

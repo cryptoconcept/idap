@@ -12,7 +12,7 @@ export type ProfileCompletion = {
   missing: string[];
 };
 
-type Doc = Record<string, any>;
+type Doc = Record<string, unknown>;
 
 const filled = (value: unknown): boolean => {
   if (value === null || value === undefined) return false;
@@ -69,10 +69,10 @@ const GROUPS: GroupSpec[] = [
     label: "Academic information",
     weight: 15,
     checks: [
-      { label: "Board or affiliation", done: (d) => filled(d.academic?.board) },
+      { label: "Board or affiliation", done: (d) => filled((d.academic as Record<string, unknown> | undefined)?.board) },
       {
         label: "Classes or courses offered",
-        done: (d) => filled(d.academic?.classesOffered) || filled(d.academic?.coursesOffered),
+        done: (d) => filled((d.academic as Record<string, unknown> | undefined)?.classesOffered) || filled((d.academic as Record<string, unknown> | undefined)?.coursesOffered),
       },
     ],
   },
@@ -81,15 +81,15 @@ const GROUPS: GroupSpec[] = [
     label: "Management",
     weight: 10,
     checks: [
-      { label: "Management type", done: (d) => filled(d.management?.managementType) },
-      { label: "Principal or head", done: (d) => filled(d.management?.principalName) },
+      { label: "Management type", done: (d) => filled((d.management as Record<string, unknown> | undefined)?.managementType) },
+      { label: "Principal or head", done: (d) => filled((d.management as Record<string, unknown> | undefined)?.principalName) },
     ],
   },
   {
     key: "facilities",
     label: "Facilities",
     weight: 10,
-    checks: [{ label: "At least three facilities", done: (d) => (d.facilities?.length ?? 0) >= 3 }],
+    checks: [{ label: "At least three facilities", done: (d) => ((d.facilities as unknown[] | undefined)?.length ?? 0) >= 3 }],
   },
   {
     key: "logo",
@@ -111,11 +111,11 @@ const GROUPS: GroupSpec[] = [
       {
         label: "At least two social links",
         done: (d) => {
-          const s = d.social ?? {};
+          const s = (d.social as Record<string, unknown> | undefined) ?? {};
           const named = ["facebook", "instagram", "youtube", "linkedin", "x"].filter((k) =>
             filled(s[k]),
           ).length;
-          return named + (s.other?.length ?? 0) >= 2;
+          return named + ((s.other as unknown[] | undefined)?.length ?? 0) >= 2;
         },
       },
     ],

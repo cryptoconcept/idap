@@ -7,7 +7,7 @@
  * added — a test exists specifically to catch that.
  */
 
-type Doc = Record<string, any>;
+type Doc = Record<string, unknown>;
 
 const text = (value: unknown): string | undefined => {
   if (typeof value !== "string") return undefined;
@@ -33,43 +33,43 @@ export function toPublicProfile(institution: Doc) {
   const doc = institution ?? {};
 
   const geo = compact({
-    latitude: num(doc.geo?.latitude),
-    longitude: num(doc.geo?.longitude),
-    mapUrl: text(doc.geo?.mapUrl),
+    latitude: num((doc.geo as Record<string, unknown> | undefined)?.latitude),
+    longitude: num((doc.geo as Record<string, unknown> | undefined)?.longitude),
+    mapUrl: text((doc.geo as Record<string, unknown> | undefined)?.mapUrl),
   });
 
   const academic = compact({
-    board: text(doc.academic?.board),
-    affiliation: text(doc.academic?.affiliation),
-    recognition: text(doc.academic?.recognition),
-    affiliationNumber: text(doc.academic?.affiliationNumber),
-    udiseCode: text(doc.academic?.udiseCode),
-    medium: list(doc.academic?.medium),
-    genderType: text(doc.academic?.genderType),
-    currentAcademicYear: text(doc.academic?.currentAcademicYear),
-    classesOffered: list(doc.academic?.classesOffered),
-    coursesOffered: list(doc.academic?.coursesOffered),
+    board: text((doc.academic as Record<string, unknown> | undefined)?.board),
+    affiliation: text((doc.academic as Record<string, unknown> | undefined)?.affiliation),
+    recognition: text((doc.academic as Record<string, unknown> | undefined)?.recognition),
+    affiliationNumber: text((doc.academic as Record<string, unknown> | undefined)?.affiliationNumber),
+    udiseCode: text((doc.academic as Record<string, unknown> | undefined)?.udiseCode),
+    medium: list((doc.academic as Record<string, unknown> | undefined)?.medium),
+    genderType: text((doc.academic as Record<string, unknown> | undefined)?.genderType),
+    currentAcademicYear: text((doc.academic as Record<string, unknown> | undefined)?.currentAcademicYear),
+    classesOffered: list((doc.academic as Record<string, unknown> | undefined)?.classesOffered),
+    coursesOffered: list((doc.academic as Record<string, unknown> | undefined)?.coursesOffered),
   });
 
   // Names and designations only. The head's direct line is not public.
   const management = compact({
-    managementType: text(doc.management?.managementType),
-    trustName: text(doc.management?.trustName),
-    societyName: text(doc.management?.societyName),
-    managementName: text(doc.management?.managementName),
-    principalName: text(doc.management?.principalName),
-    headDesignation: text(doc.management?.headDesignation),
+    managementType: text((doc.management as Record<string, unknown> | undefined)?.managementType),
+    trustName: text((doc.management as Record<string, unknown> | undefined)?.trustName),
+    societyName: text((doc.management as Record<string, unknown> | undefined)?.societyName),
+    managementName: text((doc.management as Record<string, unknown> | undefined)?.managementName),
+    principalName: text((doc.management as Record<string, unknown> | undefined)?.principalName),
+    headDesignation: text((doc.management as Record<string, unknown> | undefined)?.headDesignation),
   });
 
   const social = compact({
-    facebook: text(doc.social?.facebook),
-    instagram: text(doc.social?.instagram),
-    youtube: text(doc.social?.youtube),
-    linkedin: text(doc.social?.linkedin),
-    x: text(doc.social?.x),
-    other: Array.isArray(doc.social?.other)
-      ? doc.social.other
-          .map((entry: Doc) => compact({ label: text(entry?.label), url: text(entry?.url) }))
+    facebook: text((doc.social as Record<string, unknown> | undefined)?.facebook),
+    instagram: text((doc.social as Record<string, unknown> | undefined)?.instagram),
+    youtube: text((doc.social as Record<string, unknown> | undefined)?.youtube),
+    linkedin: text((doc.social as Record<string, unknown> | undefined)?.linkedin),
+    x: text((doc.social as Record<string, unknown> | undefined)?.x),
+    other: Array.isArray((doc.social as Record<string, unknown> | undefined)?.other)
+      ? ((doc.social as Record<string, unknown>).other as unknown[])
+          .map((entry: unknown) => compact({ label: text((entry as Record<string, unknown> | undefined)?.label), url: text((entry as Record<string, unknown> | undefined)?.url) }))
           .filter(Boolean)
       : undefined,
   });
@@ -105,10 +105,10 @@ export function toPublicProfile(institution: Doc) {
 
     contact: compact({
       phone: text(doc.phone),
-      secondaryPhone: text(doc.contact?.secondaryPhone),
-      whatsapp: text(doc.contact?.whatsapp),
+      secondaryPhone: text((doc.contact as Record<string, unknown> | undefined)?.secondaryPhone),
+      whatsapp: text((doc.contact as Record<string, unknown> | undefined)?.whatsapp),
       email: text(doc.email),
-      alternateEmail: text(doc.contact?.alternateEmail),
+      alternateEmail: text((doc.contact as Record<string, unknown> | undefined)?.alternateEmail),
       website: text(doc.website),
       contactPerson: text(doc.contactPerson),
     }),
@@ -117,24 +117,24 @@ export function toPublicProfile(institution: Doc) {
     management,
 
     facilities: Array.isArray(doc.facilities)
-      ? doc.facilities.map((facility: Doc) => ({
-          code: String(facility?.code ?? ""),
-          label: String(facility?.label ?? ""),
-          available: facility?.available !== false,
-          note: text(facility?.note),
+      ? (doc.facilities as unknown[]).map((facility: unknown) => ({
+          code: String((facility as Record<string, unknown> | undefined)?.code ?? ""),
+          label: String((facility as Record<string, unknown> | undefined)?.label ?? ""),
+          available: (facility as Record<string, unknown> | undefined)?.available !== false,
+          note: text((facility as Record<string, unknown> | undefined)?.note),
         }))
       : [],
 
     social,
 
     gallery: Array.isArray(doc.gallery)
-      ? doc.gallery
-          .filter((item: Doc) => item?.status !== "HIDDEN")
-          .sort((a: Doc, b: Doc) => (a?.sortOrder ?? 0) - (b?.sortOrder ?? 0))
-          .map((item: Doc) => ({
-            imageUrl: String(item?.imageUrl ?? ""),
-            title: text(item?.title),
-            description: text(item?.description),
+      ? (doc.gallery as unknown[])
+          .filter((item: unknown) => (item as Record<string, unknown> | undefined)?.status !== "HIDDEN")
+          .sort((a: unknown, b: unknown) => ((a as Record<string, unknown> | undefined)?.sortOrder as number ?? 0) - ((b as Record<string, unknown> | undefined)?.sortOrder as number ?? 0))
+          .map((item: unknown) => ({
+            imageUrl: String((item as Record<string, unknown> | undefined)?.imageUrl ?? ""),
+            title: text((item as Record<string, unknown> | undefined)?.title),
+            description: text((item as Record<string, unknown> | undefined)?.description),
           }))
       : [],
   };
