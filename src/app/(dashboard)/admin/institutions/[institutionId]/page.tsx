@@ -8,12 +8,14 @@ import { ApiClientService } from "@/services/api-client.service";
 import { getAppOrigin } from "@/lib/utils/origin";
 import { AppError } from "@/lib/api/errors";
 import { PageHeader } from "@/components/shared/page-header";
-import { Section } from "@/components/shared/definition-list";
+import { Field, FieldGrid, Section } from "@/components/shared/definition-list";
 import { InstitutionAdminForm } from "@/components/institutions/institution-admin-form";
 import { ApiKeysPanel } from "@/components/integration/api-keys-panel";
 import { CodeBlock } from "@/components/integration/code-block";
 import { Ref } from "@/components/shared/ref";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { PROFILE_STATUS_LABELS } from "@/lib/constants";
 
 export const dynamic = "force-dynamic";
 
@@ -42,12 +44,28 @@ export default async function AdminInstitutionDetailPage(
   }
 
   // Credential metadata only — no enquiry or application figures are read here.
-  const [clients, origin] = await Promise.all([
+  // The profile comes along for the read-only summary below: decision 3 lets the
+  // platform admin *see* a profile so support does not need a developer, and
+  // never edit one.
+  const [{ profile, completion }, clients, origin] = await Promise.all([
+    InstitutionService.getProfile(institutionId),
     ApiClientService.list({ institutionId }),
     getAppOrigin(),
   ]);
 
   const applyUrl = `${origin}/apply/${institution.institutionId}`;
+  const addressLine =
+    [
+      profile.address,
+      profile.addressLine2,
+      profile.locality,
+      profile.city,
+      profile.district,
+      profile.state,
+      profile.pincode,
+    ]
+      .filter(Boolean)
+      .join(", ") || undefined;
 
   return (
     <>
@@ -84,6 +102,45 @@ export default async function AdminInstitutionDetailPage(
       <div className="mt-5 space-y-5">
         <Section title="Provisioning">
           <InstitutionAdminForm institution={institution} />
+        </Section>
+
+        <Section
+          title="Institution profile"
+          action={
+            <span className="flex items-center gap-2">
+              <span className="tabular text-xs text-muted-foreground">
+                {completion.percent}% complete
+              </span>
+              <Badge variant={profile.profileStatus === "PUBLISHED" ? "default" : "outline"}>
+                {PROFILE_STATUS_LABELS[profile.profileStatus]}
+              </Badge>
+            </span>
+          }
+        >
+          <p className="mb-4 text-sm text-muted-foreground">
+            Read-only. This content belongs to the institution&apos;s own admins; there is no
+            platform-side edit for it.
+          </p>
+
+          <FieldGrid columns={3}>
+            <Field label="Tagline" value={profile.tagline} />
+            <Field label="Primary contact" value={profile.contactPerson} />
+            <Field label="Phone" value={profile.phone} mono />
+            <Field label="Email" value={profile.email} />
+            <Field label="Website" value={profile.website} />
+            <Field label="Address" value={addressLine} />
+          </FieldGrid>
+
+          <div className="mt-4">
+            <Field
+              label="About"
+              value={
+                profile.description ? (
+                  <span className="whitespace-pre-line">{profile.description}</span>
+                ) : undefined
+              }
+            />
+          </div>
         </Section>
 
         <Section title="API credentials">

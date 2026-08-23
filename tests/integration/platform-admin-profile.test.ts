@@ -91,7 +91,14 @@ describe("platform-admin institution routes", () => {
   it("returns the full profile of any institution to a platform admin", async () => {
     // A genuinely full profile — academic, management, facilities, tagline —
     // not just one field, since this is what the test claims to exercise.
-    await makeProfiledInstitution("INS0001", { academic: { board: "State Board" } });
+    await makeProfiledInstitution("INS0001", {
+      academic: { board: "State Board" },
+      contactPerson: "Reception Desk",
+      phone: "9876543210",
+      email: "office@example.test",
+      website: "https://example.test",
+      address: "1 Main Road",
+    });
     await signInPlatformAdmin();
 
     const response = await GET(cookieRequest(), contextFor("INS0001"));
@@ -104,6 +111,21 @@ describe("platform-admin institution routes", () => {
     expect(payload.profile.management.principalName).toBeTruthy();
     expect(payload.profile.facilities.length).toBeGreaterThan(0);
     expect(payload.completion.percent).toBeGreaterThanOrEqual(0);
+
+    // Everything the institution detail screen's read-only profile summary
+    // renders has to survive this response, or that panel silently shows a
+    // column of em-dashes to the admin who came to it for support.
+    expect(payload.profile.profileStatus).toBe("DRAFT");
+    expect(payload.completion.percent).toBeGreaterThan(0);
+    expect(payload.profile.tagline).toBeTruthy();
+    expect(payload.profile.description).toBeTruthy();
+    expect(payload.profile.contactPerson).toBe("Reception Desk");
+    expect(payload.profile.phone).toBe("9876543210");
+    expect(payload.profile.email).toBe("office@example.test");
+    expect(payload.profile.website).toBe("https://example.test");
+    expect(payload.profile.address).toBe("1 Main Road");
+    expect(payload.profile.city).toBe("Mysore");
+    expect(payload.profile.state).toBe("Karnataka");
   });
 
   it("lets a platform admin patch provisioning fields", async () => {
