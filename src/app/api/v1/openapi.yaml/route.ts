@@ -21,12 +21,13 @@ export async function GET(request: NextRequest) {
       origin,
       institutionId: institution?.institutionId,
       institutionName: institution?.institutionName,
+      slug: institution?.slug,
     });
 
     return new Response(stringify(document, { lineWidth: 0 }), {
       headers: {
         "Content-Type": "application/yaml; charset=utf-8",
-        "Content-Disposition": 'inline; filename="lead-platform-api.openapi.yaml"',
+        "Content-Disposition": 'inline; filename="idap-api.openapi.yaml"',
         "Access-Control-Allow-Origin": "*",
         "Cache-Control": "public, max-age=300",
       },

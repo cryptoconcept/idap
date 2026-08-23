@@ -27,7 +27,7 @@ export default async function DashboardLayout({ children }: LayoutProps<"/">) {
       <header className="sticky top-0 z-30 flex items-center gap-2 border-b border-border bg-background/90 px-3 py-2 backdrop-blur lg:hidden">
         <MobileNav context={context} />
         <span className="text-[11px] font-semibold tracking-[0.14em] uppercase">
-          {user.role === "SUPER_ADMIN" ? "Admin" : "Lead Platform"}
+          {user.role === "SUPER_ADMIN" ? "Admin" : "I-DAP"}
         </span>
         <span className="ml-auto truncate text-xs text-muted-foreground">
           {institution?.institutionId ?? user.email}

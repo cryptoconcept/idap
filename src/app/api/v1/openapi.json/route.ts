@@ -27,12 +27,13 @@ export async function GET(request: NextRequest) {
       origin,
       institutionId: institution?.institutionId,
       institutionName: institution?.institutionName,
+      slug: institution?.slug,
     });
 
     return new Response(JSON.stringify(document, null, 2), {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Disposition": 'inline; filename="lead-platform-api.openapi.json"',
+        "Content-Disposition": 'inline; filename="idap-api.openapi.json"',
         "Access-Control-Allow-Origin": "*",
         "Cache-Control": "public, max-age=300",
       },

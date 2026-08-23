@@ -638,7 +638,7 @@ export const InstitutionService = {
   async getPublicBranding(institutionId: string) {
     await connectToDatabase();
     const row = await Institution.findOne({ institutionId: institutionId.toUpperCase(), active: true })
-      .select("institutionId institutionName institutionType address city state pincode phone email website logoUrl")
+      .select("institutionId institutionName institutionType address city state pincode phone email website logoUrl slug")
       .lean();
     if (!row) return null;
     return {
@@ -653,6 +653,7 @@ export const InstitutionService = {
       email: row.email ?? undefined,
       website: row.website ?? undefined,
       logoUrl: row.logoUrl ?? undefined,
+      slug: row.slug ?? undefined,
     };
   },
 

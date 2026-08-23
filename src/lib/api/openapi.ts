@@ -17,6 +17,7 @@ export type OpenApiOptions = {
   origin: string;
   institutionId?: string;
   institutionName?: string;
+  slug?: string;
 };
 
 const PLACEHOLDER_ID = "INS0001";
@@ -119,6 +120,10 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
     ? `/api/public/${institutionId}`
     : "/api/public/{institutionId}";
 
+  const slugPath = options.slug
+    ? `/api/public/institutions/${options.slug}`
+    : "/api/public/institutions/{slug}";
+
   const description = [
     "Two ways to send admission enquiries and applications to this platform. Pick by where your",
     "code runs.",
@@ -215,8 +220,8 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
     openapi: "3.1.0",
     info: {
       title: scoped
-        ? `Lead Platform API · ${options.institutionName ?? institutionId}`
-        : "Lead Platform API",
+        ? `I-DAP API · ${options.institutionName ?? institutionId}`
+        : "I-DAP API",
       version: "1.0.0",
       summary: "Admission enquiries and applications for educational institutions.",
       description,
@@ -406,6 +411,76 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/InstitutionProfileResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${publicBase}/profile`]: {
+      ...(scoped
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "institutionId",
+                in: "path",
+                required: true,
+                description: "The institution whose public profile to read, e.g. `INS0001`.",
+                schema: { type: "string", example: PLACEHOLDER_ID },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "Read the institution's full public profile",
+          description:
+            "Everything a hosted profile page or a website integration needs to render the institution — contact details, academics, facilities, social links and a gallery — sourced from the same profile the institution publishes once. Only a `PUBLISHED` and active institution's profile is returned; a draft, suspended or nonexistent one 404s, so a caller cannot tell them apart. No credentials required.",
+          operationId: "getPublicProfileById",
+          security: [],
+          responses: {
+            "200": {
+              description: "The institution's public profile.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicProfileResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [slugPath]: {
+      ...(options.slug
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "slug",
+                in: "path",
+                required: true,
+                description: "The institution's public slug, from its profile URL.",
+                schema: { type: "string", example: "infinity-school-mysore" },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "Read the institution's full public profile, by slug",
+          description:
+            "Identical payload to the id-keyed route above, looked up by the institution's public slug instead — what a hosted profile page's pretty URL calls. Only a `PUBLISHED` and active institution's profile is returned; a draft, suspended or nonexistent one 404s. No credentials required.",
+          operationId: "getPublicProfileBySlug",
+          security: [],
+          responses: {
+            "200": {
+              description: "The institution's public profile.",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicProfileResponse" },
                 },
               },
             },
@@ -851,6 +926,145 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                 email: { type: "string", format: "email" },
                 website: { type: "string", format: "uri" },
                 logoUrl: { type: "string", format: "uri" },
+              },
+            },
+          },
+        },
+
+        PublicProfileResponse: {
+          type: "object",
+          required: ["success", "profile"],
+          properties: {
+            success: { type: "boolean", const: true },
+            profile: {
+              type: "object",
+              description:
+                "An allow-list projection: only fields named here ever leave the server, whatever else the institution's record holds.",
+              properties: {
+                institutionId: { type: "string", example: institutionId },
+                slug: {
+                  type: "string",
+                  description: "Present once the institution has claimed a public slug.",
+                  example: options.slug ?? "infinity-school-mysore",
+                },
+                institutionName: {
+                  type: "string",
+                  example: options.institutionName ?? "Infinity School of Excellence",
+                },
+                legalName: { type: "string" },
+                shortName: { type: "string" },
+                institutionType: { type: "string", example: "SCHOOL" },
+                regionCode: { type: "string" },
+                tagline: { type: "string" },
+                description: { type: "string" },
+                establishedYear: { type: "integer", example: 1998 },
+                logoUrl: { type: "string", format: "uri" },
+                coverImageUrl: { type: "string", format: "uri" },
+                address: {
+                  type: "object",
+                  properties: {
+                    addressLine1: { type: "string" },
+                    addressLine2: { type: "string" },
+                    locality: { type: "string" },
+                    area: { type: "string" },
+                    city: { type: "string" },
+                    taluk: { type: "string" },
+                    district: { type: "string" },
+                    state: { type: "string" },
+                    country: { type: "string" },
+                    pincode: { type: "string" },
+                  },
+                },
+                geo: {
+                  type: "object",
+                  properties: {
+                    latitude: { type: "number" },
+                    longitude: { type: "number" },
+                    mapUrl: { type: "string", format: "uri" },
+                  },
+                },
+                contact: {
+                  type: "object",
+                  properties: {
+                    phone: { type: "string" },
+                    secondaryPhone: { type: "string" },
+                    whatsapp: { type: "string" },
+                    email: { type: "string", format: "email" },
+                    alternateEmail: { type: "string", format: "email" },
+                    website: { type: "string", format: "uri" },
+                    contactPerson: { type: "string" },
+                  },
+                },
+                academic: {
+                  type: "object",
+                  properties: {
+                    board: { type: "string" },
+                    affiliation: { type: "string" },
+                    recognition: { type: "string" },
+                    affiliationNumber: { type: "string" },
+                    udiseCode: { type: "string" },
+                    medium: { type: "array", items: { type: "string" } },
+                    genderType: { type: "string" },
+                    currentAcademicYear: { type: "string" },
+                    classesOffered: { type: "array", items: { type: "string" } },
+                    coursesOffered: { type: "array", items: { type: "string" } },
+                  },
+                },
+                management: {
+                  type: "object",
+                  description: "Names and designations only. The head's direct line is not public.",
+                  properties: {
+                    managementType: { type: "string" },
+                    trustName: { type: "string" },
+                    societyName: { type: "string" },
+                    managementName: { type: "string" },
+                    principalName: { type: "string" },
+                    headDesignation: { type: "string" },
+                  },
+                },
+                facilities: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      code: { type: "string" },
+                      label: { type: "string" },
+                      available: { type: "boolean" },
+                      note: { type: "string" },
+                    },
+                  },
+                },
+                social: {
+                  type: "object",
+                  properties: {
+                    facebook: { type: "string", format: "uri" },
+                    instagram: { type: "string", format: "uri" },
+                    youtube: { type: "string", format: "uri" },
+                    linkedin: { type: "string", format: "uri" },
+                    x: { type: "string", format: "uri" },
+                    other: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        properties: {
+                          label: { type: "string" },
+                          url: { type: "string", format: "uri" },
+                        },
+                      },
+                    },
+                  },
+                },
+                gallery: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      imageUrl: { type: "string", format: "uri" },
+                      title: { type: "string" },
+                      description: { type: "string" },
+                    },
+                  },
+                },
               },
             },
           },

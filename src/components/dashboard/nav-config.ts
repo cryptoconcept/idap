@@ -56,5 +56,5 @@ const SUPER_ADMIN_NAV: NavGroup[] = [
 export function navForRole(role: UserRole): { title: string; groups: NavGroup[] } {
   return role === "SUPER_ADMIN"
     ? { title: "Admin", groups: SUPER_ADMIN_NAV }
-    : { title: "Lead Platform", groups: INSTITUTION_NAV };
+    : { title: "I-DAP", groups: INSTITUTION_NAV };
 }

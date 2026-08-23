@@ -123,13 +123,13 @@ X-API-SECRET: <SECRET>`;
         action={
           <div className="flex items-center gap-1.5">
             <Button asChild variant="outline" size="xs">
-              <a href={`/api/v1/openapi.json${specQuery}`} download="lead-platform-api.openapi.json">
+              <a href={`/api/v1/openapi.json${specQuery}`} download="idap-api.openapi.json">
                 <Download className="size-3" />
                 JSON
               </a>
             </Button>
             <Button asChild variant="outline" size="xs">
-              <a href={`/api/v1/openapi.yaml${specQuery}`} download="lead-platform-api.openapi.yaml">
+              <a href={`/api/v1/openapi.yaml${specQuery}`} download="idap-api.openapi.yaml">
                 <Download className="size-3" />
                 YAML
               </a>
@@ -162,7 +162,7 @@ X-API-SECRET: <SECRET>`;
           <CodeBlock
             label="Generate a typed client"
             copyLabel="Copy command"
-            code={`npx openapi-typescript ${specJsonUrl} -o lead-platform-api.d.ts`}
+            code={`npx openapi-typescript ${specJsonUrl} -o idap-api.d.ts`}
           />
           <CodeBlock
             label="Import into Postman or Insomnia"

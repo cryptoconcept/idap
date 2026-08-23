@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Lead Platform",
-    template: "%s · Lead Platform",
+    default: "I-DAP",
+    template: "%s · I-DAP",
   },
   description:
     "Receive, review and act on admission enquiries and applications for every institution you run.",
