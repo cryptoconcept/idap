@@ -74,15 +74,15 @@ export default async function AdminInstitutionDetailPage(
         <div className="space-y-0.5">
           <p className="text-sm font-medium">Provisioning only</p>
           <p className="text-sm text-muted-foreground">
-            You can edit this institution&apos;s profile, activate or deactivate its account, and
-            revoke a credential. Its enquiries and applications are readable only by its own
-            admins.
+            You can rename this institution, set its region code, activate or deactivate its
+            account, and revoke a credential. Its profile content is edited by its own admins;
+            its enquiries and applications are readable only by them too.
           </p>
         </div>
       </div>
 
       <div className="mt-5 space-y-5">
-        <Section title="Institution profile">
+        <Section title="Provisioning">
           <InstitutionAdminForm institution={institution} />
         </Section>
 

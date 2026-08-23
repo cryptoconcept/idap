@@ -98,6 +98,8 @@ export type InstitutionDTO = {
   institutionId: string;
   institutionName: string;
   institutionType: InstitutionType;
+  /** Display-only geography code (e.g. "KA-MYS"). Platform-admin-owned provisioning metadata. */
+  regionCode?: string;
   address?: string;
   city?: string;
   state?: string;
@@ -115,7 +117,6 @@ export type InstitutionDTO = {
 /** The full profile surface — everything `InstitutionDTO` has, plus every profile section. */
 export type ProfileDTO = InstitutionDTO & {
   slug?: string;
-  regionCode?: string;
   legalName?: string;
   shortName?: string;
   coverImageUrl?: string;

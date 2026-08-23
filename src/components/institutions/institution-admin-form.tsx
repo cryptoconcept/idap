@@ -17,20 +17,15 @@ import {
 import { INSTITUTION_TYPES, INSTITUTION_TYPE_LABELS, type InstitutionType } from "@/lib/constants";
 import type { InstitutionDTO } from "@/lib/types";
 
+// Only fields platformInstitutionPatchSchema accepts: profile content
+// (contact details, branding, address, etc.) belongs to the institute admin
+// alone and is edited from their own profile page, not here.
 const TEXT_FIELDS: { name: keyof InstitutionDTO; label: string; placeholder?: string }[] = [
   { name: "institutionName", label: "Institution name" },
-  { name: "contactPerson", label: "Contact person" },
-  { name: "phone", label: "Phone" },
-  { name: "email", label: "Email" },
-  { name: "website", label: "Website", placeholder: "https://" },
-  { name: "logoUrl", label: "Logo URL", placeholder: "https://" },
-  { name: "address", label: "Address" },
-  { name: "city", label: "City" },
-  { name: "state", label: "State" },
-  { name: "pincode", label: "Pincode" },
+  { name: "regionCode", label: "Region code", placeholder: "e.g. KA-MYS" },
 ];
 
-/** Super-admin editor: profile, type and the activate/deactivate switch. */
+/** Super-admin editor: provisioning fields (name, type, region) and the activate/deactivate switch. */
 export function InstitutionAdminForm({ institution }: { institution: InstitutionDTO }) {
   const router = useRouter();
   const [values, setValues] = useState(institution);
@@ -73,15 +68,7 @@ export function InstitutionAdminForm({ institution }: { institution: Institution
       {
         institutionName: values.institutionName,
         institutionType: values.institutionType,
-        contactPerson: values.contactPerson ?? "",
-        phone: values.phone ?? "",
-        email: values.email ?? "",
-        website: values.website ?? "",
-        logoUrl: values.logoUrl ?? "",
-        address: values.address ?? "",
-        city: values.city ?? "",
-        state: values.state ?? "",
-        pincode: values.pincode ?? "",
+        regionCode: values.regionCode ?? "",
       },
       "Institution saved",
     );
