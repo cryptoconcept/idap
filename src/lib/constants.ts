@@ -103,6 +103,13 @@ export const MAX_PAGE_SIZE = 100;
 export const API_RATE_LIMIT = { limit: 100, windowSeconds: 60 };
 /** Stricter limit for unauthenticated public (hosted form) submissions, per IP. */
 export const PUBLIC_FORM_RATE_LIMIT = { limit: 10, windowSeconds: 60 };
+/**
+ * Public profile reads, per IP. Deliberately looser than the form limit — a
+ * read is cheap and cacheable, and a whole school behind one NAT address
+ * shares this bucket — and deliberately not keyed by institution: the abuse
+ * it exists to stop is cache-busting through a varying id or slug.
+ */
+export const PUBLIC_READ_RATE_LIMIT = { limit: 60, windowSeconds: 60 };
 /** Login attempts allowed per IP + email pair. */
 export const LOGIN_RATE_LIMIT = { limit: 8, windowSeconds: 300 };
 

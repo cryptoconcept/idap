@@ -264,14 +264,21 @@ deliberately published.
 unknown id/slug all produce the **identical** `404` — never `403` — so a caller cannot use
 the response to determine whether a private institution exists.
 
-**Caching, not per-request rate limiting.** Responses carry `Cache-Control: public,
-max-age=300` and rely on that (plus platform-level abuse protection) rather than an
-explicit per-IP counter. This differs from the credential-free **write** endpoints
-(`POST /api/public/:institutionId/leads` and `/applications`), which are hard rate-limited
-per visitor IP because they can be spammed at cost; a `GET` of a published, cacheable
-document is a materially different risk and doesn't carry that limiter today. If profile
-reads become a target for scraping at scale, adding the same `consumeRateLimit` guard used
-on the write endpoints is a small, contained change — see the architecture doc.
+**Cached *and* rate limited.** Responses carry `Cache-Control: public, max-age=300`, and
+every request also spends from a per-IP bucket on the same `consumeRateLimit` limiter the
+credential-free write endpoints use: **60 requests per minute per visitor IP**
+(`PUBLIC_READ_RATE_LIMIT`), looser than the 10/minute write limit because a read is cheap,
+cacheable, and shared by everyone behind one NAT address.
+
+The bucket is keyed by IP **only** — not by `institutionId` or `slug`. A per-institution
+bucket would hand a scraper a fresh allowance for every id it invented, which is exactly
+the cache-busting pattern the limiter exists to stop. Both profile routes share one
+bucket for the same reason.
+
+Over the limit returns `429 RATE_LIMITED` with `Retry-After`, `X-RateLimit-*` and
+`Cache-Control: no-store`, so a shared cache never holds on to one visitor's rejection.
+Successful responses deliberately carry no `X-RateLimit-*` headers: they are publicly
+cacheable, and a cached counter would describe the wrong client.
 
 ### `GET /api/public/:institutionId/profile`
 

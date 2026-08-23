@@ -3,6 +3,7 @@ import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/d
 import { makeInstitution } from "../helpers/factories";
 import { GET as getById } from "@/app/api/public/[institutionId]/profile/route";
 import { GET as getBySlug } from "@/app/api/public/institutions/[slug]/route";
+import { PUBLIC_READ_RATE_LIMIT } from "@/lib/constants";
 
 /** Recursively asserts none of the forbidden keys appear anywhere in the payload. */
 function assertNoForbiddenKeys(value: unknown, forbidden: string[]): void {
@@ -18,18 +19,20 @@ function assertNoForbiddenKeys(value: unknown, forbidden: string[]): void {
   }
 }
 
-function requestFor(url: string) {
-  return new Request(url);
+/** `ip` lands in the header the rate limiter buckets on; omitted, every caller
+ * shares the "unknown" bucket, which is fine for the non-limiter tests. */
+function requestFor(url: string, ip?: string) {
+  return new Request(url, { headers: ip ? { "x-forwarded-for": ip } : undefined });
 }
 
-async function callById(institutionId: string) {
-  return getById(requestFor(`http://localhost/api/public/${institutionId}/profile`), {
+async function callById(institutionId: string, ip?: string) {
+  return getById(requestFor(`http://localhost/api/public/${institutionId}/profile`, ip), {
     params: Promise.resolve({ institutionId }),
   } as never);
 }
 
-async function callBySlug(slug: string) {
-  return getBySlug(requestFor(`http://localhost/api/public/institutions/${slug}`), {
+async function callBySlug(slug: string, ip?: string) {
+  return getBySlug(requestFor(`http://localhost/api/public/institutions/${slug}`, ip), {
     params: Promise.resolve({ slug }),
   } as never);
 }
@@ -115,6 +118,34 @@ describe("public profile API", () => {
     const response = await callById("INS0001");
     const body = await response.json();
     assertNoForbiddenKeys(body, ["active", "profileStatus", "publishedAt"]);
+  });
+
+  it("blocks a burst of reads from one IP once the limit is spent", async () => {
+    await makeInstitution("INS0001", {
+      slug: "sunrise-academy",
+      profileStatus: "PUBLISHED",
+    });
+
+    const attacker = "203.0.113.7";
+    for (let index = 0; index < PUBLIC_READ_RATE_LIMIT.limit; index += 1) {
+      expect((await callById("INS0001", attacker)).status).toBe(200);
+    }
+
+    const blocked = await callById("INS0001", attacker);
+    expect(blocked.status).toBe(429);
+    expect((await blocked.json()).error.code).toBe("RATE_LIMITED");
+    expect(Number(blocked.headers.get("Retry-After"))).toBeGreaterThan(0);
+    // A shared cache must not hold on to one visitor's 429.
+    expect(blocked.headers.get("Cache-Control")).toBe("no-store");
+
+    // The bucket is per IP, not per institution: inventing a different id or
+    // reaching for the slug route buys no fresh allowance, which is the whole
+    // point on an endpoint whose 200s are cacheable.
+    expect((await callById("INS0002", attacker)).status).toBe(429);
+    expect((await callBySlug("sunrise-academy", attacker)).status).toBe(429);
+
+    // Another visitor is untouched.
+    expect((await callById("INS0001", "198.51.100.4")).status).toBe(200);
   });
 
   it("omits hidden gallery items from the payload", async () => {

@@ -1,4 +1,7 @@
 import { InstitutionService } from "@/services/institution.service";
+import { consumeRateLimit, rateLimitHeaders } from "@/lib/security/rate-limit";
+import { getClientIp } from "@/lib/security/request";
+import { PUBLIC_READ_RATE_LIMIT } from "@/lib/constants";
 import { handleApiError, jsonError, jsonSuccess } from "@/lib/api/response";
 import { publicCorsPreflight } from "@/lib/api/v1-handler";
 
@@ -14,11 +17,33 @@ const HEADERS = { "Cache-Control": "public, max-age=300" };
  * profile is indistinguishable from a nonexistent one.
  */
 export async function GET(
-  _request: Request,
+  request: Request,
   context: RouteContext<"/api/public/[institutionId]/profile">,
 ) {
   try {
     const { institutionId } = await context.params;
+
+    // Credential-free and CORS-open, so the only thing standing between this
+    // endpoint and a scraper is the IP bucket. Keyed by IP alone, never by the
+    // id or slug: a per-institution bucket would hand an attacker a fresh
+    // allowance for every value they invented, which is exactly the
+    // cache-busting pattern this limits.
+    const limit = await consumeRateLimit(
+      `public-profile:${getClientIp(request)}`,
+      PUBLIC_READ_RATE_LIMIT.limit,
+      PUBLIC_READ_RATE_LIMIT.windowSeconds,
+    );
+    if (!limit.allowed) {
+      return jsonError("RATE_LIMITED", "Too many requests. Please try again in a minute.", {
+        headers: {
+          ...rateLimitHeaders(limit),
+          "Retry-After": String(limit.retryAfterSeconds),
+          // Never let a shared cache hold on to one visitor's 429.
+          "Cache-Control": "no-store",
+        },
+      });
+    }
+
     const profile = await InstitutionService.getPublicProfile({ institutionId });
     if (!profile) {
       return jsonError("NOT_FOUND", "Institution not found", { headers: HEADERS });
