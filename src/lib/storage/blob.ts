@@ -43,4 +43,19 @@ export const blobStorageAdapter: StorageAdapter = {
   async delete(key) {
     await del(key).catch(() => undefined);
   },
+
+  async putPublic({ key, body, contentType }) {
+    const blob = await put(key, body, {
+      access: "public",
+      contentType,
+      // Public URLs are guessable by design; a random suffix stops enumeration
+      // of one institution's media from the URL of another.
+      addRandomSuffix: true,
+    });
+    return { key: blob.url, size: body.byteLength, contentType };
+  },
+
+  async deletePublic(key) {
+    await del(key).catch(() => undefined);
+  },
 };

@@ -11,12 +11,26 @@ export type StoredObject = {
 
 /**
  * Storage is behind an interface so the local-disk adapter used in development
- * can be swapped for Blob / S3 / GCS without touching the services. Objects are
- * always private: they are served through an authenticated, tenant-checked
- * route rather than a public URL.
+ * can be swapped for Blob / S3 / GCS without touching the services.
+ *
+ * Two paths, two contracts: `put`/`get`/`delete` are always private — they are
+ * served through an authenticated, tenant-checked route rather than a public
+ * URL, and that is the case for every caller except institution media.
+ * `putPublic`/`deletePublic` are the sole exception: institution media (logo,
+ * cover, gallery) that a third-party school website hot-links, so it must load
+ * with no authentication. `DocumentService` must never call `putPublic`.
  */
 export interface StorageAdapter {
   put(input: { key: string; body: Buffer; contentType: string }): Promise<StoredObject>;
   get(key: string): Promise<{ body: Buffer; contentType: string } | null>;
   delete(key: string): Promise<void>;
+
+  /**
+   * Public path — institution media ONLY (logo, cover, gallery). The returned
+   * key is a directly loadable URL: third-party websites hot-link it, so it
+   * must never require authentication. Admission documents never go through
+   * here; DocumentService is forbidden from calling it.
+   */
+  putPublic(input: { key: string; body: Buffer; contentType: string }): Promise<StoredObject>;
+  deletePublic(key: string): Promise<void>;
 }

@@ -37,4 +37,5 @@ yarn-error.log*
 
 # uploaded documents (local storage adapter)
 /.uploads
+/.uploads-public
 .env*

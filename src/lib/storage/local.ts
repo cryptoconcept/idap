@@ -24,6 +24,22 @@ function resolveKey(key: string): string {
 
 const CONTENT_TYPE_SUFFIX = ".content-type";
 
+/**
+ * Public media lives under a distinct root from the private `.uploads` tree
+ * above, so the unauthenticated `/api/media` route can never reach a private
+ * document even if its key-escape check were somehow bypassed.
+ */
+const PUBLIC_ROOT = resolve(process.env.PUBLIC_UPLOAD_DIR ?? join(process.cwd(), ".uploads-public"));
+
+/** Rejects any key that would escape the public media root. */
+function resolvePublicKey(key: string): string {
+  const target = resolve(PUBLIC_ROOT, key);
+  if (target !== PUBLIC_ROOT && !target.startsWith(PUBLIC_ROOT + sep)) {
+    throw new Error("Invalid storage key");
+  }
+  return target;
+}
+
 export const localStorageAdapter: StorageAdapter = {
   async put({ key, body, contentType }) {
     const target = resolveKey(key);
@@ -54,5 +70,18 @@ export const localStorageAdapter: StorageAdapter = {
       unlink(target).catch(() => undefined),
       unlink(`${target}${CONTENT_TYPE_SUFFIX}`).catch(() => undefined),
     ]);
+  },
+
+  async putPublic({ key, body, contentType }) {
+    const target = resolvePublicKey(key);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, body);
+    await writeFile(`${target}${CONTENT_TYPE_SUFFIX}`, contentType, "utf8");
+    return { key: `/api/media/${key}`, size: body.byteLength, contentType };
+  },
+
+  async deletePublic(key) {
+    const target = resolvePublicKey(key.replace(/^\/api\/media\//, ""));
+    await Promise.allSettled([unlink(target), unlink(`${target}${CONTENT_TYPE_SUFFIX}`)]);
   },
 };
