@@ -2,8 +2,12 @@ import type {
   ApplicationStatus,
   ApiPermission,
   DocumentType,
+  GalleryStatus,
+  GenderType,
   InstitutionType,
   LeadStatus,
+  ManagementType,
+  ProfileStatus,
   Source,
   UserRole,
 } from "@/lib/constants";
@@ -106,6 +110,84 @@ export type InstitutionDTO = {
   active: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+/** The full profile surface — everything `InstitutionDTO` has, plus every profile section. */
+export type ProfileDTO = InstitutionDTO & {
+  slug?: string;
+  regionCode?: string;
+  legalName?: string;
+  shortName?: string;
+  coverImageUrl?: string;
+  establishedYear?: number;
+  tagline?: string;
+  description?: string;
+  profileStatus: ProfileStatus;
+  /** Set once, on first publish. Unpublishing never clears it — history, not state. */
+  publishedAt?: string;
+
+  addressLine2?: string;
+  locality?: string;
+  area?: string;
+  taluk?: string;
+  district?: string;
+  country?: string;
+
+  contact?: {
+    secondaryPhone?: string;
+    alternateEmail?: string;
+    whatsapp?: string;
+  };
+  geo?: {
+    latitude?: number;
+    longitude?: number;
+    mapUrl?: string;
+  };
+  academic?: {
+    board?: string;
+    affiliation?: string;
+    recognition?: string;
+    affiliationNumber?: string;
+    udiseCode?: string;
+    medium?: string[];
+    genderType?: GenderType;
+    currentAcademicYear?: string;
+    classesOffered?: string[];
+    coursesOffered?: string[];
+  };
+  management?: {
+    managementType?: ManagementType;
+    trustName?: string;
+    societyName?: string;
+    managementName?: string;
+    principalName?: string;
+    headDesignation?: string;
+    headEmail?: string;
+    headPhone?: string;
+  };
+  facilities?: {
+    code: string;
+    label: string;
+    available?: boolean;
+    note?: string;
+  }[];
+  social?: {
+    facebook?: string;
+    instagram?: string;
+    youtube?: string;
+    linkedin?: string;
+    x?: string;
+    other?: { label: string; url?: string }[];
+  };
+  gallery?: {
+    id: string;
+    imageUrl: string;
+    title?: string;
+    description?: string;
+    sortOrder: number;
+    status: GalleryStatus;
+    uploadedAt: string;
+  }[];
 };
 
 export type ApiClientDTO = {
