@@ -18,6 +18,7 @@ import {
 } from "@/lib/constants";
 import { storage } from "@/lib/storage";
 import { calculateCompletion, type ProfileCompletion } from "@/lib/profile/completion";
+import { toPublicProfile, type PublicProfile } from "@/lib/profile/public-projection";
 import type { z } from "zod";
 import { mediaUploadSchema } from "@/lib/validation/institution";
 import type {
@@ -653,6 +654,29 @@ export const InstitutionService = {
       website: row.website ?? undefined,
       logoUrl: row.logoUrl ?? undefined,
     };
+  },
+
+  /**
+   * Credential-free full profile lookup for the public institution page, by id
+   * or by slug. A single query gates on `active` and `profileStatus` together —
+   * anything not published-and-active (missing, draft, suspended, archived, or
+   * deactivated) comes back `null`, indistinguishable from a nonexistent record.
+   */
+  async getPublicProfile(query: {
+    institutionId?: string;
+    slug?: string;
+  }): Promise<PublicProfile | null> {
+    await connectToDatabase();
+    const key = query.institutionId
+      ? { institutionId: query.institutionId.toUpperCase() }
+      : { slug: (query.slug ?? "").toLowerCase() };
+    const row = await Institution.findOne({
+      ...key,
+      active: true,
+      profileStatus: "PUBLISHED",
+    }).lean();
+    if (!row) return null;
+    return toPublicProfile(row as Record<string, unknown>);
   },
 
   async list(query: {
