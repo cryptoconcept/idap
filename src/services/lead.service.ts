@@ -71,6 +71,11 @@ function buildFilter(
 
   if (query.status) filter.status = query.status;
   if (query.source) filter.source = query.source;
+  if (query.assignedTo === "__unassigned__") {
+    filter.assignedTo = null;
+  } else if (query.assignedTo) {
+    filter.assignedTo = query.assignedTo;
+  }
 
   const createdAt = dateRangeFilter(query.from, query.to);
   if (createdAt) filter.createdAt = createdAt;

@@ -447,4 +447,56 @@ describe("lead routes — permission enforcement", () => {
     expect(response.status).toBe(201);
     expect(await Note.countDocuments({})).toBe(1);
   });
+
+  it("GET /api/leads?assignedTo=__unassigned__ returns only unassigned leads", async () => {
+    const counselorA = await makeUser("INS0001", "COUNSELOR", "a@infinityschool.edu.in");
+    const unassignedLead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "Nobody yet", phone: "9876543210" },
+      source: "API",
+    });
+    const assignedLead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "Already assigned", phone: "9876543211" },
+      source: "API",
+    });
+    await LeadService.assign({
+      tenantClause: { institutionId: "INS0001" },
+      id: assignedLead.id,
+      assignedTo: String(counselorA._id),
+      actor: { id: String(counselorA._id), name: counselorA.name },
+    });
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await listLeads(
+      cookieRequest({
+        url: "http://localhost/api/leads?assignedTo=__unassigned__",
+        origin: "http://localhost",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(
+      payload.items.map((item: { studentName: string }) => item.studentName),
+    ).toEqual(["Nobody yet"]);
+  });
+
+  it("GET /api/leads?assignedTo=<a-real-counselor-id> returns only that counselor's leads", async () => {
+    const { mineOwner, mine } = await twoCounselorsWithALeadEach();
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await listLeads(
+      cookieRequest({
+        url: `http://localhost/api/leads?assignedTo=${String(mineOwner._id)}`,
+        origin: "http://localhost",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(
+      payload.items.map((item: { studentName: string }) => item.studentName),
+    ).toEqual([mine.studentName]);
+  });
 });

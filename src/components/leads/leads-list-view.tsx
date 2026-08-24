@@ -38,11 +38,17 @@ export async function LeadsListView({
     ),
   );
 
+  const tenantClause = tenantFilter(user);
   const result = await LeadService.list(
-    { ...tenantFilter(user), ...leadVisibilityFilter(user) },
+    { ...tenantClause, ...leadVisibilityFilter(user) },
     query,
   );
-  const hasFilters = Boolean(query.q || query.status || query.source || query.from || query.to);
+  const hasFilters = Boolean(
+    query.q || query.status || query.source || query.assignedTo || query.from || query.to,
+  );
+
+  const canAssign = hasPermission(user, "LEADS_ASSIGN");
+  const assignees = canAssign ? await LeadService.listAssignees(tenantClause.institutionId) : [];
 
   const filters: FilterDefinition[] = [
     {
@@ -58,6 +64,18 @@ export async function LeadsListView({
       label: "Source",
       options: SOURCES.map((source) => ({ value: source, label: formatSource(source) })),
     },
+    ...(canAssign
+      ? [
+          {
+            key: "assignedTo",
+            label: "Assigned to",
+            options: [
+              { value: "__unassigned__", label: "Unassigned" },
+              ...assignees.map((a) => ({ value: a.id, label: a.name })),
+            ],
+          },
+        ]
+      : []),
   ];
 
 
@@ -87,7 +105,7 @@ export async function LeadsListView({
           />
         ) : (
           <>
-            <LeadsTable leads={result.items} showAssignee={hasPermission(user, "LEADS_ASSIGN")} />
+            <LeadsTable leads={result.items} showAssignee={canAssign} assignees={assignees} />
             <Suspense fallback={null}>
               <Pagination
                 page={result.page}

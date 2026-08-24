@@ -24,6 +24,20 @@ export function formatDate(value?: string | Date | null): string {
   return DATE_FORMATTER.format(date);
 }
 
+export type FollowUpUrgency = "overdue" | "due-today";
+
+/** Undefined when there's no follow-up date set, or it's still in the future. */
+export function followUpUrgency(followUpAt?: string): FollowUpUrgency | undefined {
+  if (!followUpAt) return undefined;
+  const now = new Date();
+  const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const due = new Date(followUpAt);
+  if (Number.isNaN(due.getTime())) return undefined;
+  if (due.getTime() < startOfToday.getTime()) return "overdue";
+  if (due.getTime() === startOfToday.getTime()) return "due-today";
+  return undefined;
+}
+
 /** `21 Aug 2026, 04:30 pm` */
 export function formatDateTime(value?: string | Date | null): string {
   if (!value) return "—";

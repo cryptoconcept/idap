@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Ref } from "@/components/shared/ref";
 import { LeadStatusBadge } from "@/components/shared/status-badge";
+import { LeadAssignControl } from "@/components/leads/lead-assign-control";
 import {
   Table,
   TableBody,
@@ -9,19 +10,22 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { formatDate, formatPhone } from "@/lib/utils/format";
+import { formatDate, formatPhone, followUpUrgency } from "@/lib/utils/format";
 import type { LeadDTO } from "@/lib/types";
 
 export function LeadsTable({
   leads,
   variant = "table",
   showAssignee = false,
+  assignees,
 }: {
   leads: LeadDTO[];
   /** `list` renders the compact card layout at every width — used in narrow panels. */
   variant?: "table" | "list";
   /** Admin-only "Assigned to" column — the caller decides based on the viewer's permissions. */
   showAssignee?: boolean;
+  /** Enables an interactive per-row assign control instead of read-only text. */
+  assignees?: { id: string; name: string }[];
 }) {
   return (
     <>
@@ -60,11 +64,30 @@ export function LeadsTable({
                   {formatPhone(lead.phone)}
                 </TableCell>
                 <TableCell>
-                  <LeadStatusBadge status={lead.status} />
+                  <div className="flex items-center gap-1.5">
+                    <LeadStatusBadge status={lead.status} />
+                    {followUpUrgency(lead.followUpAt) === "overdue" ? (
+                      <span className="inline-flex items-center rounded-full border border-destructive/30 bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                        Overdue
+                      </span>
+                    ) : followUpUrgency(lead.followUpAt) === "due-today" ? (
+                      <span className="inline-flex items-center rounded-full border border-foreground/25 bg-background px-1.5 py-0.5 text-[10px] font-medium text-foreground">
+                        Due today
+                      </span>
+                    ) : null}
+                  </div>
                 </TableCell>
                 {showAssignee ? (
                   <TableCell className="text-muted-foreground">
-                    {lead.assignedToName ?? "—"}
+                    {assignees ? (
+                      <LeadAssignControl
+                        leadId={lead.id}
+                        assignedTo={lead.assignedTo}
+                        assignees={assignees}
+                      />
+                    ) : (
+                      (lead.assignedToName ?? "—")
+                    )}
                   </TableCell>
                 ) : null}
                 <TableCell className="tabular text-right text-muted-foreground">
