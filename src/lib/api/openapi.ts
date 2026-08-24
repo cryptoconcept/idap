@@ -496,6 +496,44 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
         },
       },
 
+      [`${publicBase}/fees`]: {
+      ...(scoped
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "institutionId",
+                in: "path",
+                required: true,
+                schema: { type: "string" },
+                description: "Institution id, e.g. INS0001",
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published fee structures",
+          description:
+            "Published fee structures — itemized line items per class or course, per academic year — newest academic year first. Cached for five minutes.",
+          operationId: "listPublicFeeStructuresById",
+          security: [],
+          parameters: [
+            { name: "academicYear", in: "query", required: false, schema: { type: "string" }, example: "2026-27" },
+          ],
+          responses: {
+            "200": {
+              description: "Published fee structures for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicFeeStructuresResponse" },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
       [slugPath]: {
       ...(options.slug
         ? {}
@@ -563,6 +601,44 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               content: {
                 "application/json": {
                   schema: { $ref: "#/components/schemas/PublicResultsResponse" },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${slugPath}/fees`]: {
+      ...(options.slug
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "slug",
+                in: "path",
+                required: true,
+                description: "The institution's public slug, from its profile URL.",
+                schema: { type: "string", example: "infinity-school-mysore" },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published fee structures, by slug",
+          description:
+            "Published fee structures — itemized line items per class or course, per academic year — newest academic year first. Cached for five minutes.",
+          operationId: "listPublicFeeStructuresBySlug",
+          security: [],
+          parameters: [
+            { name: "academicYear", in: "query", required: false, schema: { type: "string" }, example: "2026-27" },
+          ],
+          responses: {
+            "200": {
+              description: "Published fee structures for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicFeeStructuresResponse" },
                 },
               },
             },
@@ -1200,6 +1276,38 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                   rank: { type: "integer", example: 1 },
                   note: { type: "string", example: "School topper" },
                   photoUrl: { type: "string", example: "https://cdn.example/media/INS0001/results/…" },
+                },
+              },
+            },
+            publishedAt: { type: "string", format: "date-time" },
+          },
+        },
+
+        PublicFeeStructuresResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            feeStructures: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PublicFeeStructure" },
+            },
+          },
+        },
+
+        PublicFeeStructure: {
+          type: "object",
+          properties: {
+            classOrCourse: { type: "string", example: "Grade 10" },
+            academicYear: { type: "string", example: "2026-27" },
+            lineItems: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  label: { type: "string", example: "Tuition" },
+                  amount: { type: "number", example: 60000 },
+                  frequency: { type: "string", enum: ["ONE_TIME", "ANNUAL"], example: "ANNUAL" },
+                  optional: { type: "boolean", example: false },
                 },
               },
             },
