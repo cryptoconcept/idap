@@ -144,7 +144,10 @@ export function ResultEditor({
           )}
         </div>
 
-        <PublishControl result={result} onResult={applyResult} />
+        <div className="flex items-center gap-2">
+          <PublishControl result={result} onResult={applyResult} />
+          <ArchiveDeleteControl result={result} onResult={applyResult} />
+        </div>
       </div>
 
       <div className="grid gap-5 lg:grid-cols-[228px_minmax(0,1fr)]">
@@ -322,6 +325,132 @@ function PublishControl({
                 : published
                   ? "Unpublish"
                   : "Publish now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+/**
+ * Archive keeps the record (same POST action-endpoint as publish/unpublish);
+ * delete removes it permanently and leaves the page, since there is nothing
+ * left to show.
+ */
+function ArchiveDeleteControl({
+  result,
+  onResult,
+}: {
+  result: ResultDTO;
+  onResult: (result: ResultDTO) => void;
+}) {
+  const router = useRouter();
+  const [dialog, setDialog] = useState<"archive" | "delete" | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function confirmArchive() {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/settings/results/${result.id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "archive" }),
+      });
+      const payload = await response.json();
+
+      if (!response.ok || !payload.success) {
+        toast.error(payload?.error?.message ?? "Could not archive. Please try again.");
+        return;
+      }
+
+      toast.success("Result archived");
+      onResult(payload.result as ResultDTO);
+      setDialog(null);
+    } catch {
+      toast.error("Could not reach the server. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmDelete() {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/settings/results/${result.id}`, {
+        method: "DELETE",
+      });
+      const payload = await response.json();
+
+      if (!response.ok || !payload.success) {
+        toast.error(payload?.error?.message ?? "Could not delete. Please try again.");
+        setBusy(false);
+        return;
+      }
+
+      toast.success("Result deleted");
+      router.push("/results");
+    } catch {
+      toast.error("Could not reach the server. Please try again.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      {result.status !== "ARCHIVED" ? (
+        <Button variant="outline" size="sm" onClick={() => setDialog("archive")}>
+          Archive
+        </Button>
+      ) : null}
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-destructive hover:text-destructive"
+        onClick={() => setDialog("delete")}
+      >
+        Delete
+      </Button>
+
+      <Dialog open={dialog === "archive"} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Archive {describeCycle(result)}?</DialogTitle>
+            <DialogDescription>
+              {result.status === "PUBLISHED"
+                ? "This removes it from your public results endpoint. Nothing is deleted — you can unarchive by publishing again."
+                : "This moves the cycle out of your active list. Nothing is deleted."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setDialog(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={confirmArchive} disabled={busy}>
+              {busy ? "Archiving…" : "Archive"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={dialog === "delete"} onOpenChange={(open) => !open && setDialog(null)}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle>Delete {describeCycle(result)}?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the cycle, its score data, and any topper
+              photos. This cannot be undone.
+              {result.status === "PUBLISHED"
+                ? " It also disappears from your public results endpoint immediately."
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setDialog(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" onClick={confirmDelete} disabled={busy}>
+              {busy ? "Deleting…" : "Delete permanently"}
             </Button>
           </DialogFooter>
         </DialogContent>

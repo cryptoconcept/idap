@@ -9,7 +9,7 @@ const published = {
   level: "CLASS_10",
   stream: null,
   academicYear: "2025-26",
-  examLabel: undefined,
+  examLabel: "CBSE Class 10 Board Exam",
   appeared: 142,
   passed: 140,
   averageScore: 82.4,
@@ -37,6 +37,7 @@ describe("toPublicResult", () => {
         "bands",
         "board",
         "boardLabel",
+        "examLabel",
         "highestScore",
         "level",
         "passPercentage",
@@ -75,6 +76,10 @@ describe("toPublicResult", () => {
 
   it("computes passPercentage rather than reading a stored one", () => {
     expect(toPublicResult(published)?.passPercentage).toBe(98.6);
+  });
+
+  it("emits examLabel", () => {
+    expect(toPublicResult(published)?.examLabel).toBe("CBSE Class 10 Board Exam");
   });
 
   it("returns a null passPercentage rather than dividing by zero", () => {

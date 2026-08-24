@@ -1171,6 +1171,7 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
             level: { type: "string", example: "CLASS_10" },
             stream: { type: "string", nullable: true, example: null },
             academicYear: { type: "string", example: "2025-26" },
+            examLabel: { type: "string", example: "CBSE Class 10 Board Exam" },
             appeared: { type: "integer", example: 142 },
             passed: { type: "integer", example: 140 },
             passPercentage: { type: "number", nullable: true, example: 98.6 },

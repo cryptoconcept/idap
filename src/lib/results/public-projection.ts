@@ -79,6 +79,7 @@ export function toPublicResult(result: Doc) {
     level: text(doc.level),
     stream: text(doc.stream) ?? null,
     academicYear: text(doc.academicYear),
+    examLabel: text(doc.examLabel),
 
     appeared,
     passed,
