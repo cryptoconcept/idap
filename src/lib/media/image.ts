@@ -27,8 +27,8 @@ function sniffImage(bytes: Buffer, contentType: string): boolean {
 }
 
 /**
- * Upload guard for public institution media: JPEG/PNG/WebP only (no PDF branch —
- * this is never a document), size bounded, and the sniff must agree with the
+ * Upload guard for institution media: JPEG/PNG/WebP only (no PDF branch — this
+ * is never a document), size bounded, and the sniff must agree with the
  * declared content type.
  */
 export function validateImage(input: { contentType: string; bytes: Buffer }): {

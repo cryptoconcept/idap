@@ -1,17 +1,19 @@
 /**
- * True only when `url` names a public media object this platform minted for this
+ * True only when `url` names a public media object this service minted for this
  * institution. Every upload is stored under the key `media/<institutionId>/…`,
  * and both adapters keep that path in the handle they hand back: the local
  * adapter returns `/api/media/media/<institutionId>/…`, and Vercel Blob returns
  * a blob URL whose pathname is `/media/<institutionId>/<id>-<random><ext>`.
  *
- * This is a provenance check, not a cosmetic one. A stored media URL can be
- * attacker-influenced, so a cleanup delete that trusted it would delete a
- * different tenant's object out of the shared store — neither adapter's
+ * This is a provenance check, not a cosmetic one. `logoUrl` is free text on the
+ * profile PATCH, so an institution can point its own field at another
+ * institution's public media URL — which is observable on any published
+ * profile. A cleanup delete that trusted the stored URL would then delete a
+ * different tenant's object out of the shared store, because neither adapter's
  * `deletePublic` is tenant-scoped.
  *
  * Only the path is matched: a query string or fragment can carry any substring.
- * A percent-encoded or traversing path is refused outright — a key this platform
+ * A percent-encoded or traversing path is refused outright — a key this service
  * minted contains neither.
  */
 export function isOwnedMediaUrl(url: string | null | undefined, institutionId: string): boolean {
