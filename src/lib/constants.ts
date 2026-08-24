@@ -29,8 +29,15 @@ export const INSTITUTION_TYPE_LABELS: Record<InstitutionType, string> = {
   TRAINING_INSTITUTION: "Training Institution",
 };
 
-export const USER_ROLES = ["SUPER_ADMIN", "INSTITUTION_ADMIN"] as const;
+export const USER_ROLES = ["SUPER_ADMIN", "INSTITUTION_ADMIN", "COUNSELOR", "FRONT_DESK"] as const;
 export type UserRole = (typeof USER_ROLES)[number];
+
+export const USER_ROLE_LABELS: Record<UserRole, string> = {
+  SUPER_ADMIN: "Platform administrator",
+  INSTITUTION_ADMIN: "Institution admin",
+  COUNSELOR: "Counselor",
+  FRONT_DESK: "Front desk",
+};
 
 export const LEAD_STATUSES = [
   "NEW",
@@ -231,3 +238,44 @@ export const RESULT_STATUS_LABELS: Record<ResultStatus, string> = {
 
 export const RESULT_MAX_BANDS = 8;
 export const RESULT_MAX_TOPPERS = 25;
+
+export const PERMISSIONS = [
+  "LEADS_VIEW_ALL",
+  "LEADS_VIEW_OWN",
+  "LEADS_CREATE",
+  "LEADS_UPDATE",
+  "LEADS_ASSIGN",
+  "LEADS_SET_FOLLOWUP",
+  "LEADS_DELETE",
+  "LEADS_EXPORT",
+  "STAFF_MANAGE",
+] as const;
+export type Permission = (typeof PERMISSIONS)[number];
+
+/**
+ * Who can do what. Checked once per route via `requirePermission()` — never
+ * inline `role === X || role === Y` conditionals, so moving a permission
+ * between roles later is a one-line edit here, not an audit of every route
+ * that happens to check that role.
+ *
+ * `COUNSELOR`'s LEADS_UPDATE/LEADS_SET_FOLLOWUP and `FRONT_DESK`'s
+ * LEADS_VIEW_OWN are further scoped at the service layer (ownership, and the
+ * "mine + unassigned" filter) — this table only says which permissions a
+ * role holds at all, not what document-level scoping applies.
+ */
+export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
+  SUPER_ADMIN: new Set([]),
+  INSTITUTION_ADMIN: new Set([
+    "LEADS_VIEW_ALL",
+    "LEADS_VIEW_OWN",
+    "LEADS_CREATE",
+    "LEADS_UPDATE",
+    "LEADS_ASSIGN",
+    "LEADS_SET_FOLLOWUP",
+    "LEADS_DELETE",
+    "LEADS_EXPORT",
+    "STAFF_MANAGE",
+  ]),
+  COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP"]),
+  FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),
+};
