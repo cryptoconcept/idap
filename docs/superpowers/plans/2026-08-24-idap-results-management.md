@@ -1595,7 +1595,7 @@ export { ResultService, type ResultDTO } from "./result.service";
 npx vitest run tests/integration/results-crud.test.ts
 ```
 
-Expected: PASS, 12 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 6: Mutation-check the guards**
 
