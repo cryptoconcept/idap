@@ -22,6 +22,7 @@ export default async function ProfilePage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   if (user.role === "SUPER_ADMIN") redirect("/admin");
+  if (user.role !== "INSTITUTION_ADMIN") redirect("/dashboard");
 
   const institution = await getCurrentInstitution();
   if (!institution) redirect("/login");

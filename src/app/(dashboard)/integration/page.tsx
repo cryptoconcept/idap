@@ -23,6 +23,7 @@ const TABS = [
 
 export default async function IntegrationPage(props: PageProps<"/integration">) {
   const user = await requireTenantUserPage();
+  if (user.role !== "INSTITUTION_ADMIN") redirect("/dashboard");
 
   const institution = await getCurrentInstitution();
   if (!institution) redirect("/login");

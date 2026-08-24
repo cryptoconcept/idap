@@ -18,6 +18,7 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
   if (user.role === "SUPER_ADMIN") redirect("/admin/settings");
+  if (user.role !== "INSTITUTION_ADMIN") redirect("/dashboard");
 
   const institution = await getCurrentInstitution();
   if (!institution) redirect("/login");
