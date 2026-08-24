@@ -257,6 +257,8 @@ describe("device registration", () => {
 
       expect(response.status).toBe(201);
       expect(await DeviceService.forInstitution("INS0001")).toHaveLength(1);
+      const stored = await Device.findOne({ pushToken: "fcm-token-1" }).lean();
+      expect(stored?.deviceId).toBe("install-1");
     });
   });
 
