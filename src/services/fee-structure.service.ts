@@ -6,6 +6,7 @@ import { FeeStructure, type FeeStructureDoc } from "@/models";
 import { notFound } from "@/lib/api/errors";
 import {
   assertFeeStructureInvariants,
+  assertFeeStructurePublishable,
   type createFeeStructureSchema,
   type updateFeeStructureSchema,
 } from "@/lib/validation/fee-structure";
@@ -69,6 +70,13 @@ function stripUndefined<T extends Record<string, unknown>>(patch: T): Partial<T>
     Object.entries(patch).filter(([, value]) => value !== undefined),
   ) as Partial<T>;
 }
+
+/** `"archive" + "ed"` reads as "archiveed" — spelled out instead of concatenated. */
+const ACTION_LABELS: Record<"publish" | "unpublish" | "archive", string> = {
+  publish: "published",
+  unpublish: "unpublished",
+  archive: "archived",
+};
 
 export const FeeStructureService = {
   async list(institutionId: string): Promise<FeeStructureDTO[]> {
@@ -141,6 +149,47 @@ export const FeeStructureService = {
       entityId: updated._id,
       entityRef: institutionId,
       action: "Fee structure updated",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated);
+  },
+
+  async setStatus(
+    institutionId: string,
+    feeStructureId: string,
+    action: "publish" | "unpublish" | "archive",
+    actor: { id: string; name: string },
+  ): Promise<FeeStructureDTO> {
+    await connectToDatabase();
+    const before = await findOwned(institutionId, feeStructureId);
+
+    const status = action === "publish" ? "PUBLISHED" : action === "archive" ? "ARCHIVED" : "DRAFT";
+
+    if (action === "publish") {
+      assertFeeStructurePublishable({ lineItems: before.lineItems });
+    }
+
+    const set: Record<string, unknown> = { status };
+    // Stamped on first publication and never moved: it records when this
+    // structure was first made public, not when it was last touched.
+    if (action === "publish" && !before.publishedAt) set.publishedAt = new Date();
+
+    const updated = await FeeStructure.findOneAndUpdate(
+      { _id: before._id, institutionId },
+      { $set: set },
+      { new: true },
+    ).lean<FeeStructureDoc>();
+    if (!updated) throw notFound("Fee structure not found");
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "FEE_STRUCTURE",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: `Fee structure ${ACTION_LABELS[action]}`,
+      description: `${updated.classOrCourse} ${updated.academicYear}`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
