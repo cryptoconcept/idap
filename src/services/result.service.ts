@@ -2,7 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import type { z } from "zod";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { Result, type ResultDoc } from "@/models";
+import { Institution, Result, type ResultDoc } from "@/models";
 import { notFound } from "@/lib/api/errors";
 import {
   assertPublishable,
@@ -13,6 +13,7 @@ import {
 import { storage } from "@/lib/storage";
 import { validateImage } from "@/lib/media/image";
 import { isOwnedMediaUrl } from "@/lib/media/ownership";
+import { toPublicResult, type PublicResult } from "@/lib/results/public-projection";
 import { ActivityService } from "./activity.service";
 
 type CreateInput = z.infer<typeof createResultSchema>;
@@ -123,6 +124,56 @@ export const ResultService = {
       .sort({ academicYear: -1, createdAt: -1 })
       .lean<ResultDoc[]>();
     return rows.map(serialize);
+  },
+
+  /**
+   * Returns null when the institution is not publicly visible at all — the
+   * caller turns that into a 404. An empty array means "visible, but nothing
+   * published", which is a 200. Keeping the two apart here is what lets the
+   * route stay free of a 403 branch.
+   *
+   * The visibility gate is deliberately identical to the profile endpoint's, so
+   * results can never be reachable on an institution whose profile 404s.
+   */
+  async listPublic(query: {
+    institutionId?: string;
+    slug?: string;
+    academicYear?: string;
+    level?: string;
+    board?: string;
+  }): Promise<PublicResult[] | null> {
+    await connectToDatabase();
+
+    const key = query.institutionId
+      ? { institutionId: query.institutionId.toUpperCase() }
+      : { slug: (query.slug ?? "").toLowerCase() };
+
+    const institution = await Institution.findOne({
+      ...key,
+      active: true,
+      profileStatus: "PUBLISHED",
+    })
+      .select("institutionId")
+      .lean();
+    if (!institution) return null;
+
+    const filter: Record<string, unknown> = {
+      institutionId: institution.institutionId,
+      status: "PUBLISHED",
+    };
+    if (query.academicYear) filter.academicYear = query.academicYear;
+    if (query.level) filter.level = query.level;
+    if (query.board) filter.board = query.board;
+
+    const rows = await Result.find(filter)
+      .sort({ academicYear: -1, createdAt: -1 })
+      .lean<ResultDoc[]>();
+
+    // The projection is the allow-list; it also re-checks PUBLISHED and drops
+    // unconsented toppers, so a filter mistake here cannot leak either.
+    return rows
+      .map((row) => toPublicResult(row as unknown as Record<string, unknown>))
+      .filter((row): row is PublicResult => row !== null);
   },
 
   async get(institutionId: string, resultId: string): Promise<ResultDTO> {
