@@ -177,9 +177,16 @@ export const FeeStructureService = {
     const set = stripUndefined(patch);
 
     // Invariants hold against the MERGED record: a patch carrying only one
-    // new line item must still be checked against the whole stored list.
+    // new line item must still be checked against the whole stored list. A
+    // PUBLISHED record must keep satisfying the publish gate on every edit —
+    // otherwise a PATCH could empty a live fee structure's line items while
+    // leaving it publicly visible with nothing in it.
     const merged = { ...before, ...set };
-    assertFeeStructureInvariants({ lineItems: merged.lineItems });
+    if (before.status === "PUBLISHED") {
+      assertFeeStructurePublishable({ lineItems: merged.lineItems });
+    } else {
+      assertFeeStructureInvariants({ lineItems: merged.lineItems });
+    }
 
     const updated = await FeeStructure.findOneAndUpdate(
       { _id: before._id, institutionId },

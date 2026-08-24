@@ -104,6 +104,43 @@ describe("FeeStructureService CRUD", () => {
     ).rejects.toThrow(/appears more than once/i);
   });
 
+  it("rejects emptying a PUBLISHED fee structure's line items — the publish gate still applies on every edit", async () => {
+    const created = await FeeStructureService.create(
+      "INS0001",
+      {
+        classOrCourse: "Grade 10",
+        academicYear: "2026-27",
+        lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
+      },
+      actor,
+    );
+    await FeeStructureService.setStatus("INS0001", created.id, "publish", actor);
+
+    await expect(
+      FeeStructureService.update("INS0001", created.id, { lineItems: [] }, actor),
+    ).rejects.toThrow(/at least one line item/i);
+  });
+
+  it("still allows a DRAFT fee structure to be patched to an empty lineItems array — the weaker gate applies to drafts", async () => {
+    const created = await FeeStructureService.create(
+      "INS0001",
+      {
+        classOrCourse: "Grade 10",
+        academicYear: "2026-27",
+        lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
+      },
+      actor,
+    );
+
+    const updated = await FeeStructureService.update(
+      "INS0001",
+      created.id,
+      { lineItems: [] },
+      actor,
+    );
+    expect(updated.lineItems).toBeUndefined();
+  });
+
   it("returns NOT_FOUND, never FORBIDDEN, for another institution's fee structure", async () => {
     const created = await FeeStructureService.create("INS0001", input, actor);
 

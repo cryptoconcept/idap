@@ -44,6 +44,20 @@ async function signIn(
   return user;
 }
 
+/** Platform-admin session: no institutionId, role SUPER_ADMIN — the 403 case. */
+async function signInPlatformAdmin(email = "platform-fees@example.test") {
+  const user = await makeUser(undefined, "SUPER_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "SUPER_ADMIN",
+    institutionId: undefined,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 const input = {
   classOrCourse: "Grade 10",
@@ -151,6 +165,21 @@ describe("fee structure routes — admin CRUD over real HTTP", () => {
     );
     expect(deleteResponse.status).toBe(404);
   });
+
+  it("a fee structure from another institution 404s on publish — never 403", async () => {
+    await signIn("INS0002", "INSTITUTION_ADMIN", "admin@intelligentpublic.edu.in");
+    const created = await FeeStructureService.create("INS0001", input, actor);
+
+    const response = await publishFee(
+      cookieRequest({
+        url: `http://localhost/api/settings/fees/${created.id}/publish`,
+        body: { action: "publish" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ feeId: created.id }) } as never,
+    );
+    expect(response.status).toBe(404);
+  });
 });
 
 describe("fee structure routes — Counselor and Front Desk are refused on every route", () => {
@@ -218,6 +247,13 @@ describe("fee structure routes — Counselor and Front Desk are refused on every
       }),
       { params: Promise.resolve({ feeId: created.id }) } as never,
     );
+    expect(response.status).toBe(403);
+  });
+
+  it("rejects a SUPER_ADMIN caller — the platform admin has no route to fee structures", async () => {
+    await signInPlatformAdmin();
+
+    const response = await listFees();
     expect(response.status).toBe(403);
   });
 });

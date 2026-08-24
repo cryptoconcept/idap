@@ -157,8 +157,14 @@ export function FeeStructureForm({
                   <Input
                     id={`lineItems.${index}.label`}
                     placeholder="Tuition"
+                    aria-invalid={Boolean(errors.lineItems?.[index]?.label)}
                     {...register(`lineItems.${index}.label` as const)}
                   />
+                  {errors.lineItems?.[index]?.label ? (
+                    <p className="text-xs text-destructive">
+                      {errors.lineItems[index]?.label?.message}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor={`lineItems.${index}.amount`} className="text-xs">
@@ -168,8 +174,14 @@ export function FeeStructureForm({
                     id={`lineItems.${index}.amount`}
                     type="number"
                     min={0}
+                    aria-invalid={Boolean(errors.lineItems?.[index]?.amount)}
                     {...register(`lineItems.${index}.amount` as const, { valueAsNumber: true })}
                   />
+                  {errors.lineItems?.[index]?.amount ? (
+                    <p className="text-xs text-destructive">
+                      {errors.lineItems[index]?.amount?.message}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor={`lineItems.${index}.frequency`} className="text-xs">
@@ -242,8 +254,8 @@ export function FeeStructureForm({
             ))}
           </div>
         )}
-        {errors.lineItems ? (
-          <p className="text-xs text-destructive">{errors.lineItems.message as string}</p>
+        {typeof errors.lineItems?.message === "string" ? (
+          <p className="text-xs text-destructive">{errors.lineItems.message}</p>
         ) : null}
       </div>
 
