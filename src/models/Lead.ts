@@ -15,6 +15,16 @@ const LeadSchema = new Schema(
     source: { type: String, enum: SOURCES, default: "API" },
     sourceApplication: { type: String, trim: true },
     sourceUrl: { type: String, trim: true },
+    // The counselor (or admin) working this lead. Never a Front Desk user —
+    // enforced at the service layer, since Front Desk doesn't do casework.
+    assignedTo: { type: String, index: true },
+    assignedAt: { type: Date },
+    // Date-only semantics: stored at midnight UTC for the given calendar day.
+    followUpAt: { type: Date },
+    // Stamped by the daily reminder job the day it fires for the CURRENT
+    // followUpAt. Cleared to undefined whenever followUpAt changes, which is
+    // what re-arms the reminder after a date is edited.
+    followUpNotifiedAt: { type: Date },
   },
   { timestamps: true, collection: "leads" },
 );
@@ -22,6 +32,12 @@ const LeadSchema = new Schema(
 // Every dashboard query is tenant-scoped and sorted newest-first.
 LeadSchema.index({ institutionId: 1, createdAt: -1 });
 LeadSchema.index({ institutionId: 1, status: 1, createdAt: -1 });
+// "My queue": a counselor's own assigned leads, newest first.
+LeadSchema.index({ institutionId: 1, assignedTo: 1, createdAt: -1 });
+// The daily reminder job's query. Deliberately not institution-scoped — the
+// job runs once across the whole platform and groups by institution/
+// counselor in application code, not in the query.
+LeadSchema.index({ followUpAt: 1, followUpNotifiedAt: 1 });
 
 export type LeadDoc = InferSchemaType<typeof LeadSchema> & { _id: Types.ObjectId };
 
