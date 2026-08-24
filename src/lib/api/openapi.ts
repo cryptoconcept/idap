@@ -3,6 +3,8 @@ import {
   APPLICATION_STATUSES,
   DOCUMENT_TYPES,
   PUBLIC_FORM_RATE_LIMIT,
+  RESULT_BOARDS,
+  RESULT_LEVELS,
 } from "@/lib/constants";
 
 /**
@@ -454,6 +456,46 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
         },
       },
 
+      [`${publicBase}/results`]: {
+      ...(scoped
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "institutionId",
+                in: "path",
+                required: true,
+                schema: { type: "string" },
+                description: "Institution id, e.g. INS0001",
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published exam results",
+          description:
+            "Published exam-cycle results, newest academic year first. Toppers appear only where the institution has confirmed consent to publish. Cached for five minutes.",
+          operationId: "listPublicResultsById",
+          security: [],
+          parameters: [
+            { name: "academicYear", in: "query", required: false, schema: { type: "string" }, example: "2025-26" },
+            { name: "level", in: "query", required: false, schema: { type: "string", enum: [...RESULT_LEVELS] } },
+            { name: "board", in: "query", required: false, schema: { type: "string", enum: [...RESULT_BOARDS] } },
+          ],
+          responses: {
+            "200": {
+              description: "Published results for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicResultsResponse" },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
       [slugPath]: {
       ...(options.slug
         ? {}
@@ -485,6 +527,46 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               },
             },
             ...errorResponses(["NOT_FOUND", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${slugPath}/results`]: {
+      ...(options.slug
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "slug",
+                in: "path",
+                required: true,
+                description: "The institution's public slug, from its profile URL.",
+                schema: { type: "string", example: "infinity-school-mysore" },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published exam results, by slug",
+          description:
+            "Published exam-cycle results, newest academic year first. Toppers appear only where the institution has confirmed consent to publish. Cached for five minutes.",
+          operationId: "listPublicResultsBySlug",
+          security: [],
+          parameters: [
+            { name: "academicYear", in: "query", required: false, schema: { type: "string" }, example: "2025-26" },
+            { name: "level", in: "query", required: false, schema: { type: "string", enum: [...RESULT_LEVELS] } },
+            { name: "board", in: "query", required: false, schema: { type: "string", enum: [...RESULT_BOARDS] } },
+          ],
+          responses: {
+            "200": {
+              description: "Published results for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicResultsResponse" },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
           },
         },
       },
@@ -1067,6 +1149,60 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                 },
               },
             },
+          },
+        },
+
+        PublicResultsResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            results: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PublicResult" },
+            },
+          },
+        },
+
+        PublicResult: {
+          type: "object",
+          properties: {
+            board: { type: "string", example: "CBSE" },
+            boardLabel: { type: "string", example: "CBSE" },
+            level: { type: "string", example: "CLASS_10" },
+            stream: { type: "string", nullable: true, example: null },
+            academicYear: { type: "string", example: "2025-26" },
+            appeared: { type: "integer", example: 142 },
+            passed: { type: "integer", example: 140 },
+            passPercentage: { type: "number", nullable: true, example: 98.6 },
+            averageScore: { type: "number", example: 82.4 },
+            highestScore: { type: "number", example: 98.6 },
+            bands: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  label: { type: "string", example: "90% and above" },
+                  minPercentage: { type: "number", example: 90 },
+                  maxPercentage: { type: "number", example: 100 },
+                  count: { type: "integer", example: 38 },
+                },
+              },
+            },
+            toppers: {
+              type: "array",
+              description: "Only toppers whose consent to publish the institution has confirmed.",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string", example: "Priya S" },
+                  percentage: { type: "number", example: 98.6 },
+                  rank: { type: "integer", example: 1 },
+                  note: { type: "string", example: "School topper" },
+                  photoUrl: { type: "string", example: "https://cdn.example/media/INS0001/results/…" },
+                },
+              },
+            },
+            publishedAt: { type: "string", format: "date-time" },
           },
         },
 
