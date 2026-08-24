@@ -6,10 +6,12 @@ import { getCurrentUser } from "@/lib/auth/current-user";
 import { getCurrentInstitution } from "@/lib/tenant";
 import { AppError } from "@/lib/api/errors";
 import { FeeStructureService, type FeeStructureDTO } from "@/services/fee-structure.service";
+import type { FeeStructureStatus } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/page-header";
 import { FeeStructureForm } from "@/components/fees/fee-structure-form";
 import { FeeStructureActions } from "@/components/fees/fee-structure-actions";
+import { FeeStructureStatusBadge } from "@/components/fees/fee-structure-status-badge";
 
 export const metadata: Metadata = { title: "Fee structure" };
 export const dynamic = "force-dynamic";
@@ -49,7 +51,10 @@ export default async function FeeStructureEditorPage(props: PageProps<"/fees/[fe
           title={`${feeStructure.classOrCourse} · ${feeStructure.academicYear}`}
           description="Everything a website reading your public fees endpoint would see."
         />
-        <FeeStructureActions feeStructure={feeStructure} />
+        <div className="flex items-center gap-3">
+          <FeeStructureStatusBadge status={feeStructure.status as FeeStructureStatus} />
+          <FeeStructureActions feeStructure={feeStructure} />
+        </div>
       </div>
 
       <FeeStructureForm initialFeeStructure={feeStructure} />
