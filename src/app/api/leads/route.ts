@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
-    if (!viaBearer) requirePermission(user, "LEADS_CREATE");
+    requirePermission(user, "LEADS_CREATE");
     // Through tenantFilter like every other tenant-touching path, rather than
     // reading user.institutionId directly. The platform's isolation story rests
     // on that single function, and these two were the last write paths outside

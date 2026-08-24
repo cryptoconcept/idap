@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowUpRight, FileText, Inbox } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { getCurrentInstitution, tenantFilter } from "@/lib/tenant";
+import { leadVisibilityFilter } from "@/lib/tenant/permissions";
 import { DashboardService } from "@/services/dashboard.service";
 import { LeadService } from "@/services/lead.service";
 import { ApplicationService } from "@/services/application.service";
@@ -41,9 +42,10 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
   const tab = TABS.some((entry) => entry.value === tabParam) ? tabParam : "overview";
 
   const clause = tenantFilter(user);
+  const leadVisibility = { ...clause, ...leadVisibilityFilter(user) };
   const [stats, recentLeads, recentApplications] = await Promise.all([
     DashboardService.getStats(clause),
-    LeadService.recent(clause, tab === "enquiries" ? 10 : 5),
+    LeadService.recent(leadVisibility, tab === "enquiries" ? 10 : 5),
     ApplicationService.recent(clause, tab === "applications" ? 10 : 5),
   ]);
 

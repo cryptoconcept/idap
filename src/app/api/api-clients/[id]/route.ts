@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { credentialScope, requireUser } from "@/lib/tenant";
 import { ApiClientService } from "@/services/api-client.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
+import { forbidden } from "@/lib/api/errors";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,7 @@ export async function DELETE(
   try {
     assertSameOrigin(request);
     const user = await requireUser();
+    if (user.role !== "SUPER_ADMIN" && user.role !== "INSTITUTION_ADMIN") throw forbidden();
     const { id } = await context.params;
 
     const client = await ApiClientService.revoke({

@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { assertOwnsLead, leadVisibilityFilter, requirePermission } from "@/lib/tenant/permissions";
 import { createNoteSchema } from "@/lib/validation/note";
 import { LeadService } from "@/services/lead.service";
 import { NoteService } from "@/services/note.service";
@@ -13,7 +14,10 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/lead
   try {
     const { user } = await requireApiUser(request);
     const { id } = await context.params;
-    const lead = await LeadService.getById(tenantFilter(user), id);
+    const lead = await LeadService.getById(
+      { ...tenantFilter(user), ...leadVisibilityFilter(user) },
+      id,
+    );
     const notes = await NoteService.list(lead.institutionId, "LEAD", lead.id);
     return jsonSuccess({ notes });
   } catch (error) {
@@ -25,12 +29,14 @@ export async function POST(request: NextRequest, context: RouteContext<"/api/lea
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
+    requirePermission(user, "LEADS_UPDATE");
     const { id } = await context.params;
     const body = await request.json().catch(() => ({}));
     const { note } = createNoteSchema.parse(body);
 
     // Resolving through the service enforces the tenant clause before writing.
     const lead = await LeadService.getById(tenantFilter(user), id);
+    assertOwnsLead(user, { assignedTo: lead.assignedTo ?? null });
 
     const created = await NoteService.create({
       institutionId: lead.institutionId,

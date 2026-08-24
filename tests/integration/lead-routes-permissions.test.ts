@@ -9,6 +9,13 @@ import { cookies } from "next/headers";
 import { GET as listLeads, POST as createLead } from "@/app/api/leads/route";
 import { PATCH as patchLead } from "@/app/api/leads/[id]/route";
 import { POST as assignLead } from "@/app/api/leads/[id]/assign/route";
+import { GET as getLead } from "@/app/api/leads/[id]/route";
+import {
+  GET as listNotes,
+  POST as createNote,
+} from "@/app/api/leads/[id]/notes/route";
+import { GET as getDashboard } from "@/app/api/dashboard/route";
+import { Note } from "@/models";
 import { LeadService } from "@/services/lead.service";
 import type { NextRequest } from "next/server";
 
@@ -48,6 +55,59 @@ beforeEach(async () => {
 afterEach(async () => {
   (await cookies()).delete(SESSION_COOKIE);
 });
+
+/**
+ * Signs in an existing user rather than creating one. `signIn` above calls
+ * makeUser, which collides with the User model's unique email index when the
+ * counselor already had to be created up front to be an assignment target.
+ */
+async function signInAs(
+  user: { _id: unknown; name: string; email: string },
+  role: "INSTITUTION_ADMIN" | "COUNSELOR" | "FRONT_DESK",
+) {
+  const token = await signSession({
+    sub: String(user._id),
+    role,
+    institutionId: "INS0001",
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
+/**
+ * Two counselors at one institution, each holding one lead. Every visibility
+ * test below turns on the same question: can the caller reach the other one's.
+ */
+async function twoCounselorsWithALeadEach(names = { mine: "My lead", theirs: "Their lead" }) {
+  const mineOwner = await makeUser("INS0001", "COUNSELOR", "owner@infinityschool.edu.in");
+  const theirsOwner = await makeUser("INS0001", "COUNSELOR", "colleague@infinityschool.edu.in");
+  const mine = await LeadService.createLead({
+    institutionId: "INS0001",
+    data: { studentName: names.mine, phone: "9876543210" },
+    source: "API",
+  });
+  const theirs = await LeadService.createLead({
+    institutionId: "INS0001",
+    data: { studentName: names.theirs, phone: "9876543211" },
+    source: "API",
+  });
+  for (const [lead, owner] of [
+    [mine, mineOwner],
+    [theirs, theirsOwner],
+  ] as const) {
+    await LeadService.assign({
+      tenantClause: { institutionId: "INS0001" },
+      id: lead.id,
+      assignedTo: String(owner._id),
+      // A real id, unlike the "x" the older tests in this file pass — the
+      // activity record casts it to an ObjectId and logs a BSON error otherwise.
+      actor: { id: String(owner._id), name: owner.name },
+    });
+  }
+  return { mineOwner, theirsOwner, mine, theirs };
+}
 
 describe("lead routes — permission enforcement", () => {
   it("a Counselor cannot create a lead — 403", async () => {
@@ -230,5 +290,161 @@ describe("lead routes — permission enforcement", () => {
 
     const names = payload.items.map((item: { studentName: string }) => item.studentName);
     expect(names).toEqual(["A's lead"]);
+  });
+
+  it("a counselor's search cannot reach a colleague's lead", async () => {
+    // The search $or used to be assigned straight onto the filter, overwriting
+    // the visibility clause's own $or — so adding ?q= to the list silently
+    // widened it to the whole institution. Both leads match "Priya", so the
+    // search term cannot be what separates them; only the scoping can.
+    const { mineOwner } = await twoCounselorsWithALeadEach({
+      mine: "Priya Mine",
+      theirs: "Priya Theirs",
+    });
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await listLeads(
+      cookieRequest({ url: "http://localhost/api/leads?q=Priya", origin: "http://localhost" }),
+    );
+    const payload = await response.json();
+
+    const names = payload.items.map((item: { studentName: string }) => item.studentName);
+    expect(names).toEqual(["Priya Mine"]);
+    expect(payload.total).toBe(1);
+  });
+
+  it("a counselor's search still finds their own lead", async () => {
+    // The control for the test above: a scoping fix that returned nothing at
+    // all would satisfy it just as well.
+    const { mineOwner } = await twoCounselorsWithALeadEach({
+      mine: "Priya Mine",
+      theirs: "Priya Theirs",
+    });
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const payload = await (
+      await listLeads(
+        cookieRequest({ url: "http://localhost/api/leads?q=Mine", origin: "http://localhost" }),
+      )
+    ).json();
+
+    expect(payload.total).toBe(1);
+    expect(payload.items[0].studentName).toBe("Priya Mine");
+  });
+
+  it("a counselor gets 404 fetching a colleague's lead by id", async () => {
+    // The lead number in the URL is sequential and therefore guessable, so the
+    // detail read has to be scoped, not just the list.
+    const { mineOwner, theirs } = await twoCounselorsWithALeadEach();
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await getLead(
+      cookieRequest({ url: `http://localhost/api/leads/${theirs.id}`, origin: "http://localhost" }),
+      { params: Promise.resolve({ id: theirs.id }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("a counselor can still fetch their own lead by id", async () => {
+    const { mineOwner, mine } = await twoCounselorsWithALeadEach();
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await getLead(
+      cookieRequest({ url: `http://localhost/api/leads/${mine.id}`, origin: "http://localhost" }),
+      { params: Promise.resolve({ id: mine.id }) } as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).lead.studentName).toBe("My lead");
+  });
+
+  it("a counselor gets 404 listing the notes on a colleague's lead", async () => {
+    // Notes carry the substance of a colleague's conversation with a family;
+    // the note list is scoped by the lead's own visibility, nothing else.
+    const { mineOwner, theirs } = await twoCounselorsWithALeadEach();
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await listNotes(
+      cookieRequest({
+        url: `http://localhost/api/leads/${theirs.id}/notes`,
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: theirs.id }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("the dashboard's recent enquiries exclude a colleague's lead", async () => {
+    const { mineOwner } = await twoCounselorsWithALeadEach();
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await getDashboard(
+      cookieRequest({ url: "http://localhost/api/dashboard", origin: "http://localhost" }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(
+      payload.recentLeads.map((lead: { studentName: string }) => lead.studentName),
+    ).toEqual(["My lead"]);
+  });
+
+  it("a Front Desk user cannot add a note to a lead — 403", async () => {
+    // The spec puts notes under LEADS_UPDATE, which FRONT_DESK never holds.
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "Test", phone: "9876543210" },
+      source: "API",
+    });
+    await signIn("INS0001", "FRONT_DESK", "fd@infinityschool.edu.in");
+
+    const response = await createNote(
+      cookieRequest({
+        url: `http://localhost/api/leads/${lead.id}/notes`,
+        body: { note: "Called the parent" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect(await Note.countDocuments({})).toBe(0);
+  });
+
+  it("a counselor cannot add a note to a colleague's lead — 404", async () => {
+    const { mineOwner, theirs } = await twoCounselorsWithALeadEach();
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await createNote(
+      cookieRequest({
+        url: `http://localhost/api/leads/${theirs.id}/notes`,
+        body: { note: "Not my lead to annotate" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: theirs.id }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+    expect(await Note.countDocuments({})).toBe(0);
+  });
+
+  it("a counselor can add a note to their own lead", async () => {
+    // The control for both note refusals above.
+    const { mineOwner, mine } = await twoCounselorsWithALeadEach();
+    await signInAs(mineOwner, "COUNSELOR");
+
+    const response = await createNote(
+      cookieRequest({
+        url: `http://localhost/api/leads/${mine.id}/notes`,
+        body: { note: "Spoke to the parent" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: mine.id }) } as never,
+    );
+
+    expect(response.status).toBe(201);
+    expect(await Note.countDocuments({})).toBe(1);
   });
 });

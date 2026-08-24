@@ -17,7 +17,7 @@ import { LeadFollowUpControl } from "@/components/leads/lead-followup-control";
 import { LeadStatusBadge } from "@/components/shared/status-badge";
 import { Ref } from "@/components/shared/ref";
 import { Button } from "@/components/ui/button";
-import { hasPermission } from "@/lib/tenant/permissions";
+import { hasPermission, leadVisibilityFilter } from "@/lib/tenant/permissions";
 import { formatDateTime, formatPhone, formatSource } from "@/lib/utils/format";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +35,10 @@ export default async function EnquiryDetailPage(props: PageProps<"/enquiries/[le
 
   let lead;
   try {
-    lead = await LeadService.getById(tenantFilter(user), leadNumber);
+    lead = await LeadService.getById(
+      { ...tenantFilter(user), ...leadVisibilityFilter(user) },
+      leadNumber,
+    );
   } catch (error) {
     if (error instanceof AppError && error.code === "NOT_FOUND") notFound();
     throw error;

@@ -15,7 +15,7 @@ export async function POST(
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
-    if (!viaBearer) requirePermission(user, "LEADS_ASSIGN");
+    requirePermission(user, "LEADS_ASSIGN");
     const { id } = await context.params;
 
     const body = await request.json().catch(() => ({}));

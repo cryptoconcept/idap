@@ -11,7 +11,9 @@ import { createLeadSchema } from "@/lib/validation/lead";
 import { GET as listLeads, POST as createLead } from "@/app/api/leads/route";
 import { POST as createApplication } from "@/app/api/applications/route";
 import { PATCH as patchLead } from "@/app/api/leads/[id]/route";
+import { POST as assignLead } from "@/app/api/leads/[id]/assign/route";
 import { Application, Lead } from "@/models";
+import type { UserRole } from "@/lib/constants";
 import type { NextRequest } from "next/server";
 
 const leadInput = createLeadSchema.parse({
@@ -74,6 +76,24 @@ async function tokenFor(institutionId: string | undefined, role: "INSTITUTION_AD
     email: user.email,
     v: 0,
   });
+}
+
+/**
+ * A bearer token for a freshly created staff user of any role, handing back the
+ * user document too — the assignment tests need its id as the assignee target.
+ * `tokenFor` above covers the admin/platform cases that don't.
+ */
+async function bearerFor(role: UserRole, institutionId: string, email: string) {
+  const user = await makeUser(institutionId, role, email);
+  const token = await signAccessToken({
+    sub: String(user._id),
+    role,
+    institutionId,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  return { user, token };
 }
 
 describe("routes accept bearer tokens", () => {
@@ -152,8 +172,8 @@ describe("routes accept bearer tokens", () => {
     // tenantFilter(user) — the one function the isolation guarantee rests on.
     // Their own `!user.institutionId` guard passes for a platform admin who
     // carries one, so the record would be created under that institution.
-    // The institutionId is populated deliberately: it makes the role refusal
-    // in tenantFilter the only thing that can produce the 403.
+    // The institutionId is populated deliberately, so a missing one can never
+    // be what produces the 403 — the caller's role has to be.
     const token = await tokenFor("INS0001", "SUPER_ADMIN", "platform@example.test");
 
     const response = await createLead(
@@ -164,7 +184,14 @@ describe("routes accept bearer tokens", () => {
     );
 
     expect(response.status).toBe(403);
-    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+    // The refusal moved one check earlier once requirePermission stopped being
+    // skipped for bearer callers: SUPER_ADMIN holds no permissions at all, so
+    // the permission layer turns it away before tenantFilter ever runs. Both
+    // things that matter here — the 403 and the absent record — are unchanged,
+    // and tenantFilter's own platform-admin message stays covered by "refuses a
+    // platform admin on the bearer path too" (GET, which has no permission
+    // gate) and by the application counterpart below.
+    expect((await response.json()).error.message).toMatch(/do not have access/i);
     expect(await Lead.countDocuments({})).toBe(0);
   });
 
@@ -203,6 +230,91 @@ describe("routes accept bearer tokens", () => {
     expect(response.status).toBe(201);
     const created = await Lead.findOne({}).lean();
     expect(created!.institutionId).toBe("INS0001");
+  });
+
+  it("refuses a Counselor's bearer-token lead assignment, and leaves the lead unassigned", async () => {
+    // The headline of the bearer permission bypass: POST /assign has no
+    // ownership check behind it, so while requirePermission was skipped for
+    // bearer callers a Counselor could sign in on mobile and pull any lead in
+    // the institution — including a colleague's — onto themselves.
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: leadInput,
+      source: "API",
+    });
+    const { user: counselor, token } = await bearerFor("COUNSELOR", "INS0001", "counselor@example.test");
+
+    const response = await assignLead(
+      bearerRequest(token, {
+        url: `http://localhost/api/leads/${lead.id}/assign`,
+        body: { assignedTo: String(counselor._id) },
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    const after = await Lead.findById(lead.id).lean();
+    expect(after!.assignedTo ?? null).toBeNull();
+  });
+
+  it("refuses a Counselor creating an enquiry over bearer, and writes nothing", async () => {
+    // COUNSELOR does not hold LEADS_CREATE; the cookie path already refused
+    // this, and the bearer path used to wave it through.
+    const { token } = await bearerFor("COUNSELOR", "INS0001", "counselor@example.test");
+
+    const response = await createLead(
+      bearerRequest(token, {
+        url: "http://localhost/api/leads",
+        body: { studentName: "Rahul Kumar", phone: "9876543210" },
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await Lead.countDocuments({})).toBe(0);
+  });
+
+  it("refuses a Front Desk status change over bearer with 403, not the ownership 404", async () => {
+    // FRONT_DESK holds neither LEADS_UPDATE nor LEADS_SET_FOLLOWUP. The
+    // ownership check inside updateStatus happened to stop this write anyway
+    // (as a 404), so the status code is what distinguishes a permission layer
+    // that runs on the bearer path from one that is skipped.
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: leadInput,
+      source: "API",
+    });
+    const { token } = await bearerFor("FRONT_DESK", "INS0001", "frontdesk@example.test");
+
+    const response = await patchLead(
+      bearerRequest(token, {
+        url: `http://localhost/api/leads/${lead.id}`,
+        body: { status: "CONTACTED" },
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect((await Lead.findById(lead.id).lean())!.status).toBe("NEW");
+  });
+
+  it("refuses a Front Desk follow-up date over bearer with 403, not the ownership 404", async () => {
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: leadInput,
+      source: "API",
+    });
+    const { token } = await bearerFor("FRONT_DESK", "INS0001", "frontdesk@example.test");
+
+    const response = await patchLead(
+      bearerRequest(token, {
+        url: `http://localhost/api/leads/${lead.id}`,
+        body: { followUpAt: "2026-09-01" },
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect((await Lead.findById(lead.id).lean())!.followUpAt ?? null).toBeNull();
   });
 
   it("still refuses a cross-origin mutation when it is cookie-authenticated", async () => {

@@ -5,7 +5,7 @@ import { leadQuerySchema } from "@/lib/validation/lead";
 import { LEAD_STATUSES, SOURCES } from "@/lib/constants";
 import { LEAD_STATUS_LABELS, formatSource } from "@/lib/utils/format";
 import { tenantFilter } from "@/lib/tenant";
-import { hasPermission } from "@/lib/tenant/permissions";
+import { hasPermission, leadVisibilityFilter } from "@/lib/tenant/permissions";
 import type { CurrentUser } from "@/lib/auth/current-user";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, type FilterDefinition } from "@/components/shared/filter-bar";
@@ -38,7 +38,10 @@ export async function LeadsListView({
     ),
   );
 
-  const result = await LeadService.list(tenantFilter(user), query);
+  const result = await LeadService.list(
+    { ...tenantFilter(user), ...leadVisibilityFilter(user) },
+    query,
+  );
   const hasFilters = Boolean(query.q || query.status || query.source || query.from || query.to);
 
   const filters: FilterDefinition[] = [

@@ -58,6 +58,16 @@ function buildFilter(
   query: Partial<LeadQuery>,
 ): FilterQuery<LeadDoc> {
   const filter: FilterQuery<LeadDoc> = { ...tenantClause };
+  // The tenant clause can carry its own $or — leadVisibilityFilter's "mine plus
+  // unassigned" scoping. Assigning the search $or straight onto the filter would
+  // overwrite that key and silently drop the scoping, so both clauses go under
+  // $and and have to hold together.
+  const and: FilterQuery<LeadDoc>[] = [];
+
+  if (filter.$or) {
+    and.push({ $or: filter.$or as FilterQuery<LeadDoc>[] });
+    delete filter.$or;
+  }
 
   if (query.status) filter.status = query.status;
   if (query.source) filter.source = query.source;
@@ -68,14 +78,18 @@ function buildFilter(
   if (query.q) {
     // Escaped so a search string can never be interpreted as a regex or operator.
     const pattern = new RegExp(escapeRegex(query.q), "i");
-    filter.$or = [
-      { leadNumber: pattern },
-      { studentName: pattern },
-      { parentName: pattern },
-      { phone: pattern },
-      { email: pattern },
-    ];
+    and.push({
+      $or: [
+        { leadNumber: pattern },
+        { studentName: pattern },
+        { parentName: pattern },
+        { phone: pattern },
+        { email: pattern },
+      ],
+    });
   }
+
+  if (and.length > 0) filter.$and = and;
 
   return filter;
 }

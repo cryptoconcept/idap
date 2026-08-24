@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
-import { requirePermission } from "@/lib/tenant/permissions";
+import { leadVisibilityFilter, requirePermission } from "@/lib/tenant/permissions";
 import { updateLeadSchema } from "@/lib/validation/lead";
 import { LeadService } from "@/services/lead.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -13,7 +13,10 @@ export async function GET(request: NextRequest, context: RouteContext<"/api/lead
   try {
     const { user } = await requireApiUser(request);
     const { id } = await context.params;
-    const lead = await LeadService.getById(tenantFilter(user), id);
+    const lead = await LeadService.getById(
+      { ...tenantFilter(user), ...leadVisibilityFilter(user) },
+      id,
+    );
     return jsonSuccess({ lead });
   } catch (error) {
     return handleApiError(error);
@@ -29,7 +32,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/le
     const patch = updateLeadSchema.parse(body);
 
     if (patch.followUpAt !== undefined) {
-      if (!viaBearer) requirePermission(user, "LEADS_SET_FOLLOWUP");
+      requirePermission(user, "LEADS_SET_FOLLOWUP");
       const lead = await LeadService.setFollowUp({
         tenantClause: tenantFilter(user),
         id,
@@ -40,7 +43,7 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/le
     }
 
     if (!patch.status) throw validationError("status: only status or followUpAt changes are supported");
-    if (!viaBearer) requirePermission(user, "LEADS_UPDATE");
+    requirePermission(user, "LEADS_UPDATE");
 
     const lead = await LeadService.updateStatus({
       tenantClause: tenantFilter(user),
