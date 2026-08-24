@@ -1,6 +1,7 @@
 import {
   Building2,
   FileText,
+  GraduationCap,
   Inbox,
   KeyRound,
   LayoutDashboard,
@@ -26,6 +27,7 @@ const INSTITUTION_NAV: NavGroup[] = [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/enquiries", label: "Enquiries", icon: Inbox, prefix: true },
       { href: "/applications", label: "Applications", icon: FileText, prefix: true },
+      { href: "/results", label: "Results", icon: GraduationCap, prefix: true },
     ],
   },
   {
