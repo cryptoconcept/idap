@@ -68,6 +68,7 @@ function buildFilter(
     and.push({ $or: filter.$or as FilterQuery<LeadDoc>[] });
     delete filter.$or;
   }
+  if (filter.$and) and.unshift(...(filter.$and as FilterQuery<LeadDoc>[]));
 
   if (query.status) filter.status = query.status;
   if (query.source) filter.source = query.source;
@@ -242,15 +243,21 @@ export const LeadService = {
 
     let targetName: string | undefined;
     if (input.assignedTo) {
+      if (!Types.ObjectId.isValid(input.assignedTo)) {
+        throw validationError("assignedTo: not a valid id");
+      }
       const target = await User.findOne({
         _id: input.assignedTo,
         institutionId: existing.institutionId,
       })
-        .select("role name")
+        .select("role name active")
         .lean();
       if (!target) throw notFound("Enquiry not found");
       if (target.role !== "INSTITUTION_ADMIN" && target.role !== "COUNSELOR") {
         throw validationError("assignedTo: must be a counselor or admin at this institution");
+      }
+      if (target.active === false) {
+        throw validationError("assignedTo: this account is deactivated");
       }
       targetName = target.name;
     }

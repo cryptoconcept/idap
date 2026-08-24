@@ -246,6 +246,57 @@ describe("lead routes — permission enforcement", () => {
     expect(payload.lead.followUpAt).toContain("2026-09-01");
   });
 
+  it("rejects a malformed followUpAt with a validation error rather than reaching the service layer", async () => {
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "Test", phone: "9876543210" },
+      source: "API",
+    });
+    const counselor = await signIn("INS0001", "COUNSELOR", "c@infinityschool.edu.in");
+    await LeadService.assign({
+      tenantClause: { institutionId: "INS0001" },
+      id: lead.id,
+      assignedTo: String(counselor._id),
+      actor: { id: "x", name: "x" },
+    });
+
+    const response = await patchLead(
+      cookieRequest({
+        url: `http://localhost/api/leads/${lead.id}`,
+        body: { followUpAt: "not-a-date" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+    expect(response.status).toBe(400);
+
+    const row = await LeadService.getById({ institutionId: "INS0001" }, lead.id);
+    expect(row.followUpAt).toBeUndefined();
+  });
+
+  it("rejects a PATCH body that sets both status and followUpAt — the message says only one is supported", async () => {
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "Test", phone: "9876543210" },
+      source: "API",
+    });
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await patchLead(
+      cookieRequest({
+        url: `http://localhost/api/leads/${lead.id}`,
+        body: { status: "CONTACTED", followUpAt: "2026-09-01" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+    expect(response.status).toBe(400);
+
+    const row = await LeadService.getById({ institutionId: "INS0001" }, lead.id);
+    expect(row.status).toBe("NEW");
+    expect(row.followUpAt).toBeUndefined();
+  });
+
   it("a counselor's list only shows their own leads plus unassigned ones, over real HTTP", async () => {
     const counselorA = await makeUser("INS0001", "COUNSELOR", "a@infinityschool.edu.in");
     const counselorB = await makeUser("INS0001", "COUNSELOR", "b@infinityschool.edu.in");

@@ -31,6 +31,10 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/le
     const body = await request.json().catch(() => ({}));
     const patch = updateLeadSchema.parse(body);
 
+    if (patch.followUpAt !== undefined && patch.status !== undefined) {
+      throw validationError("Cannot update status and followUpAt in the same request");
+    }
+
     if (patch.followUpAt !== undefined) {
       requirePermission(user, "LEADS_SET_FOLLOWUP");
       const lead = await LeadService.setFollowUp({

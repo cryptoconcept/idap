@@ -6,7 +6,10 @@ import { toIso } from "@/lib/utils/serialize";
 import { InstitutionService } from "./institution.service";
 
 export const DashboardService = {
-  async getStats(tenantClause: Record<string, unknown>): Promise<DashboardStats> {
+  async getStats(
+    tenantClause: Record<string, unknown>,
+    leadVisibility: Record<string, unknown> = {},
+  ): Promise<DashboardStats> {
     await connectToDatabase();
 
     // `tenantFilter()` always hands back `{ institutionId }` for a tenant user
@@ -18,7 +21,7 @@ export const DashboardService = {
     const [leadCounts, applicationCounts, { profile, completion }, activeCredentials, mostRecentlyUsed] =
       await Promise.all([
         Lead.aggregate<{ _id: string; count: number }>([
-          { $match: tenantClause },
+          { $match: { ...tenantClause, ...leadVisibility } },
           { $group: { _id: "$status", count: { $sum: 1 } } },
         ]),
         Application.aggregate<{ _id: string; count: number }>([

@@ -3,11 +3,19 @@ import { NoteComposer } from "@/components/shared/note-composer";
 import { formatDateTime } from "@/lib/utils/format";
 import type { NoteDTO } from "@/services/note.service";
 
-export function NotesPanel({ notes, endpoint }: { notes: NoteDTO[]; endpoint: string }) {
+export function NotesPanel({
+  notes,
+  endpoint,
+  canAddNote = true,
+}: {
+  notes: NoteDTO[];
+  endpoint: string;
+  canAddNote?: boolean;
+}) {
   return (
     <Section title={`Notes (${notes.length})`}>
       <div className="space-y-4">
-        <NoteComposer endpoint={endpoint} />
+        {canAddNote ? <NoteComposer endpoint={endpoint} /> : null}
 
         {notes.length === 0 ? (
           <p className="py-2 text-sm text-muted-foreground">

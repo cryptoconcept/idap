@@ -2,6 +2,7 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { LeadService } from "@/services/lead.service";
+import { StaffService } from "@/services/staff.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -70,6 +71,34 @@ describe("LeadService.assign", () => {
         actor,
       }),
     ).rejects.toThrow(/counselor or admin/i);
+  });
+
+  it("returns VALIDATION_ERROR for a malformed assignedTo id, not an unhandled cast error", async () => {
+    const lead = await makeLead("INS0001");
+
+    await expect(
+      LeadService.assign({
+        tenantClause: { institutionId: "INS0001" },
+        id: lead.id,
+        assignedTo: "not-a-valid-id",
+        actor,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("refuses to assign a lead to a deactivated counselor", async () => {
+    const counselor = await makeUser("INS0001", "COUNSELOR", "inactive@infinityschool.edu.in");
+    await StaffService.setActive("INS0001", String(counselor._id), false);
+    const lead = await makeLead("INS0001");
+
+    await expect(
+      LeadService.assign({
+        tenantClause: { institutionId: "INS0001" },
+        id: lead.id,
+        assignedTo: String(counselor._id),
+        actor,
+      }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
   it("returns NOT_FOUND for a target user in a different institution", async () => {

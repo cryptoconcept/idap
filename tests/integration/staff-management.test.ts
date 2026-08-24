@@ -59,4 +59,10 @@ describe("StaffService", () => {
       code: "NOT_FOUND",
     });
   });
+
+  it("returns VALIDATION_ERROR for a malformed staff id, not an unhandled cast error", async () => {
+    await expect(StaffService.setActive("INS0001", "not-a-valid-id", false)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
 });

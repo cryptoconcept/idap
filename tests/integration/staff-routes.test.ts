@@ -54,7 +54,7 @@ describe("staff routes", () => {
         origin: "http://localhost",
       }),
     );
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(201);
   });
 
   it("a Counselor cannot create a staff account — 403", async () => {

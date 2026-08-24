@@ -12,11 +12,11 @@ export async function GET(request: NextRequest) {
   try {
     const { user } = await requireApiUser(request);
     const clause = tenantFilter(user);
-    const leadVisibility = { ...clause, ...leadVisibilityFilter(user) };
+    const visibility = leadVisibilityFilter(user);
 
     const [stats, recentLeads, recentApplications] = await Promise.all([
-      DashboardService.getStats(clause),
-      LeadService.recent(leadVisibility, 5),
+      DashboardService.getStats(clause, visibility),
+      LeadService.recent({ ...clause, ...visibility }, 5),
       ApplicationService.recent(clause, 5),
     ]);
 

@@ -3,6 +3,7 @@ import { createLeadSchema } from "@/lib/validation/lead";
 import { createApplicationSchema } from "@/lib/validation/application";
 import { createApiClientSchema } from "@/lib/validation/api-client";
 import { loginSchema } from "@/lib/validation/user";
+import { createStaffSchema } from "@/lib/validation/staff";
 
 const TAB = String.fromCharCode(9);
 const NEWLINE = String.fromCharCode(10);
@@ -165,6 +166,21 @@ describe("createApiClientSchema", () => {
       institutionId: "INS9999",
     }) as Record<string, unknown>;
     expect(parsed.institutionId).toBeUndefined();
+  });
+});
+
+describe("createStaffSchema", () => {
+  it("rejects a password under 10 characters", () => {
+    // 9 characters — long enough to have passed the old 8-character floor,
+    // short enough to be rejected by the current 10-character one. A shorter
+    // fixture would fail either floor and wouldn't prove which one is enforced.
+    const result = createStaffSchema.safeParse({
+      name: "Priya Counselor",
+      email: "priya@infinityschool.edu.in",
+      password: "Shortpw12",
+      role: "COUNSELOR",
+    });
+    expect(result.success).toBe(false);
   });
 });
 

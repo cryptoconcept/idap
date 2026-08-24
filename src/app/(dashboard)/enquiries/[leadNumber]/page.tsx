@@ -146,6 +146,10 @@ export default async function EnquiryDetailPage(props: PageProps<"/enquiries/[le
           <NotesPanel
             notes={notes}
             endpoint={`/api/leads/${encodeURIComponent(lead.leadNumber)}/notes`}
+            canAddNote={
+              hasPermission(user, "LEADS_UPDATE") &&
+              (user.role === "INSTITUTION_ADMIN" || lead.assignedTo === user.id)
+            }
           />
         </div>
 

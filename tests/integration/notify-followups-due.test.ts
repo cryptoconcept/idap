@@ -62,7 +62,6 @@ describe("NotificationService.notifyFollowUpsDue", () => {
 
     await NotificationService.notifyFollowUpsDue({
       userId: String(counselor._id),
-      institutionId: "INS0001",
       count: 3,
     });
 
@@ -78,7 +77,6 @@ describe("NotificationService.notifyFollowUpsDue", () => {
 
     await NotificationService.notifyFollowUpsDue({
       userId: String(counselor._id),
-      institutionId: "INS0001",
       count: 1,
     });
 

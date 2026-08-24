@@ -1,8 +1,9 @@
 import "server-only";
+import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { User } from "@/models";
 import { hashPassword } from "@/lib/security/password";
-import { AppError, notFound } from "@/lib/api/errors";
+import { AppError, notFound, validationError } from "@/lib/api/errors";
 import type { CreateStaffInput } from "@/lib/validation/staff";
 
 export type StaffDTO = {
@@ -65,6 +66,9 @@ export const StaffService = {
 
   async setActive(institutionId: string, id: string, active: boolean): Promise<StaffDTO> {
     await connectToDatabase();
+    if (!Types.ObjectId.isValid(id)) {
+      throw validationError("id: not a valid id");
+    }
     const updated = await User.findOneAndUpdate(
       { _id: id, institutionId, role: { $in: ["COUNSELOR", "FRONT_DESK"] } },
       { $set: { active } },

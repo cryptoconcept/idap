@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
     const input = createStaffSchema.parse(await request.json().catch(() => ({})));
 
     const staff = await StaffService.create(institution.institutionId, input);
-    return jsonSuccess({ staff });
+    return jsonSuccess({ staff }, { status: 201 });
   } catch (error) {
     return handleApiError(error);
   }

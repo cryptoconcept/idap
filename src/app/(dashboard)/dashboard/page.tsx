@@ -42,10 +42,10 @@ export default async function DashboardPage(props: PageProps<"/dashboard">) {
   const tab = TABS.some((entry) => entry.value === tabParam) ? tabParam : "overview";
 
   const clause = tenantFilter(user);
-  const leadVisibility = { ...clause, ...leadVisibilityFilter(user) };
+  const visibility = leadVisibilityFilter(user);
   const [stats, recentLeads, recentApplications] = await Promise.all([
-    DashboardService.getStats(clause),
-    LeadService.recent(leadVisibility, tab === "enquiries" ? 10 : 5),
+    DashboardService.getStats(clause, visibility),
+    LeadService.recent({ ...clause, ...visibility }, tab === "enquiries" ? 10 : 5),
     ApplicationService.recent(clause, tab === "applications" ? 10 : 5),
   ]);
 

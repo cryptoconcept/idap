@@ -1,8 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
-import { makeInstitution, makeProfiledInstitution, makeApiClient } from "../helpers/factories";
+import { makeInstitution, makeProfiledInstitution, makeApiClient, makeUser } from "../helpers/factories";
 import { Institution } from "@/models";
 import { DashboardService } from "@/services/dashboard.service";
+import { LeadService } from "@/services/lead.service";
+import { leadVisibilityFilter } from "@/lib/tenant/permissions";
 
 describe("dashboard profile + integration summary", () => {
   beforeAll(async () => {
@@ -49,5 +51,49 @@ describe("dashboard profile + integration summary", () => {
     const stats = await DashboardService.getStats({ institutionId: "INS0001" });
 
     expect(stats.integration.activeCredentials).toBe(1);
+  });
+
+  it("scopes enquiry counts to a Counselor's own visibility, not the whole institution", async () => {
+    await makeInstitution("INS0001");
+    const counselorA = await makeUser("INS0001", "COUNSELOR", "a@infinityschool.edu.in");
+    const counselorB = await makeUser("INS0001", "COUNSELOR", "b@infinityschool.edu.in");
+
+    const leadA = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "A's lead", phone: "9876543210" },
+      source: "API",
+    });
+    const leadB = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "B's lead", phone: "9876543211" },
+      source: "API",
+    });
+    await LeadService.assign({
+      tenantClause: { institutionId: "INS0001" },
+      id: leadA.id,
+      assignedTo: String(counselorA._id),
+      actor: { id: String(counselorA._id), name: counselorA.name },
+    });
+    await LeadService.assign({
+      tenantClause: { institutionId: "INS0001" },
+      id: leadB.id,
+      assignedTo: String(counselorB._id),
+      actor: { id: String(counselorB._id), name: counselorB.name },
+    });
+
+    const counselorAUser = {
+      id: String(counselorA._id),
+      name: "A",
+      email: "a@infinityschool.edu.in",
+      role: "COUNSELOR" as const,
+      institutionId: "INS0001",
+    };
+
+    const stats = await DashboardService.getStats(
+      { institutionId: "INS0001" },
+      leadVisibilityFilter(counselorAUser),
+    );
+
+    expect(stats.totalEnquiries).toBe(1);
   });
 });

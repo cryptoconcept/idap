@@ -30,7 +30,12 @@ export const updateLeadSchema = z
     classInterested: optionalText(80),
     parentName: optionalText(120),
     email: optionalEmailSchema,
-    followUpAt: z.string().trim().nullable().optional(),
+    followUpAt: z
+      .string()
+      .trim()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "followUpAt must be YYYY-MM-DD")
+      .nullable()
+      .optional(),
   })
   .refine((value) => Object.values(value).some((v) => v !== undefined), {
     message: "Nothing to update",

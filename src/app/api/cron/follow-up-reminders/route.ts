@@ -40,20 +40,26 @@ export async function GET(request: Request) {
     byCounselor.set(key, entry);
   }
 
+  const notifiedCounselors = new Set<string>();
   for (const [counselorId, entry] of byCounselor) {
-    await NotificationService.notifyFollowUpsDue({
-      userId: counselorId,
-      institutionId: entry.institutionId,
-      count: entry.leadIds.length,
-    });
+    try {
+      await NotificationService.notifyFollowUpsDue({
+        userId: counselorId,
+        count: entry.leadIds.length,
+      });
+      notifiedCounselors.add(counselorId);
+    } catch (error) {
+      console.error(`[cron] follow-up reminder push failed for counselor ${counselorId}`, error);
+    }
   }
 
-  if (due.length > 0) {
+  const notifiedLeads = due.filter((lead) => notifiedCounselors.has(String(lead.assignedTo)));
+  if (notifiedLeads.length > 0) {
     await Lead.updateMany(
-      { _id: { $in: due.map((lead) => lead._id) } },
+      { _id: { $in: notifiedLeads.map((lead) => lead._id) } },
       { $set: { followUpNotifiedAt: new Date() } },
     );
   }
 
-  return jsonSuccess({ notified: byCounselor.size, leads: due.length });
+  return jsonSuccess({ notified: notifiedCounselors.size, leads: notifiedLeads.length });
 }

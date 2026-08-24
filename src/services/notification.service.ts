@@ -44,7 +44,7 @@ export const NotificationService = {
     }));
   },
 
-  async notifyFollowUpsDue(input: { userId: string; institutionId: string; count: number }) {
+  async notifyFollowUpsDue(input: { userId: string; count: number }) {
     const devices = await DeviceService.forUser(input.userId);
     if (devices.length === 0) return;
 

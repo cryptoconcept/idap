@@ -170,6 +170,53 @@ describe("GET /api/cron/follow-up-reminders", () => {
     expect(sendPush).not.toHaveBeenCalled();
   });
 
+  it("does not stamp followUpNotifiedAt for a counselor whose push failed, but does for one whose push succeeded", async () => {
+    const counselorA = await makeUser("INS0001", "COUNSELOR", "a@infinityschool.edu.in");
+    const counselorB = await makeUser("INS0001", "COUNSELOR", "b@infinityschool.edu.in");
+    const { DeviceService } = await import("@/services/device.service");
+    await DeviceService.register({
+      userId: String(counselorA._id),
+      institutionId: "INS0001",
+      deviceId: "d-a",
+      pushToken: "token-a",
+      platform: "android",
+    });
+    await DeviceService.register({
+      userId: String(counselorB._id),
+      institutionId: "INS0001",
+      deviceId: "d-b",
+      pushToken: "token-b",
+      platform: "android",
+    });
+
+    const leadA = await makeLead("INS0001");
+    const leadB = await makeLead("INS0001");
+    const past = new Date("2020-01-01T00:00:00.000Z");
+    await Lead.updateOne({ _id: leadA.id }, { $set: { assignedTo: String(counselorA._id), followUpAt: past } });
+    await Lead.updateOne({ _id: leadB.id }, { $set: { assignedTo: String(counselorB._id), followUpAt: past } });
+
+    // Registering devices before creating the leads means each createLead call
+    // fires its own "new enquiry" push — reset the mock so only the cron's own
+    // sends are what decide success/failure below, then make sendPush reject
+    // only for counselor A's token, regardless of loop order.
+    sendPush.mockReset();
+    sendPush.mockImplementation(async (messages: { pushToken: string }[]) => {
+      if (messages.some((message) => message.pushToken === "token-a")) {
+        throw new Error("push failed");
+      }
+      return { deadTokens: [] };
+    });
+
+    const { GET } = await import("@/app/api/cron/follow-up-reminders/route");
+    const response = await GET(cronRequest("test-secret"));
+    expect(response.status).toBe(200);
+
+    const rowA = await Lead.findById(leadA.id).lean();
+    const rowB = await Lead.findById(leadB.id).lean();
+    expect(rowA?.followUpNotifiedAt).toBeUndefined();
+    expect(rowB?.followUpNotifiedAt).toBeDefined();
+  });
+
   it("does not notify a lead whose follow-up is in the future", async () => {
     const counselor = await makeUser("INS0001", "COUNSELOR", "c@infinityschool.edu.in");
     const { DeviceService } = await import("@/services/device.service");
