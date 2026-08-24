@@ -7,7 +7,7 @@ import { generateInstitutionId, reserveInstitutionId } from "./sequence.service"
 import { ActivityService } from "./activity.service";
 import { allocateSlug } from "./slug.service";
 import { hashPassword } from "@/lib/security/password";
-import { AppError, notFound, validationError } from "@/lib/api/errors";
+import { AppError, notFound } from "@/lib/api/errors";
 import { escapeRegex, requiredIso, toIso } from "@/lib/utils/serialize";
 import type { InstitutionDTO, Paginated, ProfileDTO } from "@/lib/types";
 import {
@@ -28,95 +28,15 @@ import type {
   updateInstitutionSchema,
   updateProfileSchema,
 } from "@/lib/validation/institution";
+import { validateImage } from "@/lib/media/image";
+import { isOwnedMediaUrl } from "@/lib/media/ownership";
 
 type InstitutionRow = InstitutionDoc;
 
 /** Blocks whose fields are merged one level deep, by dotted `$set` path. */
 const PROFILE_BLOCK_KEYS = ["contact", "geo", "academic", "management", "social"] as const;
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
-/**
- * True only when `url` names a public media object this service minted for this
- * institution. Every upload is stored under the key `media/<institutionId>/…`,
- * and both adapters keep that path in the handle they hand back: the local
- * adapter returns `/api/media/media/<institutionId>/…`, and Vercel Blob returns
- * a blob URL whose pathname is `/media/<institutionId>/<id>-<random><ext>`.
- *
- * This is a provenance check, not a cosmetic one. `logoUrl` is free text on the
- * profile PATCH, so an institution can point its own field at another
- * institution's public media URL — which is observable on any published
- * profile. A cleanup delete that trusted the stored URL would then delete a
- * different tenant's object out of the shared store, because neither adapter's
- * `deletePublic` is tenant-scoped.
- *
- * Only the path is matched: a query string or fragment can carry any substring.
- * A percent-encoded or traversing path is refused outright — a key this service
- * minted contains neither.
- */
-export function isOwnedMediaUrl(url: string | null | undefined, institutionId: string): boolean {
-  if (!url) return false;
-
-  let path: string;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
-    try {
-      path = new URL(url).pathname;
-    } catch {
-      return false;
-    }
-  } else {
-    path = url.split(/[?#]/, 1)[0] ?? "";
-  }
-
-  if (path.includes("%") || path.includes("..")) return false;
-  return path.includes(`/media/${institutionId}/`);
-}
-
-const IMAGE_EXTENSIONS: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-};
-
-/** Magic-number check so a renamed executable cannot pose as an allowed image type. */
-function sniffImage(bytes: Buffer, contentType: string): boolean {
-  if (bytes.byteLength < 4) return false;
-  if (contentType === "image/png") {
-    return bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
-  }
-  if (contentType === "image/jpeg") {
-    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-  }
-  if (contentType === "image/webp") {
-    return (
-      bytes.subarray(0, 4).toString("latin1") === "RIFF" &&
-      bytes.subarray(8, 12).toString("latin1") === "WEBP"
-    );
-  }
-  return false;
-}
-
-/**
- * Upload guard for institution media: JPEG/PNG/WebP only (no PDF branch — this
- * is never a document), size bounded, and the sniff must agree with the
- * declared content type.
- */
-function validateImage(input: { contentType: string; bytes: Buffer }): { extension: string } {
-  const extension = IMAGE_EXTENSIONS[input.contentType];
-  if (!extension) {
-    throw validationError("file: only JPG, PNG and WEBP images can be uploaded");
-  }
-  if (input.bytes.byteLength <= 0) {
-    throw validationError("file: the file is empty");
-  }
-  if (input.bytes.byteLength > MAX_IMAGE_BYTES) {
-    throw validationError("file: files must be 5 MB or smaller");
-  }
-  if (!sniffImage(input.bytes, input.contentType)) {
-    throw validationError("file: the file contents do not match the declared file type");
-  }
-  return { extension };
-}
+export { isOwnedMediaUrl };
 
 /**
  * Builds the dotted-path update from a parsed profile patch. Block fields
