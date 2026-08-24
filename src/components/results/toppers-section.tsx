@@ -1,0 +1,322 @@
+"use client";
+
+import Image from "next/image";
+import { useEffect, useRef, useState } from "react";
+import { useFieldArray, useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { toast } from "sonner";
+import { ImagePlus, Plus, X } from "lucide-react";
+import type { z } from "zod";
+import { updateResultSchema } from "@/lib/validation/result";
+import { RESULT_MAX_TOPPERS } from "@/lib/constants";
+import type { ResultDTO } from "@/services/result.service";
+import { Button } from "@/components/ui/button";
+import {
+  FieldGroup,
+  reportSectionErrors,
+  SectionForm,
+  TextField,
+} from "@/components/profile/section-form";
+// The client-side size and type checks are the profile uploader's, not a second
+// copy of the same limits — `checkImageFile` is what enforces MAX_IMAGE_BYTES.
+import { ACCEPT_ATTRIBUTE, checkImageFile } from "@/components/profile/media-upload";
+import type { ResultSectionProps } from "@/components/results/result-editor";
+
+type Values = z.input<typeof updateResultSchema>;
+type Parsed = z.output<typeof updateResultSchema>;
+type Topper = NonNullable<ResultDTO["toppers"]>[number];
+
+/** An empty number input must stay absent — the schema takes a number, not NaN. */
+const asNumber = (value: unknown) =>
+  value === "" || value === null || value === undefined ? undefined : Number(value);
+
+/**
+ * The students named on the public API — and the only place consent is
+ * recorded. A topper whose consent is not ticked blocks publication, and
+ * unticking it after publication takes that topper off the API on the next
+ * read without the cycle itself coming down.
+ */
+export function ToppersSection({
+  result,
+  onSave,
+  onDirtyChange,
+  onResult,
+}: ResultSectionProps & { onResult: (result: ResultDTO) => void }) {
+  const {
+    register,
+    control,
+    handleSubmit,
+    getValues,
+    reset,
+    formState: { errors, isSubmitting, isDirty },
+  } = useForm<Values, unknown, Parsed>({
+    resolver: zodResolver(updateResultSchema),
+    defaultValues: {
+      toppers: (result.toppers ?? []).map((topper) => ({
+        name: topper.name,
+        percentage: topper.percentage,
+        rank: topper.rank,
+        note: topper.note ?? "",
+        consentAcknowledged: topper.consentAcknowledged,
+      })),
+    },
+  });
+
+  const { fields, append, remove } = useFieldArray({ control, name: "toppers" });
+
+  useEffect(() => {
+    onDirtyChange(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  async function onSubmit(values: Parsed) {
+    if (await onSave(values as Record<string, unknown>)) reset(getValues());
+  }
+
+  return (
+    <SectionForm
+      title="Toppers"
+      description="Names, scores and photographs. Nothing here is published without the consent tick beside it."
+      onSubmit={handleSubmit(onSubmit, reportSectionErrors)}
+      isSubmitting={isSubmitting}
+      isDirty={isDirty}
+    >
+      <FieldGroup>
+        {fields.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+            No toppers listed yet. A cycle can be published without any.
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {fields.map((entry, index) => {
+              // Only trustworthy while the form matches the server: an unsaved
+              // add or remove shifts the rows out of step with the stored ids.
+              const saved: Topper | undefined = isDirty ? undefined : result.toppers?.[index];
+
+              return (
+                <li key={entry.id} className="space-y-3 rounded-lg border border-border p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="eyebrow">Topper {index + 1}</p>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Remove topper ${index + 1}`}
+                      onClick={() => remove(index)}
+                    >
+                      <X className="size-3.5" />
+                    </Button>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_100px_80px]">
+                    <TextField
+                      id={`toppers-name-${index}`}
+                      label="Name"
+                      placeholder="Priya S"
+                      maxLength={120}
+                      error={errors.toppers?.[index]?.name?.message}
+                      {...register(`toppers.${index}.name`)}
+                    />
+                    <TextField
+                      id={`toppers-percentage-${index}`}
+                      label="Score %"
+                      type="number"
+                      step="any"
+                      inputMode="decimal"
+                      error={errors.toppers?.[index]?.percentage?.message}
+                      {...register(`toppers.${index}.percentage`, { setValueAs: asNumber })}
+                    />
+                    <TextField
+                      id={`toppers-rank-${index}`}
+                      label="Rank"
+                      type="number"
+                      inputMode="numeric"
+                      error={errors.toppers?.[index]?.rank?.message}
+                      {...register(`toppers.${index}.rank`, { setValueAs: asNumber })}
+                    />
+                  </div>
+
+                  <TextField
+                    id={`toppers-note-${index}`}
+                    label="Note"
+                    placeholder="School topper, district rank 3"
+                    maxLength={200}
+                    error={errors.toppers?.[index]?.note?.message}
+                    {...register(`toppers.${index}.note`)}
+                  />
+
+                  {saved ? (
+                    <TopperPhoto
+                      resultId={result.id}
+                      topper={saved}
+                      onResult={onResult}
+                      position={index + 1}
+                    />
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Save this section to add a photo.
+                    </p>
+                  )}
+
+                  <label className="flex items-start gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5"
+                      {...register(`toppers.${index}.consentAcknowledged`)}
+                    />
+                    <span>
+                      We hold this student&apos;s consent (or their guardian&apos;s) to publish
+                      their name, score and photograph.
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={fields.length >= RESULT_MAX_TOPPERS}
+            onClick={() =>
+              append({
+                name: "",
+                // Blank rather than a prefilled 0 — an untouched 0 would publish
+                // as a real score. The resolver refuses it until it is typed.
+                percentage: undefined as unknown as number,
+                note: "",
+                consentAcknowledged: false,
+              })
+            }
+          >
+            <Plus className="size-3.5" />
+            Add topper
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {fields.length} of {RESULT_MAX_TOPPERS} used.
+          </p>
+        </div>
+
+        {errors.toppers?.message ? (
+          <p role="alert" className="text-xs text-foreground">
+            {errors.toppers.message}
+          </p>
+        ) : null}
+      </FieldGroup>
+    </SectionForm>
+  );
+}
+
+/**
+ * One topper's photograph. Uploaded straight away against the saved topper's
+ * id, so it is never part of Save section — which is also why it only appears
+ * once the row exists on the server.
+ */
+function TopperPhoto({
+  resultId,
+  topper,
+  onResult,
+  position,
+}: {
+  resultId: string;
+  topper: Topper;
+  onResult: (result: ResultDTO) => void;
+  position: number;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const endpoint = `/api/settings/results/${resultId}/toppers/${topper.id}/photo`;
+  const label = topper.name.trim() || `topper ${position}`;
+
+  async function send(init: RequestInit, success: string) {
+    setBusy(true);
+    try {
+      const response = await fetch(endpoint, init);
+      const payload = await response.json();
+
+      if (!response.ok || !payload.success) {
+        toast.error(payload?.error?.message ?? "Could not change the photo. Please try again.");
+        return;
+      }
+
+      toast.success(success);
+      onResult(payload.result as ResultDTO);
+    } catch {
+      toast.error("Could not reach the server. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function upload(file: File | undefined) {
+    if (!file) return;
+    // Pre-checked before anything leaves the browser; the server checks again.
+    const problem = checkImageFile(file);
+    if (problem) {
+      toast.error(problem);
+      return;
+    }
+
+    const body = new FormData();
+    body.append("file", file);
+    await send({ method: "POST", body }, `Photo updated for ${label}`);
+  }
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="relative size-14 shrink-0 overflow-hidden rounded-lg border border-border bg-muted/40">
+        {topper.photoUrl ? (
+          <Image
+            src={topper.photoUrl}
+            alt={`${label} photograph`}
+            fill
+            unoptimized
+            sizes="56px"
+            className="object-cover"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-muted-foreground">
+            <ImagePlus className="size-4" aria-hidden />
+          </div>
+        )}
+      </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPT_ATTRIBUTE}
+        className="hidden"
+        onChange={(event) => {
+          void upload(event.target.files?.[0]);
+          event.target.value = "";
+        }}
+      />
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => inputRef.current?.click()}
+        >
+          {busy ? "Working…" : topper.photoUrl ? "Replace photo" : "Upload photo"}
+        </Button>
+        {topper.photoUrl ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={() => void send({ method: "DELETE" }, `Photo removed for ${label}`)}
+          >
+            Remove
+          </Button>
+        ) : null}
+        <p className="text-xs text-muted-foreground">JPG, PNG or WEBP, up to 5 MB.</p>
+      </div>
+    </div>
+  );
+}
