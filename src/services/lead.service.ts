@@ -68,7 +68,10 @@ function buildFilter(
     and.push({ $or: filter.$or as FilterQuery<LeadDoc>[] });
     delete filter.$or;
   }
-  if (filter.$and) and.unshift(...(filter.$and as FilterQuery<LeadDoc>[]));
+  if (filter.$and) {
+    and.unshift(...(filter.$and as FilterQuery<LeadDoc>[]));
+    delete filter.$and;
+  }
 
   if (query.status) filter.status = query.status;
   if (query.source) filter.source = query.source;

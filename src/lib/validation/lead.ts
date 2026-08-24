@@ -50,7 +50,7 @@ export const leadQuerySchema = z.object({
   q: z.string().trim().max(120).optional(),
   status: z.enum(LEAD_STATUSES).optional(),
   source: z.enum(SOURCES).optional(),
-  assignedTo: z.string().trim().optional(),
+  assignedTo: z.string().trim().max(64).optional(),
   from: z.string().trim().optional(),
   to: z.string().trim().optional(),
   page: z.coerce.number().int().min(1).default(1),

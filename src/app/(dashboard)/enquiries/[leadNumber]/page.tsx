@@ -92,7 +92,8 @@ export default async function EnquiryDetailPage(props: PageProps<"/enquiries/[le
               <Field
                 label="Assigned to"
                 value={
-                  hasPermission(user, "LEADS_ASSIGN") ? (
+                  hasPermission(user, "LEADS_ASSIGN") &&
+                  (!lead.assignedTo || assignees.some((person) => person.id === lead.assignedTo)) ? (
                     <LeadAssignControl leadId={lead.id} assignedTo={lead.assignedTo} assignees={assignees} />
                   ) : (
                     lead.assignedToName ?? "Unassigned"

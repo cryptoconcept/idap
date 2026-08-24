@@ -79,7 +79,8 @@ export function LeadsTable({
                 </TableCell>
                 {showAssignee ? (
                   <TableCell className="text-muted-foreground">
-                    {assignees ? (
+                    {assignees &&
+                    (!lead.assignedTo || assignees.some((person) => person.id === lead.assignedTo)) ? (
                       <LeadAssignControl
                         leadId={lead.id}
                         assignedTo={lead.assignedTo}
