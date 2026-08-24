@@ -5,12 +5,15 @@ import { getCurrentInstitution } from "@/lib/tenant";
 import { INSTITUTION_TYPE_LABELS, type InstitutionType } from "@/lib/constants";
 import { PageHeader } from "@/components/shared/page-header";
 import { Field, FieldGrid, Section } from "@/components/shared/definition-list";
-import { InstitutionProfileForm } from "@/components/institutions/institution-profile-form";
 import { Ref } from "@/components/shared/ref";
 
 export const metadata: Metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
 
+/**
+ * Institution profile fields (name, contact, branding, and beyond) are edited
+ * at /profile — this page is account-only so the two never overlap.
+ */
 export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
@@ -23,14 +26,10 @@ export default async function SettingsPage() {
     <>
       <PageHeader
         title="Settings"
-        description="Your institution profile and the account you are signed in with."
+        description="The account you are signed in with."
       />
 
       <div className="space-y-5">
-        <Section title="Institution profile">
-          <InstitutionProfileForm institution={institution} />
-        </Section>
-
         <Section title="Account">
           <FieldGrid columns={3}>
             <Field label="Signed in as" value={user.name} />

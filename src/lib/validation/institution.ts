@@ -44,12 +44,6 @@ export const updateInstitutionSchema = z.object({
   active: z.boolean().optional(),
 });
 
-/** Fields an institution admin may change on their own profile. */
-export const updateInstitutionProfileSchema = z.object({
-  institutionName: requiredText("Institution name", 160).optional(),
-  ...brandingFields,
-});
-
 const CURRENT_YEAR = 2200; // upper bound; lower bound 1800
 
 const contactBlockSchema = z.object({
