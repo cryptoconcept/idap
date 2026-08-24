@@ -20,14 +20,14 @@ served, and records two limitations honestly rather than papering over them.
                     Institution  ◀── the single master record
                     institutionId: INS0001
                            │
-        ┌──────────────────┼──────────────────┐
-        │                  │                  │
-     Profile          Lead Network        (future modules)
-   identity           enquiries           results
-   contact            applications        scholarships
-   address            documents           announcements
-   academic           notes               events
-   management         activity            careers
+        ┌──────────────────┼──────────────────┬──────────────────┐
+        │                  │                  │                  │
+     Profile          Lead Network         Results          (future modules)
+   identity           enquiries         board, level,        scholarships
+   contact            applications      stream, cycle        announcements
+   address            documents         bands, toppers       events
+   academic           notes             publish lifecycle    careers
+   management         activity
    facilities
    social
    gallery
@@ -42,6 +42,25 @@ served, and records two limitations honestly rather than papering over them.
   School website      PassPercent      Other authorised
   (public, no key)    (key + secret)   consumers
 ```
+
+**Results is a separate collection, not an embedded block.** Unlike Profile — which is a set of
+fields layered directly onto the `Institution` document — `Result` (`src/models/Result.ts`) is its
+own top-level collection, keyed by `institutionId` the same way `Lead`, `Application`, `Document`
+and every other tenant-scoped model already are. Three reasons, not one:
+
+- **Independent publish lifecycle.** A result cycle moves through `DRAFT → PUBLISHED → ARCHIVED`
+  on its own, per cycle — publishing the Class 10 results does not touch Class 12 Science's status,
+  and neither one touches the institution's own `profileStatus`. An embedded array on `Institution`
+  has no natural place to hang a per-item lifecycle without hand-rolling one.
+- **Unbounded growth.** An institution accumulates one result cycle per board/level/stream/year,
+  indefinitely, for as long as it exists. Embedding that inside the `Institution` document would
+  make one of the platform's most frequently read documents grow without bound, unlike `gallery` or
+  `facilities`, which are small and bounded by design.
+- **Cross-institution querying later.** `ResultSchema` carries a reserved index —
+  `{ status: 1, board: 1, level: 1, academicYear: -1 }` — that serves no query yet but exists so a
+  future cross-institution discovery API (leaderboards, board-wide comparisons) is a purely additive
+  read against the existing collection. That query shape is not expressible at all against data
+  embedded per-institution without scanning every `Institution` document.
 
 `Institution` (`src/models/Institution.ts`) is already the single master record in this
 codebase: `institutionId` is unique, indexed, and carried by every other tenant-scoped

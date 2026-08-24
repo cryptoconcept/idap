@@ -14,6 +14,7 @@ import { Lead } from "../src/models/Lead";
 import { Application } from "../src/models/Application";
 import { ApiClient } from "../src/models/ApiClient";
 import { Counter } from "../src/models/Counter";
+import { Result } from "../src/models/Result";
 import { hashPassword } from "../src/lib/security/password";
 import { generateKeyId, generateSecret, hashSecret } from "../src/lib/security/tokens";
 
@@ -138,6 +139,42 @@ async function ensureApiClient(institutionId: string, name: string) {
     Secret        ${secret}
     Bearer token  ${keyId}.${secret}
 `);
+}
+
+async function ensureResult(input: {
+  institutionId: string;
+  board: string;
+  level: string;
+  stream: string | null;
+  academicYear: string;
+  appeared: number;
+  passed: number;
+  averageScore?: number;
+  highestScore?: number;
+  bands?: Array<{ label: string; minPercentage: number; maxPercentage: number; count: number }>;
+  toppers?: Array<{
+    name: string;
+    percentage: number;
+    rank?: number;
+    note?: string;
+    consentAcknowledged: boolean;
+  }>;
+  status: "DRAFT" | "PUBLISHED" | "ARCHIVED";
+  publishedAt?: Date;
+}) {
+  const { institutionId, board, level, stream, academicYear } = input;
+  const label = `${institutionId} ${board} ${level}${stream ? ` ${stream}` : ""} ${academicYear}`;
+
+  // Matched against the schema's unique cycle index, not a synthetic key —
+  // the same tuple that would trip the index on a duplicate insert.
+  const existing = await Result.findOne({ institutionId, board, level, stream, academicYear }).lean();
+  if (existing) {
+    console.log(`  · ${label} already exists — skipped`);
+    return;
+  }
+
+  await Result.create(input);
+  console.log(`  · created ${label} (${input.status.toLowerCase()})`);
 }
 
 async function seedDemoRecords(institutionId: string) {
@@ -292,6 +329,52 @@ async function main() {
     password: "Intelligent!2026",
     role: "INSTITUTION_ADMIN",
     institutionId: "INS0002",
+  });
+
+  console.log("\nResults");
+  await ensureResult({
+    institutionId: "INS0001",
+    board: "CBSE",
+    level: "CLASS_10",
+    stream: null,
+    academicYear: "2025-26",
+    appeared: 142,
+    passed: 142,
+    averageScore: 82.4,
+    highestScore: 98.6,
+    bands: [
+      { label: "90% and above", minPercentage: 90, maxPercentage: 100, count: 38 },
+      { label: "75% to 89%", minPercentage: 75, maxPercentage: 89, count: 67 },
+      { label: "60% to 74%", minPercentage: 60, maxPercentage: 74, count: 31 },
+    ],
+    toppers: [
+      { name: "Priya Sharma", percentage: 98.6, rank: 1, note: "School topper", consentAcknowledged: true },
+      { name: "Rahul Kumar", percentage: 97.8, rank: 2, consentAcknowledged: true },
+      // Deliberately unconsented: proves the public API omits them.
+      { name: "Vikram Nair", percentage: 96.4, rank: 3, consentAcknowledged: false },
+    ],
+    status: "PUBLISHED",
+    publishedAt: new Date("2026-05-12T00:00:00.000Z"),
+  });
+  await ensureResult({
+    institutionId: "INS0001",
+    board: "CBSE",
+    level: "CLASS_12",
+    stream: "SCIENCE",
+    academicYear: "2025-26",
+    appeared: 96,
+    passed: 95,
+    averageScore: 79.8,
+    highestScore: 97.2,
+    bands: [
+      { label: "90% and above", minPercentage: 90, maxPercentage: 100, count: 21 },
+      { label: "75% to 89%", minPercentage: 75, maxPercentage: 89, count: 44 },
+    ],
+    toppers: [
+      { name: "Ananya Rao", percentage: 97.2, rank: 1, note: "School topper", consentAcknowledged: true },
+    ],
+    status: "PUBLISHED",
+    publishedAt: new Date("2026-05-20T00:00:00.000Z"),
   });
 
   console.log("\nAPI credentials");

@@ -223,6 +223,33 @@ Full endpoint reference, request/response shapes and curl examples:
 public projection rule, the slug contract, the storage split, and two known limitations recorded
 honestly rather than glossed over: [`docs/architecture/institution-master-identity.md`](docs/architecture/institution-master-identity.md).
 
+### Results
+
+Exam results (board, level, stream, pass percentage, score bands and toppers) are a separate,
+independently published module under the same `institutionId` — an institution can have its
+profile published while a results cycle is still in draft, or vice versa.
+
+- Institute admins manage cycles at **Results** in the dashboard (`/results`), and publish each
+  one explicitly — a `DRAFT` cycle is never visible on the public endpoints below.
+- Anyone, with no credentials, can read an institution's **published** cycles:
+
+  ```bash
+  curl https://your-domain.com/api/public/INS0001/results
+  curl https://your-domain.com/api/public/institutions/infinity-school-of-excellence-mysore/results
+  ```
+
+  Both accept the same optional query filters — `?academicYear=2025-26`, `?level=CLASS_10`,
+  `?board=CBSE` — and both are cached for five minutes (`Cache-Control: public, max-age=300`), so a
+  freshly published or unpublished cycle can take up to five minutes to appear or disappear for a
+  caching client. As with the profile endpoint, an institution that isn't active-and-published
+  returns `404` for its results too, indistinguishably from one that doesn't exist.
+
+- **Consent gates every topper, independently of publishing the cycle.** A topper is included in
+  the response only where the institution has recorded `consentAcknowledged: true` for them — a
+  published cycle with an unconsented topper still publishes, it just omits that one name and
+  photo. Withdrawing consent on a topper removes them from the public response on the very next
+  read, with no need to unpublish or republish the cycle itself.
+
 ---
 
 ## External API
@@ -252,6 +279,8 @@ Browser-safe endpoints, for websites with no backend of their own:
 | `GET /api/public/{institutionId}` | none — branding only (name, address, phone, logo) |
 | `GET /api/public/{institutionId}/profile` | none — full **published** profile; cached, not rate limited |
 | `GET /api/public/institutions/{slug}` | none — same, looked up by slug |
+| `GET /api/public/{institutionId}/results` | none — **published** result cycles, consented toppers only; cached, rate limited per visitor IP |
+| `GET /api/public/institutions/{slug}/results` | none — same, looked up by slug |
 
 ```bash
 curl -X POST http://localhost:3000/api/v1/leads \
