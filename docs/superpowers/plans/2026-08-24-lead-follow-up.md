@@ -251,7 +251,7 @@ export function requirePermission(user: CurrentUser, permission: Permission): vo
 npx vitest run tests/unit/role-permissions.test.ts
 ```
 
-Expected: PASS, 9 tests.
+Expected: PASS, 10 tests.
 
 - [ ] **Step 6: Run the full suite to confirm nothing regressed**
 
@@ -260,7 +260,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: typecheck clean, 402 pre-existing + 9 new = 411 passing. Widening `USER_ROLES` is additive to the enum; nothing pre-existing constructs a `UserRole` by exhaustively listing the old two values in a way that would break — but confirm this directly rather than assume it, since it's exactly the kind of silent-drift risk a wider enum can cause.
+Expected: typecheck clean, 402 pre-existing + 10 new = 412 passing. Widening `USER_ROLES` is additive to the enum; nothing pre-existing constructs a `UserRole` by exhaustively listing the old two values in a way that would break — but confirm this directly rather than assume it, since it's exactly the kind of silent-drift risk a wider enum can cause.
 
 - [ ] **Step 7: Commit**
 
@@ -411,7 +411,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: typecheck clean, 411 pre-existing + 7 new = 418 passing.
+Expected: typecheck clean, 412 pre-existing + 7 new = 419 passing.
 
 - [ ] **Step 7: Commit**
 
@@ -542,7 +542,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: typecheck clean, 418 pre-existing + 3 new = 421 passing.
+Expected: typecheck clean, 419 pre-existing + 3 new = 422 passing.
 
 - [ ] **Step 6: Commit**
 
@@ -1140,7 +1140,7 @@ Add these two methods to the `LeadService` object, after `updateStatus`:
 npx vitest run tests/integration/lead-assignment.test.ts tests/integration/lead-followup.test.ts
 ```
 
-Expected: PASS, 6 tests + 5 tests = 11 tests.
+Expected: PASS, 7 tests + 5 tests = 12 tests (`lead-assignment.test.ts` has two `describe` blocks — `LeadService.assign` with 6 tests, and a separate `LeadService.list — visibility` with 1 more).
 
 - [ ] **Step 6: Mutation-check the guards**
 
@@ -1158,7 +1158,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 421 pre-existing + 11 new = 432 passing.
+Expected: 422 pre-existing + 12 new = 434 passing.
 
 - [ ] **Step 8: Commit**
 
@@ -1612,7 +1612,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 432 pre-existing + 7 new = 439 passing. `updateStatus`'s signature change is the one place to watch — confirm every existing test file that calls `LeadService.updateStatus` directly (not just through the route) was updated to pass `user` instead of `actor`; grep for `updateStatus(` across `tests/` before running to catch every call site.
+Expected: 434 pre-existing + 7 new = 441 passing. `updateStatus`'s signature change is the one place to watch — confirm every existing test file that calls `LeadService.updateStatus` directly (not just through the route) was updated to pass `user` instead of `actor`; grep for `updateStatus(` across `tests/` before running to catch every call site.
 
 - [ ] **Step 10: Commit**
 
@@ -1837,7 +1837,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 439 pre-existing + 6 new = 445 passing.
+Expected: 441 pre-existing + 6 new = 447 passing.
 
 - [ ] **Step 8: Commit**
 
@@ -2059,7 +2059,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 445 pre-existing + 4 new = 449 passing.
+Expected: 447 pre-existing + 4 new = 451 passing.
 
 - [ ] **Step 7: Commit**
 
@@ -2356,7 +2356,7 @@ npm run lint
 npm test -- --run
 ```
 
-Expected: typecheck and lint clean, 449 passing (unchanged — this task adds no automated tests, matching the "no component harness" pattern already established).
+Expected: typecheck and lint clean, 451 passing (unchanged — this task adds no automated tests, matching the "no component harness" pattern already established).
 
 - [ ] **Step 6: Commit**
 
@@ -2532,7 +2532,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 449 pre-existing + 3 new = 452 passing.
+Expected: 451 pre-existing + 3 new = 454 passing.
 
 - [ ] **Step 8: Commit**
 
@@ -2852,7 +2852,7 @@ npm run lint
 npm test -- --run
 ```
 
-Expected: 452 pre-existing + 1 new = 453 passing.
+Expected: 454 pre-existing + 1 new = 455 passing.
 
 - [ ] **Step 10: Verify manually**
 
@@ -3048,7 +3048,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 453 pre-existing + 3 new = 456 passing.
+Expected: 455 pre-existing + 3 new = 458 passing.
 
 - [ ] **Step 8: Commit**
 
@@ -3387,7 +3387,7 @@ npx tsc --noEmit
 npm test -- --run
 ```
 
-Expected: 456 pre-existing + 7 new = 463 passing.
+Expected: 458 pre-existing + 7 new = 465 passing.
 
 - [ ] **Step 9: Commit**
 
@@ -3595,7 +3595,7 @@ npm run lint
 npm test -- --run
 ```
 
-Expected: typecheck clean, lint clean, 463 pre-existing + 2 new = 465 passing.
+Expected: typecheck clean, lint clean, 465 pre-existing + 2 new = 467 passing.
 
 Walk the spec's Definition of Done (§12) one item at a time against the actual code
 and tests, not just against task completion — this is the same discipline the two
@@ -3653,7 +3653,7 @@ Run against the spec after writing; findings recorded here rather than silently 
 
 **Four things found and fixed during this self-review, not left for an implementer to discover:**
 
-1. **Task 2 was missing its full-suite verification step entirely**, which silently broke the running test-count chain every later task depended on (418 tests were never counted forward). Added the missing step and recalculated every subsequent task's stated count — the chain now runs 402 → 411 → 418 → 421 → 432 → 439 → 445 → 449 → 449 → 452 → 453 → 456 → 463 → 465, verified arithmetically end to end.
+1. **Task 2 was missing its full-suite verification step entirely**, which silently broke the running test-count chain every later task depended on. Added the missing step, then found two further off-by-one miscounts while verifying the chain programmatically against the actual `it()` blocks in each task's test code (Task 1 claimed 9 but has 10; Task 4's `lead-assignment.test.ts` has two `describe` blocks and I'd only counted one, claiming 11 where the real total is 12). Fixed all three and recalculated the full chain end to end: 402 → 412 → 419 → 422 → 434 → 441 → 447 → 451 → 451 → 454 → 455 → 458 → 465 → 467, verified by direct count against every task's test file, not by re-deriving arithmetic from memory.
 2. **A real Mongo conflict in `setFollowUp`'s update object** — `followUpNotifiedAt` appeared in both `$set` (as `undefined`) and `$unset` in the same update, which MongoDB rejects. Originally left as "re-check once written, fix if needed" — an implementer-facing placeholder for something I could resolve myself. Fixed directly: the field is only ever `$unset`, never `$set`.
 3. **`LeadDTO.assignedToName` was declared as a field but never actually populated anywhere** — `serialize()` has no database access to resolve a name from an id, and I'd left Task 10 telling the implementer to "prefer the simplest correct option" for wiring it up. Resolved properly: `serialize()` now takes an optional name-lookup map, and a new `resolveAssigneeNames()` batch-fetches it once per `list()`/`getById()` call (not N+1 per row).
 4. **`/staff/page.tsx` used `requireInstitution()` directly**, which throws rather than redirects — correct for an API route, wrong for a page (would surface as Next's default error boundary instead of a graceful redirect for a non-admin session). Caught by checking how every *other* Admin-adjacent page in this codebase actually handles this (manual `getCurrentUser()`/`redirect()` checks, never `requireInstitution()` in a page component) — fixed to match, and the same check surfaced a materially bigger issue: **`/profile`, `/results` and its two subpages, `/settings`, and `/integration` all used the same now-outdated "not `SUPER_ADMIN`" page guard**, which silently under-restricts the moment Counselor/Front Desk exist. `/integration` is the serious instance — it displays API credentials. This became Task 9, and the spec was updated to record it as decision 10 rather than only living in the plan.
