@@ -2,7 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import type { z } from "zod";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { FeeStructure, type FeeStructureDoc } from "@/models";
+import { FeeStructure, Institution, type FeeStructureDoc } from "@/models";
 import { notFound } from "@/lib/api/errors";
 import {
   assertFeeStructureInvariants,
@@ -10,6 +10,7 @@ import {
   type createFeeStructureSchema,
   type updateFeeStructureSchema,
 } from "@/lib/validation/fee-structure";
+import { toPublicFeeStructure, type PublicFeeStructure } from "@/lib/fee-structure/public-projection";
 import { ActivityService } from "./activity.service";
 
 type CreateInput = z.infer<typeof createFeeStructureSchema>;
@@ -85,6 +86,50 @@ export const FeeStructureService = {
       .sort({ academicYear: -1, classOrCourse: 1 })
       .lean<FeeStructureDoc[]>();
     return rows.map(serialize);
+  },
+
+  /**
+   * Returns null when the institution is not publicly visible at all — the
+   * caller turns that into a 404. An empty array means "visible, but nothing
+   * published", a 200. The visibility gate matches the profile and results
+   * endpoints' exactly, so a fee structure can never be reachable on an
+   * institution whose profile 404s.
+   */
+  async listPublic(query: {
+    institutionId?: string;
+    slug?: string;
+    academicYear?: string;
+  }): Promise<PublicFeeStructure[] | null> {
+    await connectToDatabase();
+
+    const key = query.institutionId
+      ? { institutionId: query.institutionId.toUpperCase() }
+      : { slug: (query.slug ?? "").toLowerCase() };
+
+    const institution = await Institution.findOne({
+      ...key,
+      active: true,
+      profileStatus: "PUBLISHED",
+    })
+      .select("institutionId")
+      .lean();
+    if (!institution) return null;
+
+    const filter: Record<string, unknown> = {
+      institutionId: institution.institutionId,
+      status: "PUBLISHED",
+    };
+    if (query.academicYear) filter.academicYear = query.academicYear;
+
+    const rows = await FeeStructure.find(filter)
+      .sort({ academicYear: -1, classOrCourse: 1 })
+      .lean<FeeStructureDoc[]>();
+
+    // The projection is the allow-list; it also re-checks PUBLISHED, so a
+    // filter mistake here cannot leak an unpublished record.
+    return rows
+      .map((row) => toPublicFeeStructure(row as unknown as Record<string, unknown>))
+      .filter((row): row is PublicFeeStructure => row !== null);
   },
 
   async get(institutionId: string, feeStructureId: string): Promise<FeeStructureDTO> {
