@@ -279,3 +279,20 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
   COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP"]),
   FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),
 };
+
+export const FEE_FREQUENCIES = ["ONE_TIME", "ANNUAL"] as const;
+export type FeeFrequency = (typeof FEE_FREQUENCIES)[number];
+
+export const FEE_FREQUENCY_LABELS: Record<FeeFrequency, string> = {
+  ONE_TIME: "One-time",
+  ANNUAL: "Annual",
+};
+
+export const FEE_STRUCTURE_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type FeeStructureStatus = (typeof FEE_STRUCTURE_STATUSES)[number];
+
+export const FEE_STRUCTURE_STATUS_LABELS: Record<FeeStructureStatus, string> = {
+  DRAFT: "Draft",
+  PUBLISHED: "Published",
+  ARCHIVED: "Archived",
+};
