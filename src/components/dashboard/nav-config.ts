@@ -6,6 +6,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Plug,
+  Receipt,
   Settings,
   Users,
 } from "lucide-react";
@@ -47,6 +48,7 @@ const INSTITUTION_NAV: NavGroup[] = [
       { href: "/profile", label: "Institution Profile", icon: Building2, adminOnly: true },
       { href: "/integration", label: "Integration", icon: Plug, adminOnly: true },
       { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
+      { href: "/fees", label: "Fees", icon: Receipt, adminOnly: true },
     ],
   },
 ];
