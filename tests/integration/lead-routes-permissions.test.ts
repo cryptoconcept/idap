@@ -91,6 +91,32 @@ describe("lead routes — permission enforcement", () => {
     expect(response.status).toBe(403);
   });
 
+  it("a counselor cannot update the status of a lead assigned to someone else — 404", async () => {
+    const lead = await LeadService.createLead({
+      institutionId: "INS0001",
+      data: { studentName: "Test", phone: "9876543210" },
+      source: "API",
+    });
+    const counselorA = await makeUser("INS0001", "COUNSELOR", "owns-lead@infinityschool.edu.in");
+    await LeadService.assign({
+      tenantClause: { institutionId: "INS0001" },
+      id: lead.id,
+      assignedTo: String(counselorA._id),
+      actor: { id: "x", name: "x" },
+    });
+    await signIn("INS0001", "COUNSELOR", "not-owner@infinityschool.edu.in");
+
+    const response = await patchLead(
+      cookieRequest({
+        url: `http://localhost/api/leads/${lead.id}`,
+        body: { status: "CONTACTED" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ id: lead.id }) } as never,
+    );
+    expect(response.status).toBe(404);
+  });
+
   it("a Front Desk user cannot assign a lead — 403", async () => {
     const lead = await LeadService.createLead({
       institutionId: "INS0001",
