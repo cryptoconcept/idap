@@ -11,6 +11,7 @@ const PROTECTED_PREFIXES = [
   "/integration",
   "/profile",
   "/settings",
+  "/results",
   "/admin",
 ];
 
@@ -27,6 +28,7 @@ const TENANT_PREFIXES = [
   "/integration",
   "/profile",
   "/settings",
+  "/results",
 ];
 
 const ADMIN_PREFIX = "/admin";
@@ -100,6 +102,7 @@ export const config = {
     "/integration/:path*",
     "/profile/:path*",
     "/settings/:path*",
+    "/results/:path*",
     "/admin/:path*",
     "/login",
   ],

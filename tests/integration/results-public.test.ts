@@ -101,7 +101,7 @@ describe("public results endpoint", () => {
     expect((await call("INS9999")).status).toBe(404);
   });
 
-  it("omits a topper who has not acknowledged consent", async () => {
+  it("includes every consented topper on a published cycle", async () => {
     const created = await ResultService.create(
       "INS0001",
       {

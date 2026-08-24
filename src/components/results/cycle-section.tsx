@@ -180,7 +180,7 @@ export function CycleSection({
             label="Exam label"
             placeholder="AISSE 2026"
             maxLength={120}
-            hint="Overrides the generated label, e.g. AISSE 2026."
+            hint="Overrides the label shown in this dashboard, e.g. AISSE 2026."
             error={errors.examLabel?.message}
             {...register("examLabel")}
           />

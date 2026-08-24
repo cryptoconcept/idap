@@ -117,6 +117,13 @@ async function deleteOwnedPhoto(url: string | null | undefined, institutionId: s
   await storage.deletePublic(url as string).catch(() => undefined);
 }
 
+/** `"archive" + "ed"` reads as "archiveed" — spelled out instead of concatenated. */
+const ACTION_LABELS: Record<"publish" | "unpublish" | "archive", string> = {
+  publish: "published",
+  unpublish: "unpublished",
+  archive: "archived",
+};
+
 export const ResultService = {
   async list(institutionId: string): Promise<ResultDTO[]> {
     await connectToDatabase();
@@ -251,6 +258,19 @@ export const ResultService = {
     ).lean<ResultDoc>();
     if (!updated) throw notFound("Result not found");
 
+    // A patched `toppers` list replaces the array wholesale — a row simply
+    // absent from it (not merged by id) is a topper the caller deleted, and
+    // its photo, if any, is now unreferenced. Only genuinely-gone toppers are
+    // cleaned up here; ones `mergeToppers` matched by id keep their photo.
+    if (toppers) {
+      const kept = new Set(toppers.filter((t) => t._id).map((t) => String(t._id)));
+      for (const stale of before.toppers ?? []) {
+        if (!kept.has(String(stale._id))) {
+          await deleteOwnedPhoto(stale.photoUrl, institutionId);
+        }
+      }
+    }
+
     await ActivityService.record({
       institutionId,
       entityType: "RESULT",
@@ -303,7 +323,7 @@ export const ResultService = {
       entityType: "RESULT",
       entityId: updated._id,
       entityRef: institutionId,
-      action: `Result ${action}ed`,
+      action: `Result ${ACTION_LABELS[action]}`,
       description: `${updated.board} ${updated.level} ${updated.academicYear}`,
       performedBy: actor.id,
       performedByName: actor.name,
@@ -342,7 +362,10 @@ export const ResultService = {
       { $set: { "toppers.$.photoUrl": stored.key } },
       { new: true },
     ).lean<ResultDoc>();
-    if (!updated) throw notFound("Result not found");
+    if (!updated) {
+      await storage.deletePublic(stored.key).catch(() => undefined);
+      throw notFound("Result not found");
+    }
 
     await deleteOwnedPhoto(topper.photoUrl, institutionId);
 

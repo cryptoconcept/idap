@@ -1,8 +1,16 @@
 import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { Result } from "@/models";
 import { ResultService } from "@/services/result.service";
+import { storage } from "@/lib/storage";
+
+// `storage.get()` reads the adapter's PRIVATE store, never where `putPublic`
+// writes — see tests/integration/results-media.test.ts, which this mirrors.
+const PUBLIC_ROOT = resolve(process.env.PUBLIC_UPLOAD_DIR ?? join(process.cwd(), ".uploads-public"));
+const storedPath = (url: string) => resolve(PUBLIC_ROOT, url.replace(/^\/api\/media\//, ""));
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -222,6 +230,58 @@ describe("ResultService CRUD", () => {
     expect(updated.toppers?.[1]?.id).not.toBe(topperId);
     expect(updated.toppers?.[0]?.photoUrl).toBeDefined();
     expect(updated.toppers?.[1]?.photoUrl).toBeUndefined();
+  });
+
+  it("deletes a removed topper's stored photo when a patch drops it from the list", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      { ...cycle, toppers: [{ name: "Priya S", percentage: 98.6, consentAcknowledged: true }] },
+      actor,
+    );
+    const topperId = created.toppers?.[0]?.id as string;
+    const withPhoto = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const photoUrl = withPhoto.toppers?.[0]?.photoUrl as string;
+    expect(photoUrl).toBeDefined();
+
+    // The incoming list simply omits the topper — a delete, not a merge miss.
+    const updated = await ResultService.update("INS0001", created.id, { toppers: [] }, actor);
+
+    expect(updated.toppers).toBeUndefined();
+    expect(existsSync(storedPath(photoUrl))).toBe(false);
+  });
+
+  it("never deletes a stored URL this institution does not own, even for a removed topper", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      { ...cycle, toppers: [{ name: "Priya S", percentage: 98.6, consentAcknowledged: true }] },
+      actor,
+    );
+    const topperId = created.toppers?.[0]?.id as string;
+
+    // Simulate a foreign URL reaching the stored field by any route.
+    const foreign = "/api/media/media/INS0002/somebody-elses-photo.png";
+    await Result.updateOne(
+      { _id: created.id, "toppers._id": topperId },
+      { $set: { "toppers.$.photoUrl": foreign } },
+    );
+
+    // Put a real object at the foreign key so its survival is observable.
+    await storage.putPublic({
+      key: "media/INS0002/somebody-elses-photo.png",
+      body: PNG,
+      contentType: "image/png",
+    });
+
+    await ResultService.update("INS0001", created.id, { toppers: [] }, actor);
+
+    // The foreign object must still exist — the guard refused to delete it.
+    expect(existsSync(storedPath(foreign))).toBe(true);
   });
 
   it("returns NOT_FOUND, never FORBIDDEN, for another institution's result", async () => {
