@@ -52,6 +52,7 @@ reminder job runs once daily.
 | 6 | Follow-up is a date, not a datetime. | Matches how this is actually worked — a daily queue, not a calendar appointment. Keeps the UI to a date picker and the reminder job to a once-daily cron instead of a 15-minute one, for a precision most admissions offices won't use anyway. |
 | 7 | One push per counselor per day ("N follow-ups due today"), not one push per lead. | A counselor with five follow-ups due gets one notification, not five. Matches the existing `NotificationService` dispatch style (one message describing the event), just re-scoped from institution-wide to one user. |
 | 8 | The new permission table governs only the cookie-session branch of any route that also accepts bearer tokens. | `/api/leads` is a unified handler (`requireApiUser`) reachable by both a dashboard session and a third-party `ApiClient`'s bearer token. An `ApiClient` has no staff role — its own `ApiPermission` scopes are untouched and orthogonal to this phase. Only `viaBearer === false` requests are subject to the new role checks. |
+| 9 | `requireInstitution()` is not modified by this phase. | Verified directly against the routes it actually gates (profile, results, settings, API credentials — never leads or applications) before designing around it. The leads/applications flow already runs through `tenantFilter()`-based guards that accept any non-`SUPER_ADMIN` role today, so adding `COUNSELOR`/`FRONT_DESK` to `USER_ROLES` makes them reachable there with zero guard changes — and leaves `requireInstitution()`'s Admin-only routes correctly excluded by construction, not by a checklist of routes to remember to update. |
 
 ---
 
@@ -171,45 +172,56 @@ export function requirePermission(user: CurrentUser, permission: Permission): vo
 }
 ```
 
-Called once, at the top of each route, after the existing `requireInstitution()` (which
-now accepts any of the three institution-side roles, not only `INSTITUTION_ADMIN` —
-see §5.5). Ownership scoping (a Counselor's own lead) is checked separately, inside
-`LeadService`, because it needs the actual document.
+Called once, at the top of each route, after the existing tenant guard for that route
+(`requireTenantUser()`, `requireTenantUserPage()`, or `requireApiUser()` +
+`tenantFilter()` — see §5.5). Ownership scoping (a Counselor's own lead) is checked
+separately, inside `LeadService`, because it needs the actual document.
 
 ### 5.4 The platform admin boundary is unchanged
 
 `SUPER_ADMIN` holds no lead-related permission at all. This isn't new — Phase 1 and 2
 both stated the platform admin has zero access to institution enquiry/application data,
-enforced by `requireInstitution()` rejecting the role outright before any permission
-table is even consulted. This phase doesn't touch that boundary; the empty permission
-set above is documentation of the existing fact, not a new check.
+enforced by `tenantFilter()` rejecting the role outright before any permission table is
+even consulted. This phase doesn't touch that boundary; the empty permission set above
+is documentation of the existing fact, not a new check.
 
-### 5.5 `requireInstitution()` generalizes
+### 5.5 `requireInstitution()` is untouched — a different guard already does the right thing
 
-Today:
+This matters enough to correct explicitly: an earlier draft of this design assumed the
+leads/applications flow ran through `requireInstitution()` (the Admin-only guard used
+by profile, results, and institution settings) and planned to generalize it. It
+doesn't. Checked directly against the routes and pages that actually serve leads and
+applications (`/enquiries`, `/enquiries/[leadNumber]`, `/applications`,
+`/api/leads`, `/api/leads/[id]`):
 
 ```ts
-if (user.role !== "INSTITUTION_ADMIN" || !user.institutionId) throw forbidden(...);
+// src/lib/tenant/index.ts — already exists, already correct, not modified by this phase
+export function tenantFilter(user: CurrentUser): { institutionId: string } {
+  if (user.role === "SUPER_ADMIN") throw forbidden(PLATFORM_ADMIN_DENIED);
+  if (!user.institutionId) throw forbidden();
+  return { institutionId: user.institutionId };
+}
 ```
 
-Becomes:
+`tenantFilter()` — and the `requireTenantUser()` / `requireTenantUserPage()` /
+`requireApiUser()` guards built on it — already accept **any** non-`SUPER_ADMIN` role.
+Adding `COUNSELOR` and `FRONT_DESK` to `USER_ROLES` makes every lead/application route
+and page admit them automatically, with zero code change to any of these guards.
 
-```ts
-const INSTITUTION_ROLES: readonly UserRole[] = ["INSTITUTION_ADMIN", "COUNSELOR", "FRONT_DESK"];
-if (!INSTITUTION_ROLES.includes(user.role) || !user.institutionId) throw forbidden(...);
-```
+`requireInstitution()` is a *different, narrower* guard (`role !== "INSTITUTION_ADMIN"`,
+hard-coded), used exclusively by `src/app/api/settings/institution/*`,
+`src/app/api/settings/results/*`, and `src/app/api/api-clients/route.ts` — profile
+editing, results publishing, and API credential issuance. **This phase does not touch
+`requireInstitution()` at all.** It stays exactly as strict as it already is, which
+means Counselor and Front Desk are excluded from all of those routes by construction —
+the same reason they were excluded before this phase existed, not a new check this
+phase has to remember to add. There is no audit list, because there is nothing to
+audit: the guard that must stay Admin-only was never going to change.
 
-Every existing caller of `requireInstitution()` — profile, results, settings — starts
-accepting Counselor and Front Desk sessions at the *authentication* layer the moment
-this lands, unless a route additionally calls `requirePermission()`. This is
-deliberate: `requireInstitution()` answers "is this an institution-side user," and
-`requirePermission()` answers "may they do this specific thing." A route that doesn't
-call the second question implicitly allows all three roles equally — which is correct
-for read-only pages like the profile view, and wrong for anything staff shouldn't
-reach (institution settings, billing, staff management itself). **Every existing route
-that should stay Admin-only needs an explicit `requirePermission()` (or an
-Admin-only check) added as part of this phase's implementation** — this is called out
-explicitly so it isn't missed as an implicit side effect.
+`requirePermission()` (§5.3) is therefore purely additive: it layers *finer* checks on
+top of guards that are already correctly role-inclusive for leads/applications, and it
+is never consulted by the routes that must stay Admin-only, because those routes don't
+call it — they call `requireInstitution()`, unchanged.
 
 ### 5.6 The bearer-token boundary
 
@@ -390,12 +402,6 @@ Recorded honestly, matching both prior phases:
   reassignment or a second notification to the admin.
 - **The reminder job is once-daily and date-only.** A follow-up "due" at any point in
   the day fires once at 2am UTC; there is no intraday precision.
-- **Existing `requireInstitution()` callers need an audit** (§5.5) — routes that
-  should remain Admin-only (institution settings, results publishing, etc.) must gain
-  an explicit `requirePermission()` check as part of implementing this phase, or they
-  silently become reachable by Counselor/Front Desk sessions the moment the role
-  check generalizes. This is a real, named risk for the implementation plan to close
-  file-by-file, not a gap to discover later.
 
 ---
 
@@ -435,9 +441,12 @@ Mirroring both prior phases' unit/integration split.
   skipped; the route 401s without the correct `CRON_SECRET` header.
 - `staff-management.test.ts` — create/deactivate a Counselor and a Front Desk account;
   a non-admin session 403s on every `/staff` route.
-- `role-generalization.test.ts` — the specific regression this phase risks (§5.5,
-  §9): every pre-existing Admin-only route (settings, results publish, institution
-  patch) still 403s a Counselor and a Front Desk session, one test per route.
+- `role-boundary.test.ts` — confirms §5.5's premise rather than a regression risk:
+  since `requireInstitution()` is untouched by this phase, a Counselor and a Front
+  Desk session both still 403 on a representative Admin-only route (institution
+  settings PATCH, results publish). One test each, guarding against a future change
+  accidentally loosening `requireInstitution()` rather than against anything this
+  phase itself does.
 
 **Method.** Every guard is verified by mutation: remove the guard, confirm the test
 fails, restore it — same discipline as both prior phases.
@@ -451,8 +460,9 @@ fails, restore it — same discipline as both prior phases.
 - Every permission in §5.2 has a test proving it's held or withheld correctly per
   role, and ownership scoping is proven for both `LEADS_UPDATE` and
   `LEADS_SET_FOLLOWUP`.
-- Every pre-existing Admin-only route is proven to still reject Counselor and Front
-  Desk sessions (§5.5's named risk, closed).
+- `requireInstitution()` is provably unmodified by this phase's diff, and a
+  representative Admin-only route still rejects Counselor and Front Desk sessions
+  (§5.5).
 - A Counselor's queue genuinely shows only their own assigned leads plus unassigned
   ones, verified over real HTTP with two counselor sessions.
 - The reminder cron sends exactly one push per counselor per day regardless of lead
