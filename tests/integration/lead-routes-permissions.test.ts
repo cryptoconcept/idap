@@ -455,6 +455,7 @@ describe("lead routes — permission enforcement", () => {
       data: { studentName: "Nobody yet", phone: "9876543210" },
       source: "API",
     });
+    expect(unassignedLead.assignedTo).toBeUndefined();
     const assignedLead = await LeadService.createLead({
       institutionId: "INS0001",
       data: { studentName: "Already assigned", phone: "9876543211" },
