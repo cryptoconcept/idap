@@ -5,6 +5,7 @@ import { connectToDatabase } from "@/lib/db/mongoose";
 import { Result, type ResultDoc } from "@/models";
 import { notFound } from "@/lib/api/errors";
 import {
+  assertPublishable,
   assertResultInvariants,
   type createResultSchema,
   type updateResultSchema,
@@ -182,6 +183,54 @@ export const ResultService = {
       entityId: updated._id,
       entityRef: institutionId,
       action: "Result updated",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated);
+  },
+
+  async setStatus(
+    institutionId: string,
+    resultId: string,
+    action: "publish" | "unpublish" | "archive",
+    actor: { id: string; name: string },
+  ): Promise<ResultDTO> {
+    await connectToDatabase();
+    const before = await findOwned(institutionId, resultId);
+
+    const status = action === "publish" ? "PUBLISHED" : action === "archive" ? "ARCHIVED" : "DRAFT";
+
+    if (action === "publish") {
+      assertPublishable({
+        board: before.board,
+        boardName: before.boardName,
+        appeared: before.appeared ?? 0,
+        passed: before.passed ?? 0,
+        bands: before.bands,
+        toppers: before.toppers,
+      });
+    }
+
+    const set: Record<string, unknown> = { status };
+    // Stamped on first publication and never moved: it records when this cycle
+    // was first made public, not when it was last touched.
+    if (action === "publish" && !before.publishedAt) set.publishedAt = new Date();
+
+    const updated = await Result.findOneAndUpdate(
+      { _id: before._id, institutionId },
+      { $set: set },
+      { new: true },
+    ).lean<ResultDoc>();
+    if (!updated) throw notFound("Result not found");
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "RESULT",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: `Result ${action}ed`,
+      description: `${updated.board} ${updated.level} ${updated.academicYear}`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
