@@ -24,8 +24,15 @@ const bandSchema = z.object({
  * `photoUrl` is deliberately absent. A topper's photo is written only by the
  * upload endpoint; accepting it here would let a caller point the field at
  * another tenant's blob, which is the shape of Phase 1's Critical finding.
+ *
+ * `id` names an existing topper on this result, so an edit to the list can be
+ * matched back to the row it came from. It is a handle, not a field: the
+ * service uses it to carry that topper's `_id` and its uploaded `photoUrl`
+ * across, and an id matching nothing is simply a new topper. It does NOT let a
+ * caller set either of those — that remains the upload endpoint's alone.
  */
 const topperSchema = z.object({
+  id: z.string().optional(),
   name: requiredText("Topper name", 120),
   percentage,
   rank: z.number().int().min(1).optional(),

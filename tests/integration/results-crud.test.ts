@@ -6,6 +6,15 @@ import { ResultService } from "@/services/result.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
+/** Smallest valid PNG — the upload guard sniffs magic numbers, so this must be real. */
+const PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/** An id shaped like a topper's but belonging to no topper on this result. */
+const UNKNOWN_TOPPER_ID = "6a8bf44bf4e473b526efc999";
+
 const cycle = {
   board: "CBSE" as const,
   level: "CLASS_10" as const,
@@ -108,6 +117,111 @@ describe("ResultService CRUD", () => {
 
     expect(updated.bands).toHaveLength(1);
     expect(updated.bands?.[0]?.label).toBe("Only");
+  });
+
+  it("keeps a topper's identity and photo when the list is patched by id", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      { ...cycle, toppers: [{ name: "Priya S", percentage: 98.6, consentAcknowledged: true }] },
+      actor,
+    );
+    const topperId = created.toppers?.[0]?.id as string;
+
+    const withPhoto = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const photoUrl = withPhoto.toppers?.[0]?.photoUrl as string;
+    expect(photoUrl).toBeDefined();
+
+    // What the editor sends: the whole list back, each row naming its topper.
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      {
+        toppers: [
+          { id: topperId, name: "Priya Sharma", percentage: 98.6, consentAcknowledged: true },
+        ],
+      },
+      actor,
+    );
+
+    // The edit lands, and the photograph the caller cannot send survives it.
+    expect(updated.toppers?.[0]?.name).toBe("Priya Sharma");
+    expect(updated.toppers?.[0]?.id).toBe(topperId);
+    expect(updated.toppers?.[0]?.photoUrl).toBe(photoUrl);
+  });
+
+  it("treats a topper with an unknown id, or none at all, as new and photoless", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      { ...cycle, toppers: [{ name: "Priya S", percentage: 98.6, consentAcknowledged: true }] },
+      actor,
+    );
+    const topperId = created.toppers?.[0]?.id as string;
+    await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      {
+        toppers: [
+          { id: UNKNOWN_TOPPER_ID, name: "Meera N", percentage: 97.1, consentAcknowledged: true },
+          { name: "Rahul K", percentage: 96.4, consentAcknowledged: true },
+        ],
+      },
+      actor,
+    );
+
+    // Neither row named a stored topper, so neither inherits one.
+    expect(updated.toppers).toHaveLength(2);
+    expect(updated.toppers?.[0]?.id).not.toBe(topperId);
+    expect(updated.toppers?.[0]?.id).not.toBe(UNKNOWN_TOPPER_ID);
+    expect(updated.toppers?.[0]?.photoUrl).toBeUndefined();
+    expect(updated.toppers?.[1]?.photoUrl).toBeUndefined();
+  });
+
+  it("lets at most one row claim a given stored topper", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      { ...cycle, toppers: [{ name: "Priya S", percentage: 98.6, consentAcknowledged: true }] },
+      actor,
+    );
+    const topperId = created.toppers?.[0]?.id as string;
+    await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      {
+        toppers: [
+          { id: topperId, name: "Priya S", percentage: 98.6, consentAcknowledged: true },
+          { id: topperId, name: "Priya S (again)", percentage: 98.6, consentAcknowledged: true },
+        ],
+      },
+      actor,
+    );
+
+    // One `_id`, one photo — the second row is a new topper, not a clone.
+    expect(updated.toppers?.[0]?.id).toBe(topperId);
+    expect(updated.toppers?.[1]?.id).not.toBe(topperId);
+    expect(updated.toppers?.[0]?.photoUrl).toBeDefined();
+    expect(updated.toppers?.[1]?.photoUrl).toBeUndefined();
   });
 
   it("returns NOT_FOUND, never FORBIDDEN, for another institution's result", async () => {

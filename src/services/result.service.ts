@@ -224,21 +224,29 @@ export const ResultService = {
     await connectToDatabase();
     const before = await findOwned(institutionId, resultId);
 
+    const set = stripUndefined(patch);
+    // A toppers patch still replaces the list — but two of a topper's fields
+    // are not the caller's to replace: its `_id`, which the photo endpoint
+    // addresses it by, and the `photoUrl` that endpoint wrote. Rows naming an
+    // existing topper carry both across; everything else comes from the patch.
+    const toppers = patch.toppers ? mergeToppers(patch.toppers, before.toppers) : undefined;
+
     // Invariants hold against the MERGED record: a patch carrying only `passed`
-    // must still be checked against the stored `appeared`.
-    const merged = { ...before, ...stripUndefined(patch) };
+    // must still be checked against the stored `appeared`. Toppers are checked
+    // as merged, so what is validated is exactly what is written.
+    const merged = { ...before, ...set };
     assertResultInvariants({
       board: merged.board,
       boardName: merged.boardName,
       appeared: merged.appeared ?? 0,
       passed: merged.passed ?? 0,
       bands: merged.bands,
-      toppers: merged.toppers,
+      toppers: toppers ?? merged.toppers,
     });
 
     const updated = await Result.findOneAndUpdate(
       { _id: before._id, institutionId },
-      { $set: stripUndefined(patch) },
+      { $set: toppers ? { ...set, toppers } : set },
       { new: true },
     ).lean<ResultDoc>();
     if (!updated) throw notFound("Result not found");
@@ -411,6 +419,43 @@ export const ResultService = {
     });
   },
 };
+
+type ExistingTopper = NonNullable<ResultDoc["toppers"]>[number];
+type IncomingTopper = NonNullable<UpdateInput["toppers"]>[number];
+type MergedTopper = Omit<IncomingTopper, "id"> & {
+  _id?: ExistingTopper["_id"];
+  photoUrl?: string;
+};
+
+/**
+ * Bands replace wholesale because a band has no identity to lose. A topper
+ * does: the photo endpoint writes `photoUrl` against its `_id`, so replacing
+ * the array with the caller's version would mint fresh subdocuments and drop
+ * every photograph the institution had uploaded — silently, on an edit as
+ * small as a corrected spelling.
+ *
+ * So a row that names an existing topper by `id` keeps that topper's `_id` and
+ * photo; a row with no `id`, or an `id` matching nothing on this result, is a
+ * new topper with neither. The caller still cannot set either field: both are
+ * read from the stored document, never from the patch.
+ */
+function mergeToppers(
+  incoming: IncomingTopper[],
+  existing: ResultDoc["toppers"],
+): MergedTopper[] {
+  const byId = new Map((existing ?? []).map((topper) => [String(topper._id), topper]));
+
+  return incoming.map(({ id, ...fields }) => {
+    const match = id ? byId.get(id) : undefined;
+    if (!match) return fields;
+    // Claimed once: two rows naming the same topper must not both inherit its
+    // identity, which would put two subdocuments with one `_id` in the array.
+    byId.delete(id as string);
+    return match.photoUrl
+      ? { ...fields, _id: match._id, photoUrl: match.photoUrl }
+      : { ...fields, _id: match._id };
+  });
+}
 
 /**
  * A key absent from a patch arrives as `undefined` and must be left alone —

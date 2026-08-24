@@ -53,6 +53,10 @@ export function ToppersSection({
     resolver: zodResolver(updateResultSchema),
     defaultValues: {
       toppers: (result.toppers ?? []).map((topper) => ({
+        // Round-trips untouched so the server can match this row back to the
+        // topper it came from and keep its photograph. A row added here has no
+        // id to send, which is exactly how the server reads "new topper".
+        id: topper.id,
         name: topper.name,
         percentage: topper.percentage,
         rank: topper.rank,
@@ -62,7 +66,14 @@ export function ToppersSection({
     },
   });
 
-  const { fields, append, remove } = useFieldArray({ control, name: "toppers" });
+  // `keyName` moved off its `id` default: the rendered rows are built as
+  // `{ ...row, [keyName]: generatedKey }`, which would overwrite the server id
+  // this section has to send back with React's throwaway key.
+  const { fields, append, remove } = useFieldArray({
+    control,
+    name: "toppers",
+    keyName: "_key",
+  });
 
   useEffect(() => {
     onDirtyChange(isDirty);
@@ -93,7 +104,11 @@ export function ToppersSection({
               const saved: Topper | undefined = isDirty ? undefined : result.toppers?.[index];
 
               return (
-                <li key={entry.id} className="space-y-3 rounded-lg border border-border p-3">
+                <li key={entry._key} className="space-y-3 rounded-lg border border-border p-3">
+                  {/* The server's handle for this row, carried back untouched so
+                      the patch can be matched to the topper it edits. */}
+                  <input type="hidden" {...register(`toppers.${index}.id`)} />
+
                   <div className="flex items-start justify-between gap-2">
                     <p className="eyebrow">Topper {index + 1}</p>
                     <Button
