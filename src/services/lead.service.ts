@@ -2,20 +2,22 @@ import "server-only";
 import type { FilterQuery } from "mongoose";
 import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { Lead, type LeadDoc } from "@/models";
+import { Lead, User, type LeadDoc } from "@/models";
 import { generateLeadNumber } from "./sequence.service";
 import { ActivityService } from "./activity.service";
 import { NotificationService } from "./notification.service";
 import { afterResponse } from "@/lib/after-response";
-import { notFound } from "@/lib/api/errors";
+import { notFound, validationError } from "@/lib/api/errors";
+import { assertOwnsLead } from "@/lib/tenant/permissions";
 import { dateRangeFilter, escapeRegex, requiredIso } from "@/lib/utils/serialize";
 import type { LeadDTO, Paginated } from "@/lib/types";
 import type { LeadStatus, Source } from "@/lib/constants";
 import type { CreateLeadInput, LeadQuery } from "@/lib/validation/lead";
+import type { CurrentUser } from "@/lib/auth/current-user";
 
 type LeadRow = LeadDoc & { _id: Types.ObjectId };
 
-function serialize(row: LeadRow): LeadDTO {
+function serialize(row: LeadRow, assigneeNames?: Map<string, string>): LeadDTO {
   return {
     id: String(row._id),
     leadNumber: row.leadNumber,
@@ -30,9 +32,23 @@ function serialize(row: LeadRow): LeadDTO {
     source: row.source as Source,
     sourceApplication: row.sourceApplication ?? undefined,
     sourceUrl: row.sourceUrl ?? undefined,
+    assignedTo: row.assignedTo ?? undefined,
+    assignedToName: row.assignedTo ? assigneeNames?.get(row.assignedTo) : undefined,
+    assignedAt: row.assignedAt ? requiredIso(row.assignedAt) : undefined,
+    followUpAt: row.followUpAt ? requiredIso(row.followUpAt) : undefined,
+    followUpNotifiedAt: row.followUpNotifiedAt ? requiredIso(row.followUpNotifiedAt) : undefined,
     createdAt: requiredIso(row.createdAt),
     updatedAt: requiredIso(row.updatedAt),
   };
+}
+
+/** Batch-resolves assignee names for a set of leads in one query, not N+1. */
+async function resolveAssigneeNames(rows: LeadRow[]): Promise<Map<string, string>> {
+  const ids = [...new Set(rows.map((row) => row.assignedTo).filter((id): id is string => Boolean(id)))];
+  if (ids.length === 0) return new Map();
+
+  const users = await User.find({ _id: { $in: ids } }).select("name").lean();
+  return new Map(users.map((user) => [String(user._id), user.name]));
 }
 
 /** Resolves institution names in one round trip for cross-tenant admin lists. */
@@ -137,8 +153,10 @@ export const LeadService = {
       Lead.countDocuments(filter),
     ]);
 
+    const assigneeNames = await resolveAssigneeNames(rows as LeadRow[]);
+
     return {
-      items: rows.map((row) => serialize(row as LeadRow)),
+      items: rows.map((row) => serialize(row as LeadRow, assigneeNames)),
       total,
       page,
       pageSize,
@@ -158,7 +176,8 @@ export const LeadService = {
     const row = await Lead.findOne(filter).lean();
     if (!row) throw notFound("Enquiry not found");
 
-    return serialize(row as LeadRow);
+    const assigneeNames = await resolveAssigneeNames([row as LeadRow]);
+    return serialize(row as LeadRow, assigneeNames);
   },
 
   async updateStatus(input: {
@@ -187,6 +206,99 @@ export const LeadService = {
       description: `Status changed from ${existing.status} to ${input.status}`,
       performedBy: input.actor.id,
       performedByName: input.actor.name,
+    });
+
+    return serialize(updated as LeadRow);
+  },
+
+  async assign(input: {
+    tenantClause: Record<string, unknown>;
+    id: string;
+    assignedTo: string | null;
+    actor: { id: string; name: string };
+  }): Promise<LeadDTO> {
+    await connectToDatabase();
+    const existing = await LeadService.getById(input.tenantClause, input.id);
+
+    let targetName: string | undefined;
+    if (input.assignedTo) {
+      const target = await User.findOne({
+        _id: input.assignedTo,
+        institutionId: existing.institutionId,
+      })
+        .select("role name")
+        .lean();
+      if (!target) throw notFound("Enquiry not found");
+      if (target.role !== "INSTITUTION_ADMIN" && target.role !== "COUNSELOR") {
+        throw validationError("assignedTo: must be a counselor or admin at this institution");
+      }
+      targetName = target.name;
+    }
+
+    const previousAssignee = existing.assignedTo;
+    const updated = await Lead.findOneAndUpdate(
+      { _id: new Types.ObjectId(existing.id), ...input.tenantClause },
+      input.assignedTo
+        ? { $set: { assignedTo: input.assignedTo, assignedAt: new Date() } }
+        : { $unset: { assignedTo: "", assignedAt: "" } },
+      { new: true },
+    ).lean();
+    if (!updated) throw notFound("Enquiry not found");
+
+    const action = !previousAssignee
+      ? "Lead assigned"
+      : !input.assignedTo
+        ? "Lead unassigned"
+        : "Lead reassigned";
+    await ActivityService.record({
+      institutionId: updated.institutionId,
+      entityType: "LEAD",
+      entityId: updated._id,
+      entityRef: updated.leadNumber,
+      action,
+      description: input.assignedTo
+        ? `Assigned to ${targetName}`
+        : "Unassigned",
+      performedBy: input.actor.id,
+      performedByName: input.actor.name,
+    });
+
+    return serialize(updated as LeadRow);
+  },
+
+  async setFollowUp(input: {
+    tenantClause: Record<string, unknown>;
+    id: string;
+    followUpAt: string | null;
+    user: CurrentUser;
+  }): Promise<LeadDTO> {
+    await connectToDatabase();
+    const existing = await LeadService.getById(input.tenantClause, input.id);
+    assertOwnsLead(input.user, { assignedTo: existing.assignedTo ?? null });
+
+    // followUpNotifiedAt is always $unset, never $set — a field cannot appear in
+    // both operators on the same update, and $unset alone is what re-arms the
+    // reminder (Global Constraint: "followUpNotifiedAt is cleared whenever
+    // followUpAt changes").
+    const update = input.followUpAt
+      ? { $set: { followUpAt: new Date(input.followUpAt) }, $unset: { followUpNotifiedAt: "" } }
+      : { $unset: { followUpAt: "", followUpNotifiedAt: "" } };
+
+    const updated = await Lead.findOneAndUpdate(
+      { _id: new Types.ObjectId(existing.id), ...input.tenantClause },
+      update,
+      { new: true },
+    ).lean();
+    if (!updated) throw notFound("Enquiry not found");
+
+    await ActivityService.record({
+      institutionId: updated.institutionId,
+      entityType: "LEAD",
+      entityId: updated._id,
+      entityRef: updated.leadNumber,
+      action: input.followUpAt ? "Follow-up date set" : "Follow-up date cleared",
+      performedBy: input.user.id,
+      performedByName: input.user.name,
     });
 
     return serialize(updated as LeadRow);

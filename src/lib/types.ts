@@ -34,6 +34,11 @@ export type LeadDTO = {
   source: Source;
   sourceApplication?: string;
   sourceUrl?: string;
+  assignedTo?: string;
+  assignedToName?: string;
+  assignedAt?: string;
+  followUpAt?: string;
+  followUpNotifiedAt?: string;
   createdAt: string;
   updatedAt: string;
 };

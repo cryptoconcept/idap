@@ -1,7 +1,7 @@
 import { Institution, User, ApiClient } from "@/models";
 import { hashPassword } from "@/lib/security/password";
 import { generateKeyId, generateSecret, hashSecret } from "@/lib/security/tokens";
-import type { ApiPermission } from "@/lib/constants";
+import type { ApiPermission, UserRole } from "@/lib/constants";
 import type { CurrentUser } from "@/lib/auth/current-user";
 
 export async function makeInstitution(
@@ -62,7 +62,7 @@ export async function makeProfiledInstitution(
 
 export async function makeUser(
   institutionId: string | undefined,
-  role: "SUPER_ADMIN" | "INSTITUTION_ADMIN" = "INSTITUTION_ADMIN",
+  role: UserRole = "INSTITUTION_ADMIN",
   email = `${role.toLowerCase()}-${institutionId ?? "platform"}@example.test`,
 ) {
   return User.create({
