@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { requirePermission } from "@/lib/tenant/permissions";
 import { updateLeadSchema } from "@/lib/validation/lead";
 import { LeadService } from "@/services/lead.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -27,13 +28,25 @@ export async function PATCH(request: NextRequest, context: RouteContext<"/api/le
     const body = await request.json().catch(() => ({}));
     const patch = updateLeadSchema.parse(body);
 
-    if (!patch.status) throw validationError("status: only status changes are supported");
+    if (patch.followUpAt !== undefined) {
+      if (!viaBearer) requirePermission(user, "LEADS_SET_FOLLOWUP");
+      const lead = await LeadService.setFollowUp({
+        tenantClause: tenantFilter(user),
+        id,
+        followUpAt: patch.followUpAt,
+        user,
+      });
+      return jsonSuccess({ lead });
+    }
+
+    if (!patch.status) throw validationError("status: only status or followUpAt changes are supported");
+    if (!viaBearer) requirePermission(user, "LEADS_UPDATE");
 
     const lead = await LeadService.updateStatus({
       tenantClause: tenantFilter(user),
       id,
       status: patch.status,
-      actor: { id: user.id, name: user.name },
+      user,
     });
 
     return jsonSuccess({ lead });

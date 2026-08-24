@@ -86,7 +86,7 @@ describe("tenant isolation", () => {
         tenantClause: B,
         id: lead.leadNumber,
         status: "ADMITTED",
-        actor: { id: "6a8880f3446c577c470cd06c", name: "Other admin" },
+        user: sessionFor("INSTITUTION_ADMIN", "INS0002"),
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 

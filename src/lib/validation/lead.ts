@@ -30,10 +30,16 @@ export const updateLeadSchema = z
     classInterested: optionalText(80),
     parentName: optionalText(120),
     email: optionalEmailSchema,
+    followUpAt: z.string().trim().nullable().optional(),
   })
   .refine((value) => Object.values(value).some((v) => v !== undefined), {
     message: "Nothing to update",
   });
+
+export const assignLeadSchema = z.object({
+  assignedTo: z.string().min(1).nullable(),
+});
+export type AssignLeadInput = z.infer<typeof assignLeadSchema>;
 
 export const leadQuerySchema = z.object({
   q: z.string().trim().max(120).optional(),

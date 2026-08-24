@@ -184,10 +184,11 @@ export const LeadService = {
     tenantClause: Record<string, unknown>;
     id: string;
     status: LeadStatus;
-    actor: { id: string; name: string };
+    user: CurrentUser;
   }): Promise<LeadDTO> {
     await connectToDatabase();
     const existing = await LeadService.getById(input.tenantClause, input.id);
+    assertOwnsLead(input.user, { assignedTo: existing.assignedTo ?? null });
     if (existing.status === input.status) return existing;
 
     const updated = await Lead.findOneAndUpdate(
@@ -204,8 +205,8 @@ export const LeadService = {
       entityRef: updated.leadNumber,
       action: `Status changed to ${input.status}`,
       description: `Status changed from ${existing.status} to ${input.status}`,
-      performedBy: input.actor.id,
-      performedByName: input.actor.name,
+      performedBy: input.user.id,
+      performedByName: input.user.name,
     });
 
     return serialize(updated as LeadRow);

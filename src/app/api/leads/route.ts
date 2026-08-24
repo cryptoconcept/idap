@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { requirePermission, leadVisibilityFilter } from "@/lib/tenant/permissions";
 import { leadQuerySchema, createLeadSchema } from "@/lib/validation/lead";
 import { LeadService } from "@/services/lead.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -12,7 +13,7 @@ export async function GET(request: NextRequest) {
   try {
     const { user } = await requireApiUser(request);
     const query = leadQuerySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
-    const clause = tenantFilter(user);
+    const clause = { ...tenantFilter(user), ...leadVisibilityFilter(user) };
 
     const result = await LeadService.list(clause, query);
     return jsonSuccess({ ...result });
@@ -26,6 +27,7 @@ export async function POST(request: NextRequest) {
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
+    if (!viaBearer) requirePermission(user, "LEADS_CREATE");
     // Through tenantFilter like every other tenant-touching path, rather than
     // reading user.institutionId directly. The platform's isolation story rests
     // on that single function, and these two were the last write paths outside
