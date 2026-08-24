@@ -10,6 +10,9 @@ import {
   type createResultSchema,
   type updateResultSchema,
 } from "@/lib/validation/result";
+import { storage } from "@/lib/storage";
+import { validateImage } from "@/lib/media/image";
+import { isOwnedMediaUrl } from "@/lib/media/ownership";
 import { ActivityService } from "./activity.service";
 
 type CreateInput = z.infer<typeof createResultSchema>;
@@ -99,6 +102,18 @@ async function findOwned(institutionId: string, resultId: string): Promise<Resul
   const row = await Result.findOne({ _id: toObjectId(resultId), institutionId }).lean<ResultDoc>();
   if (!row) throw notFound("Result not found");
   return row;
+}
+
+/**
+ * Deletes a stored public object only when it provably belongs to this
+ * institution. A stored URL can be attacker-influenced, and `deletePublic` is
+ * not tenant-scoped, so an unguarded cleanup would delete another tenant's
+ * object out of the shared store. A URL that fails the check is left alone —
+ * never deleted, and never allowed to block the operation that triggered it.
+ */
+async function deleteOwnedPhoto(url: string | null | undefined, institutionId: string) {
+  if (!isOwnedMediaUrl(url, institutionId)) return;
+  await storage.deletePublic(url as string).catch(() => undefined);
 }
 
 export const ResultService = {
@@ -238,6 +253,87 @@ export const ResultService = {
     return serialize(updated);
   },
 
+  async setTopperPhoto(
+    institutionId: string,
+    resultId: string,
+    topperId: string,
+    input: { contentType: string; bytes: Buffer },
+    actor: { id: string; name: string },
+  ): Promise<ResultDTO> {
+    await connectToDatabase();
+    const before = await findOwned(institutionId, resultId);
+
+    const topper = before.toppers?.find((row) => String(row._id) === topperId);
+    if (!topper) throw notFound("Topper not found");
+
+    const { extension } = validateImage(input);
+
+    // Never derived from a client-supplied filename, and always under the
+    // institution's own prefix so isOwnedMediaUrl covers it.
+    const objectId = new Types.ObjectId();
+    const key = `media/${institutionId}/results/${String(before._id)}/${objectId.toHexString()}${extension}`;
+    const stored = await storage.putPublic({
+      key,
+      body: input.bytes,
+      contentType: input.contentType,
+    });
+
+    const updated = await Result.findOneAndUpdate(
+      { _id: before._id, institutionId, "toppers._id": topper._id },
+      { $set: { "toppers.$.photoUrl": stored.key } },
+      { new: true },
+    ).lean<ResultDoc>();
+    if (!updated) throw notFound("Result not found");
+
+    await deleteOwnedPhoto(topper.photoUrl, institutionId);
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "RESULT",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: "Topper photo updated",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated);
+  },
+
+  async removeTopperPhoto(
+    institutionId: string,
+    resultId: string,
+    topperId: string,
+    actor: { id: string; name: string },
+  ): Promise<ResultDTO> {
+    await connectToDatabase();
+    const before = await findOwned(institutionId, resultId);
+
+    const topper = before.toppers?.find((row) => String(row._id) === topperId);
+    if (!topper) throw notFound("Topper not found");
+
+    const updated = await Result.findOneAndUpdate(
+      { _id: before._id, institutionId, "toppers._id": topper._id },
+      { $unset: { "toppers.$.photoUrl": "" } },
+      { new: true },
+    ).lean<ResultDoc>();
+    if (!updated) throw notFound("Result not found");
+
+    await deleteOwnedPhoto(topper.photoUrl, institutionId);
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "RESULT",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: "Topper photo removed",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated);
+  },
+
   async remove(
     institutionId: string,
     resultId: string,
@@ -247,6 +343,10 @@ export const ResultService = {
     const before = await findOwned(institutionId, resultId);
 
     await Result.deleteOne({ _id: before._id, institutionId });
+
+    for (const topper of before.toppers ?? []) {
+      await deleteOwnedPhoto(topper.photoUrl, institutionId);
+    }
 
     await ActivityService.record({
       institutionId,
