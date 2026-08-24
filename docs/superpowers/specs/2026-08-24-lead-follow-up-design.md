@@ -483,10 +483,11 @@ fails, restore it — same discipline as both prior phases.
 ## 13. Recommended Phase 4
 
 Not named yet. The two items flagged during Phase 2's final review — archive/delete
-controls for results (API exists, no UI) and the `examLabel` public-visibility
-decision — are smaller than a phase and can land as standalone bounded changes
-whenever convenient, not blocking anything here. Beyond that, no further phase has
-been scoped; the next one should come from what actually turns out to hurt once
-Counselor/Front Desk accounts are real and in use — self-service claiming (§9) is the
-most likely candidate, but validating that against real usage first is worth more than
-guessing now.
+controls for results, and the `examLabel` public-visibility decision — landed as
+standalone bounded changes in the `chore/close-phase-gaps` cleanup, along with this
+phase's own deferred UI items and a set of backend hardening fixes; none of that was
+a new phase and none is outstanding anymore. Beyond that, no further phase has been
+scoped; the next one should come from what actually turns out to hurt once
+Counselor/Front Desk accounts are real and in use. §9's known limitations are the
+candidate list — self-service claiming is the most likely one, but validating that
+against real usage first is worth more than guessing now.
