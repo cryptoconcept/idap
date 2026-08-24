@@ -6,3 +6,4 @@ export { DocumentService } from "./document.service";
 export { ActivityService } from "./activity.service";
 export { NoteService } from "./note.service";
 export { DashboardService } from "./dashboard.service";
+export { ResultService, type ResultDTO } from "./result.service";
