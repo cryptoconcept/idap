@@ -2,8 +2,6 @@ import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { LeadService } from "@/services/lead.service";
-import { tenantFilter } from "@/lib/tenant";
-import { Lead } from "@/models";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -37,6 +35,7 @@ describe("LeadService.assign", () => {
 
     expect(updated.assignedTo).toBe(String(counselor._id));
     expect(updated.assignedAt).toBeDefined();
+    expect(updated.assignedToName).toBe(counselor.name);
   });
 
   it("unassigns when assignedTo is null", async () => {

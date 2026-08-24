@@ -66,6 +66,7 @@ describe("LeadService.setFollowUp", () => {
       user: counselorUser,
     });
     expect(updated.followUpAt).toContain("2026-09-01");
+    expect(updated.assignedToName).toBe(counselor.name);
   });
 
   it("returns NOT_FOUND for a counselor setting a follow-up on someone else's lead", async () => {

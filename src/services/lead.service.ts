@@ -263,7 +263,9 @@ export const LeadService = {
       performedByName: input.actor.name,
     });
 
-    return serialize(updated as LeadRow);
+    const assigneeNames =
+      input.assignedTo && targetName ? new Map([[input.assignedTo, targetName]]) : undefined;
+    return serialize(updated as LeadRow, assigneeNames);
   },
 
   async setFollowUp(input: {
@@ -301,7 +303,11 @@ export const LeadService = {
       performedByName: input.user.name,
     });
 
-    return serialize(updated as LeadRow);
+    const assigneeNames =
+      existing.assignedTo && existing.assignedToName
+        ? new Map([[existing.assignedTo, existing.assignedToName]])
+        : undefined;
+    return serialize(updated as LeadRow, assigneeNames);
   },
 
   async recent(tenantClause: Record<string, unknown>, limit = 5): Promise<LeadDTO[]> {
