@@ -141,13 +141,19 @@ practice, but are named separately because they are conceptually distinct action
 export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
   SUPER_ADMIN: new Set([]),  // platform admin has zero permissions here — see §5.4
   INSTITUTION_ADMIN: new Set([
-    "LEADS_VIEW_ALL", "LEADS_CREATE", "LEADS_UPDATE", "LEADS_ASSIGN",
+    "LEADS_VIEW_ALL", "LEADS_VIEW_OWN", "LEADS_CREATE", "LEADS_UPDATE", "LEADS_ASSIGN",
     "LEADS_SET_FOLLOWUP", "LEADS_DELETE", "LEADS_EXPORT", "STAFF_MANAGE",
   ]),
   COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP"]),
   FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),
 };
 ```
+
+`INSTITUTION_ADMIN` holds `LEADS_VIEW_OWN` alongside `LEADS_VIEW_ALL` even though
+`LEADS_VIEW_ALL` alone already grants unrestricted visibility (`leadVisibilityFilter`
+checks it first and short-circuits) — harmless redundancy, not a bug, and required by
+this same phase's own permission-table test (`gives INSTITUTION_ADMIN every
+permission`).
 
 `LEADS_UPDATE` and `LEADS_SET_FOLLOWUP` are ownership-scoped for `COUNSELOR`: holding
 the permission is necessary but not sufficient — the service layer additionally checks

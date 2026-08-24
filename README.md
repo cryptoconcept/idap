@@ -47,6 +47,7 @@ Change these before deploying anywhere real.
 | `AUTH_SECRET` | yes | Signs dashboard sessions **and** hashes API secrets. Rotating it invalidates every session and every issued API secret. |
 | `NEXT_PUBLIC_APP_URL` | no | Fallback public origin for generated snippets. The request's own host is preferred. |
 | `SESSION_TTL_HOURS` | no | Dashboard session lifetime. Default `12`. |
+| `CRON_SECRET` | production only | Bearer token Vercel's own cron scheduler sends when calling `/api/cron/follow-up-reminders`. Without it the route 401s every request, including Vercel's — the daily follow-up reminder job silently never fires until this is set. See `vercel.json`'s `crons` entry for the schedule. |
 | `UPLOAD_DIR` | no | Where the local storage adapter writes uploads. Default `.uploads/`, outside `public/`. Ignored when `BLOB_READ_WRITE_TOKEN` is set. |
 | `BLOB_READ_WRITE_TOKEN` | no | The **public**-access Blob store — institution logo/cover/gallery media. Its presence switches that path from local disk to Blob. |
 | `DOCUMENTS_BLOB_READ_WRITE_TOKEN` | no | The **private**-access Blob store — admission documents. Its presence switches document storage from local disk to Blob. A separate store from the one above on purpose — see [Institution media — the public path](#institution-media--the-public-path). |
