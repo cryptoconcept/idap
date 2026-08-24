@@ -1,8 +1,11 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
-import { makeInstitution } from "../helpers/factories";
+import { makeInstitution, makeUser } from "../helpers/factories";
+import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
+import { cookies } from "next/headers";
+import type { NextRequest } from "next/server";
 import { ResultService } from "@/services/result.service";
 import { Result } from "@/models";
 import { storage } from "@/lib/storage";
@@ -200,5 +203,76 @@ describe("topper photos", () => {
         actor,
       ),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+async function signInWithCookie(institutionId: string, email = "results-media-admin@example.test") {
+  const user = await makeUser(institutionId, "INSTITUTION_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "INSTITUTION_ADMIN",
+    institutionId,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
+/** A request carrying only a session cookie and a multipart body. */
+function photoFormRequest(form: FormData, init: { origin?: string } = {}) {
+  const headers = new Headers();
+  if (init.origin) headers.set("origin", init.origin);
+  headers.set("host", "localhost");
+  return {
+    headers,
+    nextUrl: new URL("http://localhost/photo"),
+    url: "http://localhost/photo",
+    formData: async () => form,
+  } as unknown as NextRequest;
+}
+
+describe("topper photo routes", () => {
+  // The cookie store is module-level, so a session left behind would silently
+  // authenticate a later test that expects no credentials at all.
+  afterEach(async () => {
+    (await cookies()).delete(SESSION_COOKIE);
+  });
+
+  it("accepts a multipart upload and returns the updated result", async () => {
+    const created = await ResultService.create("INS0001", cycle, actor);
+    const topperId = created.toppers?.[0]?.id as string;
+    await signInWithCookie("INS0001");
+
+    const form = new FormData();
+    form.append("file", new File([new Uint8Array(PNG)], "priya.png", { type: "image/png" }));
+
+    const { POST } = await import(
+      "@/app/api/settings/results/[resultId]/toppers/[topperId]/photo/route"
+    );
+    const response = await POST(
+      photoFormRequest(form, { origin: "http://localhost" }),
+      { params: Promise.resolve({ resultId: created.id, topperId }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.result.toppers[0].photoUrl).toContain("/media/INS0001/");
+  });
+
+  it("rejects a request with no file", async () => {
+    const created = await ResultService.create("INS0001", cycle, actor);
+    const topperId = created.toppers?.[0]?.id as string;
+    await signInWithCookie("INS0001");
+
+    const { POST } = await import(
+      "@/app/api/settings/results/[resultId]/toppers/[topperId]/photo/route"
+    );
+    const response = await POST(
+      photoFormRequest(new FormData(), { origin: "http://localhost" }),
+      { params: Promise.resolve({ resultId: created.id, topperId }) } as never,
+    );
+
+    expect(response.status).toBe(400);
   });
 });
