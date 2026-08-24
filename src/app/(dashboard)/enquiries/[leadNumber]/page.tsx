@@ -12,9 +12,12 @@ import { Field, FieldGrid, Section } from "@/components/shared/definition-list";
 import { NotesPanel } from "@/components/shared/notes-panel";
 import { ActivityTimeline } from "@/components/shared/activity-timeline";
 import { LeadStatusControl } from "@/components/leads/lead-status-control";
+import { LeadAssignControl } from "@/components/leads/lead-assign-control";
+import { LeadFollowUpControl } from "@/components/leads/lead-followup-control";
 import { LeadStatusBadge } from "@/components/shared/status-badge";
 import { Ref } from "@/components/shared/ref";
 import { Button } from "@/components/ui/button";
+import { hasPermission } from "@/lib/tenant/permissions";
 import { formatDateTime, formatPhone, formatSource } from "@/lib/utils/format";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +45,10 @@ export default async function EnquiryDetailPage(props: PageProps<"/enquiries/[le
     NoteService.list(lead.institutionId, "LEAD", lead.id),
     ActivityService.listForEntity(lead.institutionId, "LEAD", lead.id),
   ]);
+
+  const assignees = hasPermission(user, "LEADS_ASSIGN")
+    ? await LeadService.listAssignees(lead.institutionId)
+    : [];
 
   return (
     <>
@@ -79,6 +86,27 @@ export default async function EnquiryDetailPage(props: PageProps<"/enquiries/[le
               <Field label="Phone" value={formatPhone(lead.phone)} mono />
               <Field label="Email" value={lead.email} />
               <Field label="Status" value={<LeadStatusBadge status={lead.status} />} />
+              <Field
+                label="Assigned to"
+                value={
+                  hasPermission(user, "LEADS_ASSIGN") ? (
+                    <LeadAssignControl leadId={lead.id} assignedTo={lead.assignedTo} assignees={assignees} />
+                  ) : (
+                    lead.assignedToName ?? "Unassigned"
+                  )
+                }
+              />
+              <Field
+                label="Follow-up"
+                value={
+                  hasPermission(user, "LEADS_SET_FOLLOWUP") &&
+                  (user.role === "INSTITUTION_ADMIN" || lead.assignedTo === user.id) ? (
+                    <LeadFollowUpControl leadId={lead.id} followUpAt={lead.followUpAt} />
+                  ) : (
+                    lead.followUpAt ?? "Not set"
+                  )
+                }
+              />
             </FieldGrid>
 
             {lead.message ? (

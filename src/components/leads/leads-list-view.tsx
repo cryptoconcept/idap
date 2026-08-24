@@ -5,6 +5,7 @@ import { leadQuerySchema } from "@/lib/validation/lead";
 import { LEAD_STATUSES, SOURCES } from "@/lib/constants";
 import { LEAD_STATUS_LABELS, formatSource } from "@/lib/utils/format";
 import { tenantFilter } from "@/lib/tenant";
+import { hasPermission } from "@/lib/tenant/permissions";
 import type { CurrentUser } from "@/lib/auth/current-user";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, type FilterDefinition } from "@/components/shared/filter-bar";
@@ -83,7 +84,7 @@ export async function LeadsListView({
           />
         ) : (
           <>
-            <LeadsTable leads={result.items} />
+            <LeadsTable leads={result.items} showAssignee={hasPermission(user, "LEADS_ASSIGN")} />
             <Suspense fallback={null}>
               <Pagination
                 page={result.page}

@@ -15,10 +15,13 @@ import type { LeadDTO } from "@/lib/types";
 export function LeadsTable({
   leads,
   variant = "table",
+  showAssignee = false,
 }: {
   leads: LeadDTO[];
   /** `list` renders the compact card layout at every width — used in narrow panels. */
   variant?: "table" | "list";
+  /** Admin-only "Assigned to" column — the caller decides based on the viewer's permissions. */
+  showAssignee?: boolean;
 }) {
   return (
     <>
@@ -33,6 +36,7 @@ export function LeadsTable({
               <TableHead>Parent</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Status</TableHead>
+              {showAssignee ? <TableHead>Assigned to</TableHead> : null}
               <TableHead className="text-right">Received</TableHead>
             </TableRow>
           </TableHeader>
@@ -58,6 +62,11 @@ export function LeadsTable({
                 <TableCell>
                   <LeadStatusBadge status={lead.status} />
                 </TableCell>
+                {showAssignee ? (
+                  <TableCell className="text-muted-foreground">
+                    {lead.assignedToName ?? "—"}
+                  </TableCell>
+                ) : null}
                 <TableCell className="tabular text-right text-muted-foreground">
                   {formatDate(lead.createdAt)}
                 </TableCell>

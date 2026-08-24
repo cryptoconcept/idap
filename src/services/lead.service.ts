@@ -316,4 +316,17 @@ export const LeadService = {
     const rows = await Lead.find(tenantClause).sort({ createdAt: -1 }).limit(limit).lean();
     return rows.map((row) => serialize(row as LeadRow));
   },
+
+  async listAssignees(institutionId: string): Promise<{ id: string; name: string }[]> {
+    await connectToDatabase();
+    const rows = await User.find({
+      institutionId,
+      role: { $in: ["INSTITUTION_ADMIN", "COUNSELOR"] },
+      active: true,
+    })
+      .select("name")
+      .sort({ name: 1 })
+      .lean();
+    return rows.map((row) => ({ id: String(row._id), name: row.name }));
+  },
 };
