@@ -38,6 +38,12 @@ export const DeviceService = {
     return rows.map((row) => ({ id: String(row._id), pushToken: row.pushToken }));
   },
 
+  async forUser(userId: string) {
+    await connectToDatabase();
+    const rows = await Device.find({ userId }).select("pushToken").lean();
+    return rows.map((row) => ({ id: String(row._id), pushToken: row.pushToken }));
+  },
+
   /**
    * Sign-out. Scoped to the user as well as the installation: if the handset
    * changed hands, `register` will have rewritten the row to its new owner, and

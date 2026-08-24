@@ -43,4 +43,19 @@ export const NotificationService = {
       data: { type: "lead", reference: input.leadNumber },
     }));
   },
+
+  async notifyFollowUpsDue(input: { userId: string; institutionId: string; count: number }) {
+    const devices = await DeviceService.forUser(input.userId);
+    if (devices.length === 0) return;
+
+    const { deadTokens } = await sendPush(
+      devices.map((device) => ({
+        pushToken: device.pushToken,
+        title: input.count === 1 ? "1 follow-up due today" : `${input.count} follow-ups due today`,
+        body: "Open your queue to see who's waiting.",
+        data: { type: "follow-up-reminder" },
+      })),
+    );
+    await DeviceService.remove(deadTokens);
+  },
 };
