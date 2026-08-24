@@ -150,3 +150,84 @@ export type GalleryStatus = (typeof GALLERY_STATUSES)[number];
 
 /** A gallery, not a media platform. Enforced in the service, not only the UI. */
 export const GALLERY_MAX_ITEMS = 60;
+
+export const RESULT_BOARDS = [
+  "CBSE",
+  "ICSE",
+  "ISC",
+  "IB",
+  "IGCSE",
+  "STATE_BOARD",
+  "UNIVERSITY",
+  "AUTONOMOUS",
+  "OTHER",
+] as const;
+export type ResultBoard = (typeof RESULT_BOARDS)[number];
+
+export const RESULT_BOARD_LABELS: Record<ResultBoard, string> = {
+  CBSE: "CBSE",
+  ICSE: "ICSE",
+  ISC: "ISC",
+  IB: "International Baccalaureate",
+  IGCSE: "IGCSE",
+  STATE_BOARD: "State board",
+  UNIVERSITY: "University",
+  AUTONOMOUS: "Autonomous",
+  OTHER: "Other",
+};
+
+/**
+ * Boards whose enum member does not name the awarding body on its own. For
+ * these, `boardName` carries the real name (e.g. "Karnataka State Board") and
+ * is required.
+ */
+export const BOARD_NAME_REQUIRED: ReadonlySet<ResultBoard> = new Set<ResultBoard>([
+  "STATE_BOARD",
+  "UNIVERSITY",
+  "AUTONOMOUS",
+  "OTHER",
+]);
+
+export const RESULT_LEVELS = [
+  "CLASS_10",
+  "CLASS_12",
+  "PUC_1",
+  "PUC_2",
+  "UG",
+  "PG",
+  "DIPLOMA",
+  "OTHER",
+] as const;
+export type ResultLevel = (typeof RESULT_LEVELS)[number];
+
+export const RESULT_LEVEL_LABELS: Record<ResultLevel, string> = {
+  CLASS_10: "Class 10",
+  CLASS_12: "Class 12",
+  PUC_1: "PUC I",
+  PUC_2: "PUC II",
+  UG: "Undergraduate",
+  PG: "Postgraduate",
+  DIPLOMA: "Diploma",
+  OTHER: "Other",
+};
+
+export const RESULT_STREAMS = ["SCIENCE", "COMMERCE", "ARTS"] as const;
+export type ResultStream = (typeof RESULT_STREAMS)[number];
+
+export const RESULT_STREAM_LABELS: Record<ResultStream, string> = {
+  SCIENCE: "Science",
+  COMMERCE: "Commerce",
+  ARTS: "Arts",
+};
+
+export const RESULT_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type ResultStatus = (typeof RESULT_STATUSES)[number];
+
+export const RESULT_STATUS_LABELS: Record<ResultStatus, string> = {
+  DRAFT: "Draft",
+  PUBLISHED: "Published",
+  ARCHIVED: "Archived",
+};
+
+export const RESULT_MAX_BANDS = 8;
+export const RESULT_MAX_TOPPERS = 25;

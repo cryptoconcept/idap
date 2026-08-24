@@ -10,3 +10,4 @@ export { ApiClient, type ApiClientDoc } from "./ApiClient";
 export { Counter } from "./Counter";
 export { RateLimit } from "./RateLimit";
 export { RefreshToken, type RefreshTokenDoc } from "./RefreshToken";
+export { Result, type ResultDoc } from "./Result";
