@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect } from "react";
+import Link from "next/link";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { z } from "zod";
 import { updateProfileSchema } from "@/lib/validation/institution";
 import { GENDER_TYPES, GENDER_TYPE_LABELS } from "@/lib/constants";
+import { Button } from "@/components/ui/button";
 import {
   FieldGroup,
   FieldRow,
@@ -46,8 +48,6 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
         currentAcademicYear: profile.academic?.currentAcademicYear ?? "",
         genderType: profile.academic?.genderType,
         medium: profile.academic?.medium ?? [],
-        classesOffered: profile.academic?.classesOffered ?? [],
-        coursesOffered: profile.academic?.coursesOffered ?? [],
       },
     },
   });
@@ -127,7 +127,7 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
 
       <FieldGroup
         title="What you teach"
-        description="Saving replaces each list in full — that is how the API treats arrays."
+        description="Saving replaces the medium list in full — that is how the API treats arrays."
       >
         <Controller
           control={control}
@@ -146,39 +146,21 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
           )}
         />
 
-        <Controller
-          control={control}
-          name="academic.classesOffered"
-          render={({ field }) => (
-            <TagsField
-              id="academic-classesOffered"
-              label="Classes offered"
-              values={field.value ?? []}
-              onChange={field.onChange}
-              maxLength={40}
-              placeholder="Grade 1"
-              max={60}
-              error={errors.academic?.classesOffered?.message}
-            />
-          )}
-        />
-
-        <Controller
-          control={control}
-          name="academic.coursesOffered"
-          render={({ field }) => (
-            <TagsField
-              id="academic-coursesOffered"
-              label="Courses offered"
-              values={field.value ?? []}
-              onChange={field.onChange}
-              maxLength={120}
-              placeholder="B.Sc Computer Science"
-              max={120}
-              error={errors.academic?.coursesOffered?.message}
-            />
-          )}
-        />
+        {/*
+          Classes and courses used to be typed here. They are now derived from
+          the academic structure — one source of truth, and the shape follows
+          the kind of institution rather than being two free-text lists.
+        */}
+        <div className="rounded-md border border-border p-3">
+          <p className="text-sm font-medium">Classes and courses</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            These are published from your academic structure, so they stay in step with what you
+            actually offer.
+          </p>
+          <Button asChild size="sm" variant="outline" className="mt-2">
+            <Link href="/academic-structure">Edit academic structure</Link>
+          </Button>
+        </div>
       </FieldGroup>
     </SectionForm>
   );

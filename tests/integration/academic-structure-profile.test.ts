@@ -79,4 +79,14 @@ describe("public profile offerings", () => {
 
     expect(profile?.academic?.classesOffered).toEqual(["Fallback"]);
   });
+
+  it("scores the academic section complete from a tree, with no stored arrays", async () => {
+    await publishedInstitution("INS0005", { academic: { board: "State" } });
+    await AcademicStructureService.create("INS0005", { segment: "SCHOOL", name: "Grade 1" }, actor);
+
+    const { completion } = await InstitutionService.getProfile("INS0005");
+    const academic = completion.groups.find((group) => group.key === "academic");
+
+    expect(academic?.missing).not.toContain("Classes or courses offered");
+  });
 });

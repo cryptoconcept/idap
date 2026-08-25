@@ -318,7 +318,18 @@ export const InstitutionService = {
     await connectToDatabase();
     const row = await Institution.findOne({ institutionId }).lean();
     if (!row) throw notFound("Institution not found");
-    return { profile: serialize(row as InstitutionRow), completion: calculateCompletion(row) };
+
+    // Completion is scored against what the profile actually publishes. An
+    // institution that built a tree instead of typing the two lists has real
+    // offerings, and the same derivation the public projection uses is what
+    // says so — otherwise removing those inputs would permanently dock the
+    // academic section.
+    const offerings = await AcademicStructureService.offeringsFor(institutionId);
+    const scored = offerings
+      ? { ...row, academic: { ...(row.academic ?? {}), ...offerings } }
+      : row;
+
+    return { profile: serialize(row as InstitutionRow), completion: calculateCompletion(scored) };
   },
 
   /**
