@@ -1,5 +1,6 @@
 import { Schema, Types, model, models, type Model, type InferSchemaType } from "mongoose";
 import {
+  ACADEMIC_SEGMENTS,
   GALLERY_STATUSES,
   GENDER_TYPES,
   INSTITUTION_TYPES,
@@ -37,6 +38,14 @@ const AcademicSchema = new Schema(
     currentAcademicYear: { type: String, trim: true },
     classesOffered: { type: [String], default: undefined },
     coursesOffered: { type: [String], default: undefined },
+    /**
+     * Which academic segments this institution runs — one or more, because a
+     * school with a PU college attached is the norm, not the exception.
+     * `undefined` means "never chosen" and reads through
+     * `defaultSegmentsFor(institutionType)`. Written only by the
+     * academic-structure endpoint, never by a profile PATCH.
+     */
+    segments: { type: [String], enum: ACADEMIC_SEGMENTS, default: undefined },
   },
   { _id: false },
 );
