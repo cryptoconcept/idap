@@ -560,3 +560,44 @@ choices made above and must not be lost:
    `POST /api/settings/fees/bulk` → N independent DRAFT structures, each editable afterward;
    and a configurable per-institution fee-head list that the line-item label input suggests
    from while still accepting free text.
+
+### Added during execution
+
+Four more, surfaced by the whole-branch review rather than the original design:
+
+4. **Give `AcademicBlueprint` a `publishesAs: "classes" | "courses"` field.** The
+architecture's central claim — that a new institution type or segment costs one map
+entry and nothing else — was verified empirically and holds for both. But two places
+still name a segment by *value*: `deriveOfferings` decides which array a segment feeds
+with `segment === "SCHOOL"`, and `seedFromProfile` picks its target segments the same
+way. A new class-shaped segment would silently publish into `coursesOffered`. Moving
+that decision into the blueprint would make it genuinely the only edit.
+
+5. **`offeringsFor`'s `null` return is load-bearing — do not "simplify" it.** Since the
+public projection falls back per array, it is tempting to have `offeringsFor` always
+return an object. It must not: `getProfile` merges offerings into the document for
+completion scoring with a wholesale spread, and an empty-array object would clobber real
+stored values there.
+
+6. **The stored `academic.classesOffered` / `coursesOffered` arrays are now write-only
+from the API.** The profile form no longer edits them and seeding clears them. They
+remain solely as the pre-migration fallback. Once no institution is left un-migrated they
+can be dropped from the model, the validation schemas and the projection together.
+
+### Deliberately not done, with reasons
+
+So these are not rediscovered as fresh findings:
+
+- **The standalone `institutionId` index on `AcademicUnit` is redundant** — a strict
+prefix of the compound index. Kept because every other tenant-scoped model here declares
+the identical pair; deviating in one model is a larger surprise than the redundancy.
+- **`unit-tree.tsx` clears its `busy` flag before `router.refresh()` lands.** A very fast
+second click can build a payload from stale client state. Every such path was traced: a
+stale reorder is a no-op the server accepts, a stale add hits the unique index and toasts
+CONFLICT, a stale delete or rename 404s. None corrupts data. `router.refresh()` is
+fire-and-forget in Next 16 and cannot be awaited, so a real fix means tracking pending
+state until new props arrive — disproportionate for a single-admin settings screen.
+- **`seedFromProfile` clears both stored arrays whenever it created anything at all**,
+rather than per array. An array whose every entry was skipped as blank or duplicate is
+therefore cleared too. Verified harmless: a skipped entry is either worthless (whitespace)
+or already present in the tree under another name.
