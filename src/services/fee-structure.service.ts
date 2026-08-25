@@ -27,6 +27,8 @@ export type FeeStructureDTO = {
   updatedAt?: string;
 };
 
+export type FeeHeadDTO = { label: string; amount?: number; frequency?: string };
+
 /** A malformed id must read as "no such fee structure", not as a 500. */
 function toObjectId(feeStructureId: string): Types.ObjectId {
   if (!Types.ObjectId.isValid(feeStructureId)) throw notFound("Fee structure not found");
@@ -339,5 +341,53 @@ export const FeeStructureService = {
       performedBy: actor.id,
       performedByName: actor.name,
     });
+  },
+
+  async getFeeHeads(institutionId: string): Promise<FeeHeadDTO[]> {
+    await connectToDatabase();
+    const institution = await Institution.findOne({ institutionId })
+      .select("feeHeads")
+      .lean();
+    if (!institution) throw notFound("Institution not found");
+
+    return (institution.feeHeads ?? []).map((head) => ({
+      label: head.label,
+      amount: head.amount ?? undefined,
+      frequency: head.frequency ?? undefined,
+    }));
+  },
+
+  async setFeeHeads(
+    institutionId: string,
+    feeHeads: FeeHeadDTO[],
+    actor: { id: string; name: string },
+  ): Promise<FeeHeadDTO[]> {
+    await connectToDatabase();
+
+    // Replaced wholesale, like every other array on this document.
+    const updated = await Institution.findOneAndUpdate(
+      { institutionId },
+      { $set: { feeHeads } },
+      { new: true },
+    )
+      .select("feeHeads")
+      .lean();
+    if (!updated) throw notFound("Institution not found");
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "FEE_HEAD",
+      entityRef: institutionId,
+      action: "Fee heads updated",
+      description: `${feeHeads.length} head(s)`,
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return (updated.feeHeads ?? []).map((head) => ({
+      label: head.label,
+      amount: head.amount ?? undefined,
+      frequency: head.frequency ?? undefined,
+    }));
   },
 };
