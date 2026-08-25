@@ -1,15 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useFieldArray, useForm, type Resolver } from "react-hook-form";
+import { useForm, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
 import type { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -18,9 +16,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createFeeStructureSchema, updateFeeStructureSchema } from "@/lib/validation/fee-structure";
-import { FEE_FREQUENCIES, FEE_FREQUENCY_LABELS, type FeeFrequency } from "@/lib/constants";
-import type { FeeStructureDTO } from "@/services/fee-structure.service";
+import type { FeeFrequency } from "@/lib/constants";
+import type { FeeStructureDTO, FeeHeadDTO } from "@/services/fee-structure.service";
 import type { AcademicUnitDTO } from "@/services/academic-structure.service";
+import { FeeLineItemsEditor } from "@/components/fees/fee-line-items-editor";
 
 type Values = z.input<typeof createFeeStructureSchema>;
 
@@ -33,6 +32,7 @@ type Values = z.input<typeof createFeeStructureSchema>;
 export function FeeStructureForm({
   initialFeeStructure,
   units,
+  feeHeads,
 }: {
   /** `null` while creating — the same fields, saved by a POST instead of a PATCH. */
   initialFeeStructure: FeeStructureDTO | null;
@@ -41,6 +41,8 @@ export function FeeStructureForm({
    * editing — the unit is shown as read-only text there instead.
    */
   units: AcademicUnitDTO[];
+  /** The institution's configured fee heads, offered as a line-item prefill. */
+  feeHeads: FeeHeadDTO[];
 }) {
   const router = useRouter();
   const isEditing = initialFeeStructure !== null;
@@ -75,8 +77,6 @@ export function FeeStructureForm({
       })) ?? [],
     },
   });
-
-  const { fields, append, remove } = useFieldArray({ control, name: "lineItems" });
 
   async function onSubmit(values: Values) {
     try {
@@ -128,7 +128,8 @@ export function FeeStructureForm({
               {/*
                 A Radix Select is a button, not a native input, so it is driven by
                 watch/setValue rather than register() — the same way
-                `create-staff-dialog.tsx` and this form's own frequency Select do.
+                `create-staff-dialog.tsx` and `fee-line-items-editor.tsx`'s
+                frequency Select do.
               */}
               <Select
                 value={watch("academicUnitId")}
@@ -167,137 +168,14 @@ export function FeeStructureForm({
         </div>
       </div>
 
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label>Line items</Label>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => append({ label: "", amount: 0, frequency: "ANNUAL", optional: false })}
-          >
-            <Plus className="size-3.5" />
-            Add line item
-          </Button>
-        </div>
-
-        {fields.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No line items yet.</p>
-        ) : (
-          <div className="space-y-3">
-            {fields.map((field, index) => (
-              <div
-                key={field.id}
-                className="grid items-end gap-2 rounded-md border border-border p-3 sm:grid-cols-[1fr_140px_140px_auto_auto]"
-              >
-                <div className="space-y-1">
-                  <Label htmlFor={`lineItems.${index}.label`} className="text-xs">
-                    Label
-                  </Label>
-                  <Input
-                    id={`lineItems.${index}.label`}
-                    placeholder="Tuition"
-                    aria-invalid={Boolean(errors.lineItems?.[index]?.label)}
-                    {...register(`lineItems.${index}.label` as const)}
-                  />
-                  {errors.lineItems?.[index]?.label ? (
-                    <p className="text-xs text-destructive">
-                      {errors.lineItems[index]?.label?.message}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor={`lineItems.${index}.amount`} className="text-xs">
-                    Amount (₹)
-                  </Label>
-                  <Input
-                    id={`lineItems.${index}.amount`}
-                    type="number"
-                    min={0}
-                    aria-invalid={Boolean(errors.lineItems?.[index]?.amount)}
-                    {...register(`lineItems.${index}.amount` as const, { valueAsNumber: true })}
-                  />
-                  {errors.lineItems?.[index]?.amount ? (
-                    <p className="text-xs text-destructive">
-                      {errors.lineItems[index]?.amount?.message}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor={`lineItems.${index}.frequency`} className="text-xs">
-                    Frequency
-                  </Label>
-                  {/*
-                   * A plain `onValueChange` calling `setValue` directly, not
-                   * routing through `register()` — matching how
-                   * `create-staff-dialog.tsx` wires its `role` Select into
-                   * this same form library, the established convention here
-                   * for a Radix `Select` (which is not a native input and has
-                   * no `onChange` DOM event for `register()`'s handler to
-                   * attach to).
-                   */}
-                  <Select
-                    value={watch(`lineItems.${index}.frequency` as const)}
-                    onValueChange={(value) =>
-                      setValue(`lineItems.${index}.frequency` as const, value as FeeFrequency, {
-                        shouldDirty: true,
-                      })
-                    }
-                  >
-                    <SelectTrigger id={`lineItems.${index}.frequency`}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {FEE_FREQUENCIES.map((value) => (
-                        <SelectItem key={value} value={value}>
-                          {FEE_FREQUENCY_LABELS[value]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="flex items-center gap-1.5 pb-2">
-                  {/*
-                   * `Checkbox` (src/components/ui/checkbox.tsx) wraps Radix's
-                   * `Checkbox.Root` — a `button`, not a native checkbox input.
-                   * It only exposes `checked`/`onCheckedChange`, the same
-                   * controlled pair `api-keys-panel.tsx` drives it with
-                   * elsewhere in this codebase; spreading `register()` here
-                   * would attach an `onChange` the component never calls, so
-                   * it is wired the same controlled way as the `Select`
-                   * above instead.
-                   */}
-                  <Checkbox
-                    id={`lineItems.${index}.optional`}
-                    checked={Boolean(watch(`lineItems.${index}.optional` as const))}
-                    onCheckedChange={(checked) =>
-                      setValue(`lineItems.${index}.optional` as const, checked === true, {
-                        shouldDirty: true,
-                      })
-                    }
-                  />
-                  <Label htmlFor={`lineItems.${index}.optional`} className="text-xs font-normal">
-                    Optional
-                  </Label>
-                </div>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="ghost"
-                  className="text-destructive"
-                  onClick={() => remove(index)}
-                  aria-label="Remove line item"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        {typeof errors.lineItems?.message === "string" ? (
-          <p className="text-xs text-destructive">{errors.lineItems.message}</p>
-        ) : null}
-      </div>
+      <FeeLineItemsEditor
+        control={control}
+        register={register}
+        watch={watch}
+        setValue={setValue}
+        errors={errors}
+        feeHeads={feeHeads}
+      />
 
       <Button type="submit" size="sm" disabled={isSubmitting}>
         {isSubmitting ? "Saving…" : isEditing ? "Save changes" : "Create fee structure"}

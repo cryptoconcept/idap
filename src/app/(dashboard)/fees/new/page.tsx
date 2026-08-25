@@ -5,6 +5,7 @@ import { ArrowLeft } from "lucide-react";
 import { getCurrentUser } from "@/lib/auth/current-user";
 import { getCurrentInstitution } from "@/lib/tenant";
 import { AcademicStructureService } from "@/services/academic-structure.service";
+import { FeeStructureService } from "@/services/fee-structure.service";
 import { flattenTree, inactiveIds } from "@/lib/academic/tree";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/page-header";
@@ -29,6 +30,7 @@ export default async function NewFeeStructurePage() {
   // or something under a branch you have hidden, is not a thing to offer.
   const hidden = inactiveIds(allUnits);
   const units = flattenTree(allUnits).filter((unit) => !hidden.has(unit.id));
+  const feeHeads = await FeeStructureService.getFeeHeads(institution.institutionId);
 
   return (
     <>
@@ -52,7 +54,7 @@ export default async function NewFeeStructurePage() {
           actionHref="/academic-structure"
         />
       ) : (
-        <FeeStructureForm initialFeeStructure={null} units={units} />
+        <FeeStructureForm initialFeeStructure={null} units={units} feeHeads={feeHeads} />
       )}
     </>
   );

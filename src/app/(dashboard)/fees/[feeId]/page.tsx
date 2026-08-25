@@ -37,6 +37,8 @@ export default async function FeeStructureEditorPage(props: PageProps<"/fees/[fe
     throw error;
   }
 
+  const feeHeads = await FeeStructureService.getFeeHeads(institution.institutionId);
+
   return (
     <>
       <Button asChild variant="ghost" size="sm" className="-ml-2.5 mb-3 text-muted-foreground">
@@ -57,7 +59,7 @@ export default async function FeeStructureEditorPage(props: PageProps<"/fees/[fe
         </div>
       </div>
 
-      <FeeStructureForm initialFeeStructure={feeStructure} units={[]} />
+      <FeeStructureForm initialFeeStructure={feeStructure} units={[]} feeHeads={feeHeads} />
     </>
   );
 }
