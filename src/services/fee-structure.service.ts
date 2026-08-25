@@ -112,7 +112,7 @@ async function findOwned(institutionId: string, feeStructureId: string): Promise
 
 /**
  * A key absent from a patch arrives as `undefined` and must be left alone —
- * `$set: { classOrCourse: undefined }` would otherwise erase a stored value
+ * `$set: { academicYear: undefined }` would otherwise erase a stored value
  * the caller never mentioned.
  */
 function stripUndefined<T extends Record<string, unknown>>(patch: T): Partial<T> {
@@ -224,6 +224,10 @@ export const FeeStructureService = {
 
     return serialize({
       ...(created.toObject() as FeeStructureDoc),
+      // Derived inline from the unit already loaded above rather than via
+      // `withLabels`, which would re-query it. The two must agree: any change to
+      // how `withLabels` builds a label belongs here too, or a create response
+      // will disagree with the very next read.
       classOrCourse: unit.pathLabel,
     });
   },

@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
 
     return jsonSuccess({ feeStructure }, { status: 201 });
   } catch (error) {
-    // A duplicate (classOrCourse, academicYear) arrives here as a Mongo
+    // A duplicate (academicUnitId, academicYear) arrives here as a Mongo
     // 11000, which handleApiError already maps to CONFLICT.
     return handleApiError(error);
   }

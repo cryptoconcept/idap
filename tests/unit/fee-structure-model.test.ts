@@ -50,4 +50,17 @@ describe("FeeStructure model", () => {
     ).resolves.toBeDefined();
     await expect(FeeStructure.create({ ...base, academicUnitId: UNIT_B })).resolves.toBeDefined();
   });
+
+  it("refuses only on the new key once stale classOrCourse indexes are gone", async () => {
+    // Guards the Phase 4 -> Phase 6 index migration (scripts/sync-fee-indexes.ts).
+    // A surviving `{institutionId, classOrCourse, academicYear}` unique index would
+    // index every new document as `classOrCourse: null` and refuse the SECOND fee
+    // structure for an institution in a year, whatever unit it points at.
+    const indexes = await FeeStructure.collection.indexes();
+    expect(indexes.some((index) => "classOrCourse" in (index.key ?? {}))).toBe(false);
+
+    await FeeStructure.create(base);
+    // A different unit, same institution and year, must be accepted.
+    await expect(FeeStructure.create({ ...base, academicUnitId: UNIT_B })).resolves.toBeDefined();
+  });
 });

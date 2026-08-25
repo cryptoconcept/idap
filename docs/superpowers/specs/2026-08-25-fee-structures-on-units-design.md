@@ -160,7 +160,7 @@ if (referenced > 0) {
 ```
 
 It counts across the **whole subtree**, not just the unit itself: deleting a programme must
-be refused when a fee hangs off a branch three levels below it. The comment that currently
+be refused when a fee hangs off a branch levels below it. The comment that currently
 marks this as a Phase 6 obligation is removed in the same edit — the obligation is
 discharged.
 
@@ -221,8 +221,12 @@ still exists on the DTO.
 
 ## 10. Migration
 
-**No data migration.** There is no production fee data; `academicUnitId` is required from
-the first write.
+**No data migration, but an index migration.** There is no production fee data, so
+`academicUnitId` is required from the first write and no backfill is needed. The
+collection's *indexes* are a different matter: Mongoose creates the new unique key but
+never drops the Phase 4 one, so `scripts/sync-fee-indexes.ts` must run against any
+environment where Phase 4 was ever deployed, before this phase's code serves traffic.
+Without it the second fee structure per institution per academic year is refused.
 
 **A substantial test migration.** Roughly sixty existing fee tests construct fee structures
 with `classOrCourse: "Grade 10"`. Each must instead create an academic unit and pass its id.
@@ -312,6 +316,13 @@ delete to match.
 already attached to a unit that is later deactivated continues to exist and, if published,
 continues to publish. Whether deactivating a unit should unpublish its fees is a real
 question and deliberately not answered here.
+
+**The delete guard is not atomic.** `countDocuments` and `deleteMany` are separate
+operations, so a fee structure created against a unit in the window between them is
+orphaned. Its label then derives to an empty string, which the public projection drops,
+publishing a priced structure with no `classOrCourse` key. The window is narrow, the
+outcome is survivable and contract-valid, and a transaction is disproportionate to it —
+but the failure is silent, which is why it is written down.
 
 ---
 
