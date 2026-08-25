@@ -181,9 +181,11 @@ describe("POST /api/settings/fees/bulk/delete — the route's security boundary"
       cookieRequest({ body: { feeStructureIds: [a.id] }, origin: "http://localhost" }),
     );
     expect(counselor.status).toBe(403);
-    // The CODE, not just the status: DEFAULT_STATUS maps both FORBIDDEN and
-    // INACTIVE_INSTITUTION to 403, so a bare status check cannot tell the role
-    // gate firing from some other 403 branch firing in its place.
+    // The CODE, not just the status: more than one code maps to 403, so a bare
+    // status check cannot tell this gate firing from some other 403 arriving in
+    // its place. (`requireInstitution` itself throws FORBIDDEN on every branch —
+    // role, missing, and inactive alike — so what the code pins here is that the
+    // 403 came from the auth gate at all, not which of its branches produced it.)
     expect((await counselor.json()).error.code).toBe("FORBIDDEN");
     (await cookies()).delete(SESSION_COOKIE);
 
@@ -238,9 +240,11 @@ describe("POST /api/settings/fees/bulk/delete — the route's security boundary"
       cookieRequest({ body: { feeStructureIds: [a.id] }, origin: "http://localhost" }),
     );
     expect(frontDesk.status).toBe(403);
-    // The CODE, not just the status: DEFAULT_STATUS maps both FORBIDDEN and
-    // INACTIVE_INSTITUTION to 403, so a bare status check cannot tell the role
-    // gate firing from some other 403 branch firing in its place.
+    // The CODE, not just the status: more than one code maps to 403, so a bare
+    // status check cannot tell this gate firing from some other 403 arriving in
+    // its place. (`requireInstitution` itself throws FORBIDDEN on every branch —
+    // role, missing, and inactive alike — so what the code pins here is that the
+    // 403 came from the auth gate at all, not which of its branches produced it.)
     expect((await frontDesk.json()).error.code).toBe("FORBIDDEN");
   });
 
