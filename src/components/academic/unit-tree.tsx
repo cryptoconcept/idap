@@ -15,53 +15,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ACADEMIC_BLUEPRINTS, PATH_SEPARATOR, levelFor } from "@/lib/academic/blueprints";
+import { flattenTree, inactiveIds } from "@/lib/academic/tree";
 import type { AcademicSegment } from "@/lib/constants";
 import type { AcademicUnitDTO } from "@/services/academic-structure.service";
-
-/**
- * Rows in render order, each already carrying its own `depth` for indenting. A
- * flat list is easier to key and style than a nested render, and the tree is
- * tens of nodes.
- */
-export function flattenTree(units: AcademicUnitDTO[]): AcademicUnitDTO[] {
-  const childrenOf = new Map<string, AcademicUnitDTO[]>();
-  for (const unit of units) {
-    const key = unit.parentId ?? "";
-    const bucket = childrenOf.get(key);
-    if (bucket) bucket.push(unit);
-    else childrenOf.set(key, [unit]);
-  }
-  for (const bucket of childrenOf.values()) bucket.sort((a, b) => a.sortOrder - b.sortOrder);
-
-  const ordered: AcademicUnitDTO[] = [];
-  const walk = (parentId: string) => {
-    for (const unit of childrenOf.get(parentId) ?? []) {
-      ordered.push(unit);
-      walk(unit.id);
-    }
-  };
-  walk("");
-  return ordered;
-}
-
-/** A unit reads as inactive when it or any ancestor is — the read-time rule, made visible. */
-export function inactiveIds(units: AcademicUnitDTO[]): Set<string> {
-  const byId = new Map(units.map((unit) => [unit.id, unit]));
-  const inactive = new Set<string>();
-
-  for (const unit of units) {
-    let current: AcademicUnitDTO | undefined = unit;
-    for (let hops = unit.depth; current && hops >= 0; hops -= 1) {
-      if (!current.active) {
-        inactive.add(unit.id);
-        break;
-      }
-      if (current.parentId === null) break;
-      current = byId.get(current.parentId);
-    }
-  }
-  return inactive;
-}
 
 const BASE = "/api/settings/academic-structure";
 
@@ -274,7 +230,11 @@ export function UnitTree({
                     className="h-8 max-w-xs"
                     aria-label={`Rename ${unit.name}`}
                   />
-                  <Button size="sm" onClick={() => rename(unit)} disabled={busy}>
+                  <Button
+                    size="sm"
+                    onClick={() => rename(unit)}
+                    disabled={busy || renameValue.trim().length === 0}
+                  >
                     Save
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setRenamingId(null)}>
@@ -393,7 +353,7 @@ export function UnitTree({
           <DialogHeader>
             <DialogTitle>
               {descendantCount > 0
-                ? `Delete ${pendingDelete?.name} and the ${descendantCount} unit(s) beneath it?`
+                ? `Delete ${pendingDelete?.name} and the ${descendantCount} unit${descendantCount === 1 ? "" : "s"} beneath it?`
                 : `Delete ${pendingDelete?.name}?`}
             </DialogTitle>
             <DialogDescription>

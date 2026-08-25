@@ -91,7 +91,7 @@ async function segmentsFor(institutionId: string): Promise<AcademicSegment[]> {
   // units vanish from the editor, become uncreatable, and drop out of the
   // published offerings — which silently republishes stale hand-typed data.
   const occupied = await AcademicUnit.distinct("segment", { institutionId });
-  return orderSegments([...selected, ...(occupied as string[])]);
+  return orderSegments([...selected, ...occupied]);
 }
 
 async function pathLabelFor(
