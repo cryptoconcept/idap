@@ -14,12 +14,15 @@ import {
 } from "@/lib/academic/blueprints";
 import type {
   createAcademicUnitSchema,
+  reorderAcademicUnitsSchema,
   updateAcademicUnitSchema,
 } from "@/lib/validation/academic-structure";
+import { deriveOfferings, type DerivedOfferings } from "@/lib/academic/offerings";
 import { ActivityService } from "./activity.service";
 
 type CreateInput = z.infer<typeof createAcademicUnitSchema>;
 type UpdateInput = z.infer<typeof updateAcademicUnitSchema>;
+type ReorderInput = z.infer<typeof reorderAcademicUnitsSchema>;
 
 const ENTITY_TYPE = "ACADEMIC_UNIT";
 
@@ -356,18 +359,230 @@ export const AcademicStructureService = {
     return { deleted: ids.length };
   },
 
-  /**
-   * Minimal for Task 5 — Task 6 replaces this with the version that refuses to
-   * deselect a segment that still holds units, and records to the audit trail.
-   */
+  async reorder(
+    institutionId: string,
+    input: ReorderInput,
+    actor: { id: string; name: string },
+  ): Promise<AcademicUnitDTO[]> {
+    await connectToDatabase();
+
+    const parentId = input.parentId ? toObjectId(input.parentId) : null;
+    const siblings = await AcademicUnit.find({
+      institutionId,
+      segment: input.segment,
+      parentId,
+    })
+      .select("_id")
+      .lean<{ _id: Types.ObjectId }[]>();
+
+    const actual = new Set(siblings.map((row) => String(row._id)));
+    const requested = new Set(input.orderedIds);
+
+    // An exact set match, not a subset. A partial list would leave the
+    // unmentioned siblings holding stale sortOrders and interleave them
+    // silently; an id from another parent — or another tenant — is simply not
+    // in `actual`, so this is the tenant check too.
+    const matches =
+      requested.size === input.orderedIds.length &&
+      requested.size === actual.size &&
+      input.orderedIds.every((id) => actual.has(id));
+    if (!matches) {
+      throw validationError("orderedIds: must list every sibling exactly once");
+    }
+
+    await AcademicUnit.bulkWrite(
+      input.orderedIds.map((id, index) => ({
+        updateOne: {
+          filter: { _id: new Types.ObjectId(id), institutionId },
+          update: { $set: { sortOrder: index } },
+        },
+      })),
+    );
+
+    await ActivityService.record({
+      institutionId,
+      entityType: ENTITY_TYPE,
+      entityRef: institutionId,
+      action: "Academic units reordered",
+      description: `${input.orderedIds.length} unit(s) in ${input.segment}`,
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    const rows = await AcademicUnit.find({ institutionId, segment: input.segment, parentId })
+      .sort({ sortOrder: 1 })
+      .lean<AcademicUnitDoc[]>();
+    return rows.map(serialize);
+  },
+
+  async getSegments(institutionId: string): Promise<AcademicSegment[]> {
+    await connectToDatabase();
+    return segmentsFor(institutionId);
+  },
+
   async setSegments(
     institutionId: string,
     segments: readonly string[],
-    _actor: { id: string; name: string },
+    actor: { id: string; name: string },
   ): Promise<AcademicSegment[]> {
     await connectToDatabase();
+
     const next = orderSegments(segments);
+    const current = await segmentsFor(institutionId);
+    const removed = current.filter((segment) => !next.includes(segment));
+
+    if (removed.length > 0) {
+      // Refused rather than cascaded: deselecting a segment is a configuration
+      // change, and silently deleting a term's worth of structure behind it is
+      // not something an unticked checkbox should be able to do.
+      const blocking = await AcademicUnit.countDocuments({
+        institutionId,
+        segment: { $in: removed },
+      });
+      if (blocking > 0) {
+        throw validationError(
+          `segments: delete the ${blocking} unit(s) under ${removed.join(", ")} before deselecting`,
+        );
+      }
+    }
+
     await Institution.updateOne({ institutionId }, { $set: { "academic.segments": next } });
+
+    await ActivityService.record({
+      institutionId,
+      entityType: ENTITY_TYPE,
+      entityRef: institutionId,
+      action: "Academic segments updated",
+      description: next.join(", "),
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
     return next;
+  },
+
+  /** Whether the profile still holds hand-typed offerings worth importing. */
+  async hasProfileOfferings(institutionId: string): Promise<boolean> {
+    await connectToDatabase();
+    const institution = await Institution.findOne({ institutionId })
+      .select("academic.classesOffered academic.coursesOffered")
+      .lean();
+    const academic = (institution?.academic ?? {}) as {
+      classesOffered?: string[];
+      coursesOffered?: string[];
+    };
+    return (academic.classesOffered?.length ?? 0) + (academic.coursesOffered?.length ?? 0) > 0;
+  },
+
+  /**
+   * The one-time import that keeps removing two profile inputs from costing an
+   * institution the data it already typed. Idempotent by construction: the
+   * zero-units precondition means a second call finds units and refuses.
+   */
+  async seedFromProfile(
+    institutionId: string,
+    actor: { id: string; name: string },
+  ): Promise<{ created: number; skipped: number }> {
+    await connectToDatabase();
+
+    const existing = await AcademicUnit.countDocuments({ institutionId });
+    if (existing > 0) {
+      throw validationError(
+        "Seeding is only available while the academic structure is still empty",
+      );
+    }
+
+    const institution = await Institution.findOne({ institutionId })
+      .select("institutionType academic")
+      .lean();
+    if (!institution) throw notFound("Institution not found");
+
+    const academic = (institution.academic ?? {}) as {
+      classesOffered?: string[];
+      coursesOffered?: string[];
+      segments?: string[];
+    };
+    const classes = academic.classesOffered ?? [];
+    const courses = academic.coursesOffered ?? [];
+    if (classes.length === 0 && courses.length === 0) {
+      throw validationError("There is nothing on the profile to seed from");
+    }
+
+    const segments = academic.segments?.length
+      ? orderSegments(academic.segments)
+      : defaultSegmentsFor(institution.institutionType);
+
+    // Preferred segment per array, each with one fallback. `segments` always
+    // holds at least one entry, so both always resolve and no entry is ever
+    // left with nowhere to go.
+    const fallback = segments[0] as AcademicSegment;
+    const classSegment: AcademicSegment = segments.includes("SCHOOL") ? "SCHOOL" : fallback;
+    const courseSegment: AcademicSegment =
+      segments.find((segment) => segment !== "SCHOOL") ?? fallback;
+
+    const pending = [
+      ...classes.map((name) => ({ segment: classSegment, name })),
+      ...courses.map((name) => ({ segment: courseSegment, name })),
+    ];
+
+    const seen = new Set<string>();
+    const nextSortOrder = new Map<AcademicSegment, number>();
+    const documents: Record<string, unknown>[] = [];
+    let skipped = 0;
+
+    for (const entry of pending) {
+      const name = String(entry.name).trim();
+      const key = `${entry.segment}:${name}`;
+      if (name.length === 0 || seen.has(key)) {
+        skipped += 1;
+        continue;
+      }
+      seen.add(key);
+
+      const sortOrder = nextSortOrder.get(entry.segment) ?? 0;
+      nextSortOrder.set(entry.segment, sortOrder + 1);
+      documents.push({
+        institutionId,
+        segment: entry.segment,
+        parentId: null,
+        depth: 0,
+        name,
+        pathLabel: name,
+        sortOrder,
+        active: true,
+      });
+    }
+
+    if (documents.length > 0) await AcademicUnit.insertMany(documents);
+
+    await ActivityService.record({
+      institutionId,
+      entityType: ENTITY_TYPE,
+      entityRef: institutionId,
+      action: "Academic structure seeded from profile",
+      description: `${documents.length} created, ${skipped} skipped`,
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return { created: documents.length, skipped };
+  },
+
+  /**
+   * `null` when there is nothing to derive. The public profile path then leaves
+   * the stored arrays alone, so an institution that has not built a tree — or
+   * has deactivated all of it — keeps publishing exactly what it publishes
+   * today. Nothing disappears from a live profile on release day.
+   */
+  async offeringsFor(institutionId: string): Promise<DerivedOfferings | null> {
+    await connectToDatabase();
+    const units = await AcademicStructureService.list(institutionId);
+    if (units.length === 0) return null;
+
+    const offerings = deriveOfferings(units, await segmentsFor(institutionId));
+    if (offerings.classesOffered.length === 0 && offerings.coursesOffered.length === 0) {
+      return null;
+    }
+    return offerings;
   },
 };
