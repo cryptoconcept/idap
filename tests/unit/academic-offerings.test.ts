@@ -111,11 +111,18 @@ describe("deriveOfferings", () => {
       unit({ name: "B-first", segment: "PRE_UNIVERSITY", parentId: first.id, depth: 1, sortOrder: 1 }),
       first,
       unit({ name: "A-first", segment: "PRE_UNIVERSITY", parentId: first.id, depth: 1, sortOrder: 0 }),
+      // Two-digit sortOrder, reachable as soon as a parent has 11+ children.
+      // Without the zero-padding in `sortKey`, "0.10" sorts before "0.2" and
+      // this pair comes back reversed.
+      unit({ name: "D-first", segment: "PRE_UNIVERSITY", parentId: first.id, depth: 1, sortOrder: 10 }),
+      unit({ name: "C-first", segment: "PRE_UNIVERSITY", parentId: first.id, depth: 1, sortOrder: 2 }),
     ];
 
     expect(deriveOfferings(units, ["PRE_UNIVERSITY"]).coursesOffered).toEqual([
       "A-first",
       "B-first",
+      "C-first",
+      "D-first",
       "B-second",
     ]);
   });
