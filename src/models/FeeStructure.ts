@@ -19,7 +19,12 @@ const FeeLineItemSchema = new Schema(
 const FeeStructureSchema = new Schema(
   {
     institutionId: { type: String, required: true, index: true },
-    classOrCourse: { type: String, required: true, trim: true },
+    /**
+     * The academic unit this prices. No `ref`: nothing here uses Mongoose
+     * `populate`, and the service's enrichment helper queries the model
+     * directly — a `ref` would imply an access pattern that does not exist.
+     */
+    academicUnitId: { type: Schema.Types.ObjectId, required: true, index: true },
     academicYear: { type: String, required: true, trim: true },
 
     lineItems: { type: [FeeLineItemSchema], default: undefined },
@@ -33,9 +38,9 @@ const FeeStructureSchema = new Schema(
 FeeStructureSchema.index({ institutionId: 1, createdAt: -1 });
 FeeStructureSchema.index({ institutionId: 1, status: 1, academicYear: -1 });
 
-/** One record per class/course per academic year. Duplicates are refused by the index, not by a pre-read. */
+/** One fee structure per unit per academic year. Refused by the index, not a pre-read. */
 FeeStructureSchema.index(
-  { institutionId: 1, classOrCourse: 1, academicYear: 1 },
+  { institutionId: 1, academicUnitId: 1, academicYear: 1 },
   { unique: true },
 );
 
