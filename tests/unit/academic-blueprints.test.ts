@@ -24,13 +24,30 @@ describe("academic blueprints", () => {
   });
 
   it("keeps every offeringDepth inside its own level list", () => {
-    // The off-by-one here would silently publish an empty offerings array
-    // rather than fail loudly, so it is asserted rather than eyeballed.
+    // Bounds first — an out-of-range offeringDepth would publish nothing at all.
     for (const segment of ACADEMIC_SEGMENTS) {
       const blueprint = ACADEMIC_BLUEPRINTS[segment];
       expect(blueprint.offeringDepth).toBeGreaterThanOrEqual(0);
       expect(blueprint.offeringDepth).toBeLessThan(blueprint.levels.length);
     }
+    // Bounds alone would still pass if ENGINEERING pointed at YEAR, so the tier
+    // each segment actually publishes is pinned by name.
+    const publishedTier = Object.fromEntries(
+      ACADEMIC_SEGMENTS.map((segment) => {
+        const blueprint = ACADEMIC_BLUEPRINTS[segment];
+        return [segment, blueprint.levels[blueprint.offeringDepth].key];
+      }),
+    );
+    expect(publishedTier).toEqual({
+      SCHOOL: "CLASS",
+      PRE_UNIVERSITY: "COMBINATION",
+      DEGREE: "COURSE",
+      ENGINEERING: "BRANCH",
+      POLYTECHNIC: "COURSE",
+      UNIVERSITY: "COURSE",
+      COACHING: "PROGRAMME",
+      OTHER: "PROGRAMME",
+    });
   });
 
   it("uses only declared level keys, and declares no unused ones", () => {
@@ -50,6 +67,22 @@ describe("academic blueprints", () => {
       expect(segments.length).toBeGreaterThan(0);
       for (const segment of segments) expect(ACADEMIC_SEGMENTS).toContain(segment);
     }
+    // Pinned by value: a silent swap of MEDICAL_COLLEGE to ENGINEERING would
+    // otherwise pass, because ENGINEERING is also a real segment.
+    expect(DEFAULT_SEGMENTS_FOR_TYPE).toEqual({
+      SCHOOL: ["SCHOOL"],
+      PU_COLLEGE: ["PRE_UNIVERSITY"],
+      DEGREE_COLLEGE: ["DEGREE"],
+      ENGINEERING_COLLEGE: ["ENGINEERING"],
+      MEDICAL_COLLEGE: ["DEGREE"],
+      UNIVERSITY: ["UNIVERSITY"],
+      OTHER: ["OTHER"],
+      B_ED_COLLEGE: ["DEGREE"],
+      NURSING_COLLEGE: ["DEGREE"],
+      POLYTECHNIC: ["POLYTECHNIC"],
+      COACHING_INSTITUTION: ["COACHING"],
+      TRAINING_INSTITUTION: ["COACHING"],
+    });
   });
 
   it("returns null for a depth past the end of a blueprint", () => {
