@@ -1,6 +1,7 @@
 import { Schema, Types, model, models, type Model, type InferSchemaType } from "mongoose";
 import {
   ACADEMIC_SEGMENTS,
+  FEE_FREQUENCIES,
   GALLERY_STATUSES,
   GENDER_TYPES,
   INSTITUTION_TYPES,
@@ -95,6 +96,21 @@ const FacilitySchema = new Schema(
   { _id: false },
 );
 
+/**
+ * What this institution charges for. A head is a suggestion the line-item editor
+ * fills from, never a constraint — a line item may carry any label. Defaults are
+ * optional because a charge whose amount genuinely varies by class still deserves
+ * a name.
+ */
+const FeeHeadSchema = new Schema(
+  {
+    label: { type: String, required: true, trim: true },
+    amount: { type: Number, min: 0 },
+    frequency: { type: String, enum: FEE_FREQUENCIES },
+  },
+  { _id: false },
+);
+
 /** Keeps its _id — the media delete endpoint addresses items by it. */
 const GalleryItemSchema = new Schema({
   imageUrl: { type: String, required: true, trim: true },
@@ -149,6 +165,7 @@ const InstitutionSchema = new Schema(
     academic: { type: AcademicSchema, default: undefined },
     management: { type: ManagementSchema, default: undefined },
     facilities: { type: [FacilitySchema], default: undefined },
+    feeHeads: { type: [FeeHeadSchema], default: undefined },
     social: { type: SocialSchema, default: undefined },
     gallery: { type: [GalleryItemSchema], default: undefined },
   },

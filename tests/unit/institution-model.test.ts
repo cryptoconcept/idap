@@ -107,4 +107,45 @@ describe("Institution profile schema", () => {
     expect(INSTITUTION_TYPES).toHaveLength(12);
     expect(GALLERY_MAX_ITEMS).toBe(60);
   });
+
+  it("stores fee heads with optional defaults", async () => {
+    const created = await Institution.create({
+      institutionId: "INS0100",
+      institutionName: "Test",
+      institutionType: "SCHOOL",
+      feeHeads: [
+        { label: "Tuition", amount: 60000, frequency: "ANNUAL" },
+        // A charge whose amount varies by class still deserves a name.
+        { label: "Transport" },
+      ],
+    });
+
+    expect(created.feeHeads).toHaveLength(2);
+    expect(created.feeHeads?.[0]?.amount).toBe(60000);
+    expect(created.feeHeads?.[1]?.amount).toBeUndefined();
+    expect(created.feeHeads?.[1]?.frequency).toBeUndefined();
+  });
+
+  it("leaves feeHeads absent when never configured", async () => {
+    const created = await Institution.create({
+      institutionId: "INS0101",
+      institutionName: "Test",
+      institutionType: "SCHOOL",
+    });
+
+    // `default: undefined` means "never configured" reads as absent, matching
+    // `facilities` and `academic.segments`.
+    expect(created.feeHeads).toBeUndefined();
+  });
+
+  it("rejects a fee head with an unknown frequency or a negative amount", async () => {
+    const base = { institutionId: "INS0102", institutionName: "Test", institutionType: "SCHOOL" };
+
+    await expect(
+      Institution.create({ ...base, feeHeads: [{ label: "X", frequency: "WEEKLY" }] }),
+    ).rejects.toBeDefined();
+    await expect(
+      Institution.create({ ...base, feeHeads: [{ label: "X", amount: -1 }] }),
+    ).rejects.toBeDefined();
+  });
 });

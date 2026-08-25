@@ -177,6 +177,7 @@ export type ProfileDTO = InstitutionDTO & {
     available?: boolean;
     note?: string;
   }[];
+  feeHeads?: { label: string; amount?: number; frequency?: string }[];
   social?: {
     facebook?: string;
     instagram?: string;

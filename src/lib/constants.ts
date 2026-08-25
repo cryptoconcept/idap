@@ -347,3 +347,9 @@ export type AcademicLevelKey = (typeof ACADEMIC_LEVEL_KEYS)[number];
  * this is the guard that keeps the assumption true.
  */
 export const ACADEMIC_UNIT_MAX_PER_INSTITUTION = 500;
+
+/**
+ * An institution with thirty distinct charges has a different problem than this
+ * feature solves.
+ */
+export const FEE_HEAD_MAX = 30;
