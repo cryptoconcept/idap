@@ -244,6 +244,7 @@ describe("academic structure routes — who is turned away", () => {
       cookieRequest({ body: { segment: "SCHOOL", name: "X" }, origin: "http://evil.test" }),
     );
 
-    expect(response.status).toBeGreaterThanOrEqual(400);
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.code).toBe("FORBIDDEN");
   });
 });

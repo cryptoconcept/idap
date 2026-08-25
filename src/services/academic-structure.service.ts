@@ -340,7 +340,12 @@ export const AcademicStructureService = {
     // a delete whose subtree is referenced by any fee structure must be refused
     // right here. Nothing references a unit in Phase 5, so this is unguarded.
     const ids = await subtreeIds(institutionId, before);
-    await AcademicUnit.deleteMany({ _id: { $in: ids }, institutionId });
+    const result = await AcademicUnit.deleteMany({ _id: { $in: ids }, institutionId });
+
+    // The count reported is what the database actually removed, not what we
+    // intended to remove. The two are identical whenever scoping is correct —
+    // reporting the intended number would hide the case where it is not.
+    if (result.deletedCount === 0) throw notFound("Academic unit not found");
 
     await ActivityService.record({
       institutionId,
@@ -349,14 +354,14 @@ export const AcademicStructureService = {
       entityRef: institutionId,
       action: "Academic unit deleted",
       description:
-        ids.length > 1
-          ? `${before.pathLabel} and ${ids.length - 1} unit(s) beneath it`
+        result.deletedCount > 1
+          ? `${before.pathLabel} and ${result.deletedCount - 1} unit(s) beneath it`
           : before.pathLabel,
       performedBy: actor.id,
       performedByName: actor.name,
     });
 
-    return { deleted: ids.length };
+    return { deleted: result.deletedCount };
   },
 
   async reorder(
