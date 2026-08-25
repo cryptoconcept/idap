@@ -271,16 +271,65 @@ export const FeeStructureService = {
       .map((unit) => ({ academicUnitId: String(unit._id), classOrCourse: unit.pathLabel }));
     const fresh = units.filter((unit) => !taken.has(String(unit._id)));
 
+    // Counted from what the database actually inserted (below), never from
+    // `fresh.length` — that would only be true because `insertMany` used to be
+    // ordered and threw before this point was ever reached.
+    let created = 0;
+
     if (fresh.length > 0) {
-      await FeeStructure.insertMany(
-        fresh.map((unit) => ({
-          institutionId,
-          academicUnitId: unit._id,
-          academicYear: input.academicYear,
-          lineItems: input.lineItems,
-          status: "DRAFT",
-        })),
-      );
+      try {
+        // Unordered: a duplicate key at document k must not cost documents k+1..n
+        // the rest of the batch. `existing` was read moments ago, not inside a
+        // transaction (the test harness's standalone mongod cannot start one, and
+        // this repo has none in production either), so another request racing
+        // between that read and this write can already hold one of these units —
+        // ordered:true would half-apply the batch on that single collision.
+        // `throwOnValidationError` keeps a genuine per-document validation failure
+        // from vanishing with no signal at all: the driver-error branch below only
+        // ever reports duplicate-key failures, so without this a validation error
+        // would just be dropped, uncounted as both created and skipped.
+        const inserted = await FeeStructure.insertMany(
+          fresh.map((unit) => ({
+            institutionId,
+            academicUnitId: unit._id,
+            academicYear: input.academicYear,
+            lineItems: input.lineItems,
+            status: "DRAFT",
+          })),
+          { ordered: false, throwOnValidationError: true },
+        );
+        created = inserted.length;
+      } catch (err) {
+        // Verified against the installed mongoose@8.24.3 (see task report): under
+        // `ordered: false`, a duplicate-key bulk-write error's `writeErrors` is an
+        // array of `{ index, err: { code, ... } }` — the code lives one level down,
+        // under `.err`, not on the entry itself — and `insertedDocs` holds the
+        // Mongoose documents that DID make it into the database. `index` is the
+        // position in the array passed to `insertMany`, i.e. an index into `fresh`.
+        const writeErrors = (
+          err as { writeErrors?: { index: number; err?: { code?: number } }[] }
+        ).writeErrors;
+
+        // Every write error must be a duplicate key for this to be "someone else
+        // priced it first" — a raced insert of the same unit is exactly what this
+        // feature already calls skipped. Anything else (a real validation failure,
+        // a dropped connection, anything not code 11000) is a genuine failure and
+        // must propagate rather than being read as a batch of skips.
+        const allDuplicates =
+          Array.isArray(writeErrors) &&
+          writeErrors.length > 0 &&
+          writeErrors.every((writeError) => writeError.err?.code === 11000);
+        if (!allDuplicates) throw err;
+
+        created = (err as { insertedDocs?: unknown[] }).insertedDocs?.length ?? 0;
+
+        for (const writeError of writeErrors) {
+          const unit = fresh[writeError.index];
+          if (unit) {
+            skipped.push({ academicUnitId: String(unit._id), classOrCourse: unit.pathLabel });
+          }
+        }
+      }
     }
 
     // One entry for the batch, not one per structure — an audit trail with sixty
@@ -290,12 +339,12 @@ export const FeeStructureService = {
       entityType: "FEE_STRUCTURE",
       entityRef: institutionId,
       action: "Fee structures created in bulk",
-      description: `${fresh.length} created, ${skipped.length} skipped for ${input.academicYear}`,
+      description: `${created} created, ${skipped.length} skipped for ${input.academicYear}`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
 
-    return { created: fresh.length, skipped };
+    return { created, skipped };
   },
 
   async update(

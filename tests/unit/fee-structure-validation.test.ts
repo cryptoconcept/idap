@@ -135,6 +135,19 @@ describe("bulk fee validation", () => {
     ).toBe(false);
   });
 
+  it("rejects two different-cased spellings of the same id as duplicates", () => {
+    // ObjectId hex is case-insensitive, so `OID` and `OID.toUpperCase()` are the
+    // SAME id even though they are different strings. Comparing raw strings would
+    // let both through as "distinct", collapse to one document in a `$in` query,
+    // and trip a spurious NOT_FOUND downstream.
+    expect(
+      bulkCreateFeeSchema.safeParse({
+        academicUnitIds: [OID, OID.toUpperCase()],
+        academicYear: "2026-27",
+      }).success,
+    ).toBe(false);
+  });
+
   it("caps the batch at 100 and accepts exactly 100", () => {
     const ids = (count: number) =>
       Array.from({ length: count }, (_, index) =>

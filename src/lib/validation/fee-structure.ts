@@ -80,15 +80,25 @@ const BULK_MAX_IDS = 100;
 /**
  * Duplicates are rejected rather than silently de-duplicated: a caller sending the
  * same id twice has a bug, and swallowing it hides the bug rather than the request.
+ *
+ * Compared lowercased, not as stored: ObjectId hex is case-insensitive
+ * (`new Types.ObjectId("507f...").equals(new Types.ObjectId("507F..."))` is
+ * `true`), so two differently-cased spellings of one id are the SAME id and
+ * must be caught here — otherwise they'd pass this check as "distinct", then
+ * collapse to one document in the `$in` query downstream, tripping
+ * `units.length !== ids.length` into a spurious NOT_FOUND for a well-formed
+ * request. Only the comparison is normalised; the values themselves are
+ * stored and passed onward exactly as the caller sent them.
  */
 const distinctObjectIds = (label: string) =>
   z
     .array(objectIdString)
     .min(1, `Select at least one ${label}`)
     .max(BULK_MAX_IDS, `Cannot process more than ${BULK_MAX_IDS} at once`)
-    .refine((values) => new Set(values).size === values.length, {
-      message: `Each ${label} can appear only once`,
-    });
+    .refine(
+      (values) => new Set(values.map((value) => value.toLowerCase())).size === values.length,
+      { message: `Each ${label} can appear only once` },
+    );
 
 const feeHeadSchema = z.object({
   label: requiredText("Fee head label", 60),

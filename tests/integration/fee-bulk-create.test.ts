@@ -1,9 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
-import { AcademicUnit, FeeStructure } from "@/models";
+import { Activity, AcademicUnit, FeeStructure } from "@/models";
 import { FeeStructureService } from "@/services/fee-structure.service";
 import { AcademicStructureService, type AcademicUnitDTO } from "@/services/academic-structure.service";
 import type { BulkCreateFeeInput } from "@/lib/validation/fee-structure";
@@ -135,6 +135,31 @@ describe("FeeStructureService.createMany", () => {
     expect(result.skipped[0]?.classOrCourse).toBe(unitA.pathLabel);
   });
 
+  // Mutation-proven: removing `academicYear: input.academicYear` from the
+  // `existing` query leaves the other five tests in this file green, because
+  // every one of them uses a single academic year throughout. This is the one
+  // that would fail — a unit priced for year A must still be fresh for year B.
+  it("prices a unit for a new academic year even though it is already priced for another", async () => {
+    await FeeStructureService.createMany(
+      "INS0001",
+      input({ academicUnitIds: [unitA.id], academicYear: "2025-26" }),
+      actor,
+    );
+
+    const result = await FeeStructureService.createMany(
+      "INS0001",
+      input({ academicUnitIds: [unitA.id], academicYear: "2026-27" }),
+      actor,
+    );
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toHaveLength(0);
+
+    const rows = await FeeStructure.find({ institutionId: "INS0001" }).lean();
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.academicYear).sort()).toEqual(["2025-26", "2026-27"]);
+  });
+
   it("returns created: 0 with every unit skipped when all are already priced", async () => {
     await FeeStructureService.createMany("INS0001", input(), actor);
 
@@ -187,6 +212,71 @@ describe("FeeStructureService.createMany", () => {
     ).rejects.toThrow(/appears more than once/i);
 
     expect(await FeeStructure.countDocuments({})).toBe(0);
+  });
+
+  it("treats a duplicate raced in between the `existing` read and `insertMany` as a skip, not a crash", async () => {
+    // Makes the race deterministic instead of timing-dependent: the `existing`
+    // query is the one read `createMany` does before deciding what is fresh, so
+    // wrapping ITS `exec` lets a "competing request" insert a document for unitB
+    // right after that read comes back empty-handed — landing exactly in the
+    // window the plan's Global Constraint worries about, every time this runs.
+    // `Model.find` is heavily overloaded; a plain cast to a single simple
+    // signature keeps the mock's own body readable without fighting overload
+    // resolution, and `as typeof FeeStructure.find` re-widens it back for
+    // `vi.spyOn` at the point it is actually installed below.
+    const originalFind = FeeStructure.find.bind(FeeStructure) as (
+      filter?: Record<string, unknown>,
+    ) => ReturnType<typeof FeeStructure.find>;
+    const findSpy = vi.spyOn(FeeStructure, "find").mockImplementation(((
+      filter?: Record<string, unknown>,
+    ) => {
+      const query = originalFind(filter);
+      if (filter && "academicYear" in filter) {
+        const patched = query as unknown as { exec: (...execArgs: unknown[]) => Promise<unknown> };
+        const originalExec = patched.exec.bind(patched);
+        patched.exec = async (...execArgs: unknown[]) => {
+          const rows = await originalExec(...execArgs);
+          // The competing write: another admin's request lands for unitB, for
+          // the very same year this call is about to price it for, AFTER this
+          // call has already read `existing` and decided unitB looks fresh.
+          await FeeStructure.create({
+            institutionId: "INS0001",
+            academicUnitId: unitB.id,
+            academicYear: "2026-27",
+            status: "DRAFT",
+          });
+          return rows;
+        };
+      }
+      return query;
+    }) as typeof FeeStructure.find);
+
+    try {
+      const result = await FeeStructureService.createMany("INS0001", input(), actor);
+
+      // No throw — the caller sees the normal {created, skipped} shape, never
+      // the opaque 409 an unhandled E11000 used to produce.
+      expect(result.created).toBe(1);
+      expect(result.skipped).toHaveLength(1);
+      expect(result.skipped[0]?.academicUnitId).toBe(unitB.id);
+      expect(result.skipped[0]?.classOrCourse).toBe(unitB.pathLabel);
+
+      // `created` matches what the database actually holds for this call: the
+      // raced-in doc plus the one this call made it past the collision to write.
+      const rows = await FeeStructure.find({ institutionId: "INS0001" }).lean();
+      expect(rows).toHaveLength(2);
+      expect(result.created).toBe(rows.length - 1);
+
+      const entries = await Activity.find({
+        institutionId: "INS0001",
+        entityType: "FEE_STRUCTURE",
+        action: "Fee structures created in bulk",
+      }).lean();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.description).toBe("1 created, 1 skipped for 2026-27");
+    } finally {
+      findSpy.mockRestore();
+    }
   });
 });
 
