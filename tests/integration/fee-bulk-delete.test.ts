@@ -181,6 +181,10 @@ describe("POST /api/settings/fees/bulk/delete — the route's security boundary"
       cookieRequest({ body: { feeStructureIds: [a.id] }, origin: "http://localhost" }),
     );
     expect(counselor.status).toBe(403);
+    // The CODE, not just the status: DEFAULT_STATUS maps both FORBIDDEN and
+    // INACTIVE_INSTITUTION to 403, so a bare status check cannot tell the role
+    // gate firing from some other 403 branch firing in its place.
+    expect((await counselor.json()).error.code).toBe("FORBIDDEN");
     (await cookies()).delete(SESSION_COOKIE);
 
     await signInPlatformAdmin();
@@ -188,6 +192,7 @@ describe("POST /api/settings/fees/bulk/delete — the route's security boundary"
       cookieRequest({ body: { feeStructureIds: [a.id] }, origin: "http://localhost" }),
     );
     expect(platformAdmin.status).toBe(403);
+    expect((await platformAdmin.json()).error.code).toBe("FORBIDDEN");
     (await cookies()).delete(SESSION_COOKIE);
 
     await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");

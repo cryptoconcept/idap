@@ -75,7 +75,9 @@ export function assertFeeStructurePublishable(input: FeeStructureInvariantInput)
   }
 }
 
-const BULK_MAX_IDS = 100;
+/** The most ids any bulk fee operation accepts in one request. Exported so the
+ * UI can stop a "select all" short of a limit the API would reject. */
+export const BULK_MAX_IDS = 100;
 
 /**
  * Duplicates are rejected rather than silently de-duplicated: a caller sending the

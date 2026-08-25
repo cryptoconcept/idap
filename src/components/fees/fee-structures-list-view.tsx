@@ -20,14 +20,9 @@ import { PageHeader } from "@/components/shared/page-header";
 import { FeeStructureStatusBadge } from "@/components/fees/fee-structure-status-badge";
 import type { FeeStructureDTO } from "@/services/fee-structure.service";
 import type { FeeStructureStatus } from "@/lib/constants";
-
-/**
- * Mirrors `BULK_MAX_IDS` in `src/lib/validation/fee-structure.ts`. That
- * constant isn't exported, so this is a second source of truth for the same
- * number — a fixed schema limit that's safe to duplicate — used only to keep
- * "select all" from selecting more than the API will ever accept.
- */
-const BULK_DELETE_MAX = 100;
+// The same cap the API enforces, imported rather than mirrored: "select all"
+// must not build a selection the request would reject.
+import { BULK_MAX_IDS } from "@/lib/validation/fee-structure";
 
 /** Quick-glance total: every ANNUAL line item summed. Not a stored field. */
 function annualTotal(feeStructure: FeeStructureDTO): number {
@@ -65,11 +60,11 @@ export function FeeStructuresListView({ feeStructures }: { feeStructures: FeeStr
       return;
     }
 
-    if (feeStructures.length > BULK_DELETE_MAX) {
+    if (feeStructures.length > BULK_MAX_IDS) {
       toast.info(
-        `Only the first ${BULK_DELETE_MAX} were selected — bulk delete supports at most ${BULK_DELETE_MAX} at a time.`,
+        `Only the first ${BULK_MAX_IDS} were selected — bulk delete supports at most ${BULK_MAX_IDS} at a time.`,
       );
-      setSelected(new Set(feeStructures.slice(0, BULK_DELETE_MAX).map((feeStructure) => feeStructure.id)));
+      setSelected(new Set(feeStructures.slice(0, BULK_MAX_IDS).map((feeStructure) => feeStructure.id)));
       return;
     }
 
