@@ -213,4 +213,26 @@ describe("AcademicStructureService CRUD", () => {
     await expect(AcademicStructureService.update("INS0001", "not-an-id", { name: "X" }, actor))
       .rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("refuses a rename whose parent vanished instead of inventing a root-shaped path", async () => {
+    const year = await AcademicStructureService.create(
+      "INS0003",
+      { segment: "PRE_UNIVERSITY", name: "PUC 1st Year" },
+      actor,
+    );
+    const combination = await AcademicStructureService.create(
+      "INS0003",
+      { segment: "PRE_UNIVERSITY", parentId: year.id, name: "PCMB" },
+      actor,
+    );
+
+    // Deleted straight through the model, bypassing the service, to simulate the
+    // parent disappearing underneath a rename. `remove` would have taken the
+    // child with it.
+    await AcademicUnit.deleteOne({ _id: year.id });
+
+    await expect(
+      AcademicStructureService.update("INS0003", combination.id, { name: "PCMC" }, actor),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
 });
