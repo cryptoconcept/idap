@@ -47,15 +47,38 @@ export function FeeStructuresListView({ feeStructures }: { feeStructures: FeeStr
 
   function toggleRow(id: string, checked: boolean) {
     setSelected((current) => {
+      if (!checked) {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      }
+      if (current.has(id)) return current;
+      // Blocked at the moment it happens, not after the confirm dialog: a
+      // batch over the cap can never succeed, so the 101st tick by hand is
+      // refused rather than reaching a confirm dialog for a doomed request.
+      if (current.size >= BULK_MAX_IDS) {
+        toast.info(`You can select at most ${BULK_MAX_IDS} at a time.`);
+        return current;
+      }
       const next = new Set(current);
-      if (checked) next.add(id);
-      else next.delete(id);
+      next.add(id);
       return next;
     });
   }
 
-  function toggleAll(checked: boolean) {
-    if (!checked) {
+  /**
+   * Driven entirely by whether anything is currently selected, never by the
+   * `checked` value Radix hands back — with more rows than the cap, the
+   * header renders "indeterminate" once 100 are selected, and Radix's own
+   * next click on an indeterminate control always reports `true`. Reading
+   * that value here would make the header control unable to ever clear a
+   * capped selection: every click would just reselect the same 100 and
+   * re-toast the same notice. Selecting anything already selected clears it
+   * instead, which is also the one behaviour that makes sense once "select
+   * all" cannot literally mean "every row".
+   */
+  function toggleAll() {
+    if (selectedCount > 0) {
       setSelected(new Set());
       return;
     }
@@ -163,7 +186,7 @@ export function FeeStructuresListView({ feeStructures }: { feeStructures: FeeStr
                 <th className="w-10 px-4 py-2">
                   <Checkbox
                     checked={allSelected ? true : someSelected ? "indeterminate" : false}
-                    onCheckedChange={(checked) => toggleAll(checked === true)}
+                    onCheckedChange={() => toggleAll()}
                     aria-label="Select all fee structures"
                   />
                 </th>

@@ -9,7 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { bulkCreateFeeSchema } from "@/lib/validation/fee-structure";
+// The same cap the API enforces, imported rather than mirrored: neither
+// "select all" nor a hand-picked selection may build a request the server
+// would reject.
+import { bulkCreateFeeSchema, BULK_MAX_IDS } from "@/lib/validation/fee-structure";
 import type { AcademicUnitDTO } from "@/services/academic-structure.service";
 import type { FeeHeadDTO } from "@/services/fee-structure.service";
 import { FeeLineItemsEditor } from "@/components/fees/fee-line-items-editor";
@@ -57,12 +60,33 @@ export function BulkFeeForm({
 
   function toggleUnit(unitId: string, checked: boolean) {
     const current = new Set(selected);
-    if (checked) current.add(unitId);
-    else current.delete(unitId);
+    if (checked) {
+      // Blocked at the moment it happens, not after the form is filled in and
+      // submitted: a request over the cap can never succeed, so the 101st
+      // tick is refused rather than silently building a doomed request.
+      if (!current.has(unitId) && current.size >= BULK_MAX_IDS) {
+        toast.info(`You can select at most ${BULK_MAX_IDS} at a time.`);
+        return;
+      }
+      current.add(unitId);
+    } else {
+      current.delete(unitId);
+    }
     setValue("academicUnitIds", Array.from(current), { shouldDirty: true });
   }
 
   function selectAll() {
+    if (units.length > BULK_MAX_IDS) {
+      toast.info(
+        `Only the first ${BULK_MAX_IDS} were selected — bulk assignment supports at most ${BULK_MAX_IDS} at a time.`,
+      );
+      setValue(
+        "academicUnitIds",
+        units.slice(0, BULK_MAX_IDS).map((unit) => unit.id),
+        { shouldDirty: true },
+      );
+      return;
+    }
     setValue(
       "academicUnitIds",
       units.map((unit) => unit.id),
