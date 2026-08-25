@@ -17,6 +17,11 @@ describe("academic structure validation", () => {
 
     const parsed = createAcademicUnitSchema.parse({ segment: "SCHOOL", name: "  Grade 1  " });
     expect(parsed.name).toBe("Grade 1");
+
+    // The boundary itself, not just past it — `max(119)` would otherwise pass.
+    expect(
+      createAcademicUnitSchema.safeParse({ segment: "SCHOOL", name: "x".repeat(120) }).success,
+    ).toBe(true);
   });
 
   it("treats an absent parentId and an explicit null as the same thing", () => {
@@ -83,6 +88,12 @@ describe("academic structure validation", () => {
         segment: "SCHOOL",
         parentId: null,
         orderedIds: [OID],
+      }).success,
+    ).toBe(true);
+    expect(
+      reorderAcademicUnitsSchema.safeParse({
+        segment: "SCHOOL",
+        orderedIds: Array.from({ length: 100 }, () => OID),
       }).success,
     ).toBe(true);
   });

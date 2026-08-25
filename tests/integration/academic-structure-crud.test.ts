@@ -235,4 +235,36 @@ describe("AcademicStructureService CRUD", () => {
       AcademicStructureService.update("INS0003", combination.id, { name: "PCMC" }, actor),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("keeps cascading past a descendant whose path already matches", async () => {
+    await AcademicStructureService.setSegments("INS0004", ["ENGINEERING"], actor);
+    const programme = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", name: "X" },
+      actor,
+    );
+    const branch = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", parentId: programme.id, name: "B" },
+      actor,
+    );
+    const year = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", parentId: branch.id, name: "Y" },
+      actor,
+    );
+
+    // Seed the subtree so that renaming X to Y2 leaves the BRANCH's stored path
+    // already correct, while the YEAR's is still wrong. An early-continue on the
+    // path comparison would stop at the branch and never reach the year.
+    await AcademicUnit.updateOne({ _id: branch.id }, { $set: { pathLabel: "Y2 › B" } });
+    await AcademicUnit.updateOne({ _id: year.id }, { $set: { pathLabel: "STALE" } });
+
+    await AcademicStructureService.update("INS0004", programme.id, { name: "Y2" }, actor);
+
+    const units = await AcademicStructureService.list("INS0004");
+    const byId = new Map(units.map((unit) => [unit.id, unit]));
+    expect(byId.get(branch.id)?.pathLabel).toBe("Y2 › B");
+    expect(byId.get(year.id)?.pathLabel).toBe("Y2 › B › Y");
+  });
 });

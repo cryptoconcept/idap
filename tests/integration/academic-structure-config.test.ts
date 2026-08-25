@@ -121,6 +121,16 @@ describe("AcademicStructureService segments", () => {
     await grades("INS0001", "Grade 1");
     expect(await AcademicStructureService.getSegments("INS0001")).toEqual(["SCHOOL"]);
 
+    // A second institution holding units in a segment INS0001 has no claim to.
+    // The exact-equality assertions below are what catch an unscoped `distinct`:
+    // COACHING would leak into INS0001's selection.
+    await AcademicStructureService.setSegments("INS0002", ["COACHING"], actor);
+    await AcademicStructureService.create(
+      "INS0002",
+      { segment: "COACHING", name: "NEET Repeater" },
+      actor,
+    );
+
     // An admin corrects the institution type through the profile. The default
     // would now resolve to PRE_UNIVERSITY on its own.
     await Institution.updateOne(
@@ -206,6 +216,26 @@ describe("AcademicStructureService seeding", () => {
 
     expect(await AcademicStructureService.hasProfileOfferings("INS0007")).toBe(true);
     expect(await AcademicStructureService.hasProfileOfferings("INS0001")).toBe(false);
+  });
+
+  it("picks target segments by declaration order, not stored order", async () => {
+    await makeInstitution("INS0008", {
+      academic: {
+        classesOffered: ["Grade 1"],
+        coursesOffered: ["B.Com"],
+        // Deliberately NOT in ACADEMIC_SEGMENTS declaration order.
+        segments: ["COACHING", "SCHOOL", "DEGREE"],
+      },
+    });
+
+    await AcademicStructureService.seedFromProfile("INS0008", actor);
+
+    const units = await AcademicStructureService.list("INS0008");
+    const bySegment = new Map(units.map((unit) => [unit.name, unit.segment]));
+    expect(bySegment.get("Grade 1")).toBe("SCHOOL");
+    // Declaration order makes DEGREE the first non-SCHOOL segment. Raw stored
+    // order would put the course under COACHING.
+    expect(bySegment.get("B.Com")).toBe("DEGREE");
   });
 });
 
