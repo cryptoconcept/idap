@@ -83,7 +83,15 @@ async function segmentsFor(institutionId: string): Promise<AcademicSegment[]> {
   if (!institution) throw notFound("Institution not found");
 
   const stored = (institution.academic as { segments?: string[] } | undefined)?.segments;
-  return stored?.length ? orderSegments(stored) : defaultSegmentsFor(institution.institutionType);
+  const selected = stored?.length ? stored : defaultSegmentsFor(institution.institutionType);
+
+  // A segment holding units stays in the selection whatever the stored list
+  // says. Without this, editing `institutionType` while `segments` was never
+  // explicitly saved moves the default out from under an existing tree: its
+  // units vanish from the editor, become uncreatable, and drop out of the
+  // published offerings — which silently republishes stale hand-typed data.
+  const occupied = await AcademicUnit.distinct("segment", { institutionId });
+  return orderSegments([...selected, ...(occupied as string[])]);
 }
 
 async function pathLabelFor(

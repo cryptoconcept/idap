@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { AcademicUnit } from "@/models";
+import { AcademicUnit, Institution } from "@/models";
 import { AcademicStructureService } from "@/services/academic-structure.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
@@ -114,6 +114,30 @@ describe("AcademicStructureService segments", () => {
     await expect(
       AcademicStructureService.setSegments("INS0001", ["SCHOOL"], actor),
     ).resolves.toEqual(["SCHOOL"]);
+  });
+
+  it("keeps a segment that holds units when the institution type default moves", async () => {
+    // Segments were never explicitly saved, so the selection is the type default.
+    await grades("INS0001", "Grade 1");
+    expect(await AcademicStructureService.getSegments("INS0001")).toEqual(["SCHOOL"]);
+
+    // An admin corrects the institution type through the profile. The default
+    // would now resolve to PRE_UNIVERSITY on its own.
+    await Institution.updateOne(
+      { institutionId: "INS0001" },
+      { $set: { institutionType: "PU_COLLEGE" } },
+    );
+
+    // The tree must not go invisible: SCHOOL stays because it holds units, and
+    // its offerings keep publishing rather than falling back to stale data.
+    expect(await AcademicStructureService.getSegments("INS0001")).toEqual([
+      "SCHOOL",
+      "PRE_UNIVERSITY",
+    ]);
+    expect(await AcademicStructureService.offeringsFor("INS0001")).toEqual({
+      classesOffered: ["Grade 1"],
+      coursesOffered: [],
+    });
   });
 });
 
