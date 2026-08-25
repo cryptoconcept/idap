@@ -57,7 +57,7 @@ export default async function FeeStructureEditorPage(props: PageProps<"/fees/[fe
         </div>
       </div>
 
-      <FeeStructureForm initialFeeStructure={feeStructure} />
+      <FeeStructureForm initialFeeStructure={feeStructure} units={[]} />
     </>
   );
 }

@@ -20,6 +20,7 @@ import {
 import { createFeeStructureSchema, updateFeeStructureSchema } from "@/lib/validation/fee-structure";
 import { FEE_FREQUENCIES, FEE_FREQUENCY_LABELS, type FeeFrequency } from "@/lib/constants";
 import type { FeeStructureDTO } from "@/services/fee-structure.service";
+import type { AcademicUnitDTO } from "@/services/academic-structure.service";
 
 type Values = z.input<typeof createFeeStructureSchema>;
 
@@ -31,9 +32,15 @@ type Values = z.input<typeof createFeeStructureSchema>;
  */
 export function FeeStructureForm({
   initialFeeStructure,
+  units,
 }: {
   /** `null` while creating — the same fields, saved by a POST instead of a PATCH. */
   initialFeeStructure: FeeStructureDTO | null;
+  /**
+   * Effectively-active units to offer while creating. Empty and unused while
+   * editing — the unit is shown as read-only text there instead.
+   */
+  units: AcademicUnitDTO[];
 }) {
   const router = useRouter();
   const isEditing = initialFeeStructure !== null;
@@ -46,18 +53,19 @@ export function FeeStructureForm({
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<Values>({
-    // `updateFeeStructureSchema` types every identity field optional (a PATCH
-    // may omit either), which is not assignable to `Resolver<Values>` where
+    // `updateFeeStructureSchema` types `academicYear` optional and omits
+    // `academicUnitId` altogether (a PATCH cannot move a fee structure between
+    // units), neither of which is assignable to `Resolver<Values>` where
     // `Values` — shared with the create schema so one form/one `Values` type
-    // covers both cases — has them required. The cast is safe: whichever
-    // schema is picked still runs the real validation for that mode at
-    // submit time; only the static field-typing differs, and this form
+    // covers both cases — has both required. The double cast is safe:
+    // whichever schema is picked still runs the real validation for that mode
+    // at submit time; only the static field-typing differs, and this form
     // always seeds both fields from `initialFeeStructure` when editing.
     resolver: zodResolver(
       isEditing ? updateFeeStructureSchema : createFeeStructureSchema,
-    ) as Resolver<Values>,
+    ) as unknown as Resolver<Values>,
     defaultValues: {
-      classOrCourse: initialFeeStructure?.classOrCourse ?? "",
+      academicUnitId: initialFeeStructure?.academicUnitId ?? "",
       academicYear: initialFeeStructure?.academicYear ?? "",
       lineItems: initialFeeStructure?.lineItems?.map((item) => ({
         label: item.label,
@@ -102,16 +110,48 @@ export function FeeStructureForm({
     <form onSubmit={handleSubmit(onSubmit)} noValidate className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor="classOrCourse">Class or course</Label>
-          <Input
-            id="classOrCourse"
-            placeholder="Grade 10"
-            aria-invalid={Boolean(errors.classOrCourse)}
-            {...register("classOrCourse")}
-          />
-          {errors.classOrCourse ? (
-            <p className="text-xs text-destructive">{errors.classOrCourse.message}</p>
-          ) : null}
+          <Label htmlFor="academicUnitId">Class or course</Label>
+          {isEditing ? (
+            <>
+              <p className="pt-1.5 text-sm">{initialFeeStructure.classOrCourse}</p>
+              {/*
+                Not editable: moving a fee structure to another unit would carry its
+                unique key with it, so the API strips the field. Delete and recreate
+                instead — an input that looks editable but is not would be worse.
+              */}
+              <p className="text-xs text-muted-foreground">
+                To price a different class or course, create a new fee structure.
+              </p>
+            </>
+          ) : (
+            <>
+              {/*
+                A Radix Select is a button, not a native input, so it is driven by
+                watch/setValue rather than register() — the same way
+                `create-staff-dialog.tsx` and this form's own frequency Select do.
+              */}
+              <Select
+                value={watch("academicUnitId")}
+                onValueChange={(value) =>
+                  setValue("academicUnitId", value, { shouldDirty: true })
+                }
+              >
+                <SelectTrigger id="academicUnitId" aria-invalid={Boolean(errors.academicUnitId)}>
+                  <SelectValue placeholder="Pick a class or course" />
+                </SelectTrigger>
+                <SelectContent>
+                  {units.map((unit) => (
+                    <SelectItem key={unit.id} value={unit.id}>
+                      {unit.pathLabel}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {errors.academicUnitId ? (
+                <p className="text-xs text-destructive">{errors.academicUnitId.message}</p>
+              ) : null}
+            </>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="academicYear">Academic year</Label>
