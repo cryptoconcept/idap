@@ -160,7 +160,7 @@ if (referenced > 0) {
 ```
 
 It counts across the **whole subtree**, not just the unit itself: deleting a programme must
-be refused when a fee hangs off a branch levels below it. The comment that currently
+be refused when a fee hangs off a branch anywhere below it. The comment that currently
 marks this as a Phase 6 obligation is removed in the same edit — the obligation is
 discharged.
 
@@ -227,6 +227,11 @@ collection's *indexes* are a different matter: Mongoose creates the new unique k
 never drops the Phase 4 one, so `scripts/sync-fee-indexes.ts` must run against any
 environment where Phase 4 was ever deployed, before this phase's code serves traffic.
 Without it the second fee structure per institution per academic year is refused.
+
+The script reports and exits by default; **it only writes with `--apply`**:
+`npm run sync:fee-indexes` to see what is stale, then
+`npm run sync:fee-indexes -- --apply` to drop it and build the current set. It is
+idempotent and a no-op on a database that already matches the schema.
 
 **A substantial test migration.** Roughly sixty existing fee tests construct fee structures
 with `classOrCourse: "Grade 10"`. Each must instead create an academic unit and pass its id.

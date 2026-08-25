@@ -347,7 +347,7 @@ export const AcademicStructureService = {
     const ids = await subtreeIds(institutionId, before);
 
     // Counted across the whole subtree, not just this unit: deleting a programme
-    // must be refused when a fee hangs off a branch levels below it.
+    // must be refused when a fee hangs off a branch anywhere below it.
     const referenced = await FeeStructure.countDocuments({
       institutionId,
       academicUnitId: { $in: ids },
