@@ -12,6 +12,7 @@ import {
   type UseFormSetValue,
   type UseFormWatch,
 } from "react-hook-form";
+import Link from "next/link";
 import { Plus, Tags, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -117,7 +118,17 @@ export function FeeLineItemsEditor<T extends FieldValues>({
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-          ) : null}
+          ) : (
+            // Per spec §10: absent, not disabled — there is nothing to pick
+            // from, and a dead control would be worse than saying so. Small
+            // and quiet so it never competes with the line-item editor itself.
+            <Link
+              href="/fees/heads"
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+            >
+              No fee heads configured yet — add some
+            </Link>
+          )}
           <Button
             type="button"
             size="sm"
