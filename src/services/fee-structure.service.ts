@@ -7,6 +7,7 @@ import { notFound } from "@/lib/api/errors";
 import {
   assertFeeStructureInvariants,
   assertFeeStructurePublishable,
+  type BulkCreateFeeInput,
   type createFeeStructureSchema,
   type updateFeeStructureSchema,
 } from "@/lib/validation/fee-structure";
@@ -232,6 +233,69 @@ export const FeeStructureService = {
       // will disagree with the very next read.
       classOrCourse: unit.pathLabel,
     });
+  },
+
+  async createMany(
+    institutionId: string,
+    input: BulkCreateFeeInput,
+    actor: { id: string; name: string },
+  ): Promise<{ created: number; skipped: { academicUnitId: string; classOrCourse: string }[] }> {
+    await connectToDatabase();
+
+    // Checked once on the shared set, before anything is written: every structure in
+    // the batch gets identical line items, so a per-unit check would repeat the same
+    // work N times and could half-apply the batch.
+    assertFeeStructureInvariants({ lineItems: input.lineItems });
+
+    const ids = input.academicUnitIds.map(unitObjectId);
+    const units = await AcademicUnit.find({ _id: { $in: ids }, institutionId })
+      .select("_id pathLabel")
+      .lean<{ _id: Types.ObjectId; pathLabel: string }[]>();
+
+    // A foreign or nonexistent unit fails the WHOLE batch, before any write. That is
+    // deliberately different from an already-priced unit, which is skipped below: the
+    // first is a caller bug, the second is the expected outcome of bulk work.
+    if (units.length !== ids.length) throw notFound("Academic unit not found");
+
+    const existing = await FeeStructure.find({
+      institutionId,
+      academicUnitId: { $in: ids },
+      academicYear: input.academicYear,
+    })
+      .select("academicUnitId")
+      .lean<{ academicUnitId: Types.ObjectId }[]>();
+    const taken = new Set(existing.map((row) => String(row.academicUnitId)));
+
+    const skipped = units
+      .filter((unit) => taken.has(String(unit._id)))
+      .map((unit) => ({ academicUnitId: String(unit._id), classOrCourse: unit.pathLabel }));
+    const fresh = units.filter((unit) => !taken.has(String(unit._id)));
+
+    if (fresh.length > 0) {
+      await FeeStructure.insertMany(
+        fresh.map((unit) => ({
+          institutionId,
+          academicUnitId: unit._id,
+          academicYear: input.academicYear,
+          lineItems: input.lineItems,
+          status: "DRAFT",
+        })),
+      );
+    }
+
+    // One entry for the batch, not one per structure — an audit trail with sixty
+    // identical lines is harder to read than one that says what happened.
+    await ActivityService.record({
+      institutionId,
+      entityType: "FEE_STRUCTURE",
+      entityRef: institutionId,
+      action: "Fee structures created in bulk",
+      description: `${fresh.length} created, ${skipped.length} skipped for ${input.academicYear}`,
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return { created: fresh.length, skipped };
   },
 
   async update(
