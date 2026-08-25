@@ -57,4 +57,15 @@ describe("pages that must stay Admin-only now that other roles exist", () => {
 
     await expect(FeesPage()).rejects.toMatchObject({ digest: expect.stringContaining("/dashboard") });
   });
+
+  it("a Counselor loading /academic-structure is redirected to /dashboard", async () => {
+    await signIn("COUNSELOR", "c@infinityschool.edu.in");
+    const { default: AcademicStructurePage } = await import(
+      "@/app/(dashboard)/academic-structure/page"
+    );
+
+    await expect(AcademicStructurePage()).rejects.toMatchObject({
+      digest: expect.stringContaining("/dashboard"),
+    });
+  });
 });
