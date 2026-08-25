@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { FeeStructure } from "@/models";
+import { AcademicUnit, FeeStructure } from "@/models";
+import { AcademicStructureService, type AcademicUnitDTO } from "@/services/academic-structure.service";
 import { FeeStructureService } from "@/services/fee-structure.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
+
+let unitA: AcademicUnitDTO;
 
 beforeAll(async () => {
   await startTestDatabase("fee-structure-publish");
@@ -14,13 +17,20 @@ afterAll(stopTestDatabase);
 beforeEach(async () => {
   await clearDatabase();
   await makeInstitution("INS0001");
+
+  await AcademicUnit.syncIndexes();
+  unitA = await AcademicStructureService.create(
+    "INS0001",
+    { segment: "SCHOOL", name: "Grade 10" },
+    actor,
+  );
 });
 
 describe("FeeStructureService.setStatus", () => {
   it("refuses to publish with zero line items", async () => {
     const created = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27" },
+      { academicUnitId: unitA.id, academicYear: "2026-27" },
       actor,
     );
 
@@ -33,7 +43,7 @@ describe("FeeStructureService.setStatus", () => {
     const created = await FeeStructureService.create(
       "INS0001",
       {
-        classOrCourse: "Grade 10",
+        academicUnitId: unitA.id,
         academicYear: "2026-27",
         lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
       },
@@ -50,7 +60,7 @@ describe("FeeStructureService.setStatus", () => {
     const created = await FeeStructureService.create(
       "INS0001",
       {
-        classOrCourse: "Grade 10",
+        academicUnitId: unitA.id,
         academicYear: "2026-27",
         lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
       },
@@ -68,7 +78,7 @@ describe("FeeStructureService.setStatus", () => {
     const created = await FeeStructureService.create(
       "INS0001",
       {
-        classOrCourse: "Grade 10",
+        academicUnitId: unitA.id,
         academicYear: "2026-27",
         lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
       },
@@ -91,7 +101,7 @@ describe("FeeStructureService.setStatus", () => {
     const created = await FeeStructureService.create(
       "INS0001",
       {
-        classOrCourse: "Grade 10",
+        academicUnitId: unitA.id,
         academicYear: "2026-27",
         lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
       },
