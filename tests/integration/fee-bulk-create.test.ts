@@ -1,10 +1,59 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { cookies } from "next/headers";
+import type { NextRequest } from "next/server";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
-import { makeInstitution } from "../helpers/factories";
+import { makeInstitution, makeUser } from "../helpers/factories";
 import { AcademicUnit, FeeStructure } from "@/models";
 import { FeeStructureService } from "@/services/fee-structure.service";
 import { AcademicStructureService, type AcademicUnitDTO } from "@/services/academic-structure.service";
 import type { BulkCreateFeeInput } from "@/lib/validation/fee-structure";
+import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
+import { POST as createBulk } from "@/app/api/settings/fees/bulk/route";
+
+function cookieRequest(init: { body?: unknown; origin?: string } = {}) {
+  const url = new URL("http://localhost/api/settings/fees/bulk");
+  const headers = new Headers();
+  if (init.origin) headers.set("origin", init.origin);
+  headers.set("host", "localhost");
+  return {
+    headers,
+    nextUrl: url,
+    url: url.toString(),
+    json: async () => init.body ?? {},
+  } as unknown as NextRequest;
+}
+
+async function signIn(
+  institutionId: string,
+  role: "INSTITUTION_ADMIN" | "COUNSELOR" | "FRONT_DESK",
+  email: string,
+) {
+  const user = await makeUser(institutionId, role, email);
+  const token = await signSession({
+    sub: String(user._id),
+    role,
+    institutionId,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+  return user;
+}
+
+/** Platform-admin session: no institutionId, role SUPER_ADMIN — the 403 case. */
+async function signInPlatformAdmin(email = "platform-fees-bulk@example.test") {
+  const user = await makeUser(undefined, "SUPER_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "SUPER_ADMIN",
+    institutionId: undefined,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -26,6 +75,9 @@ beforeAll(async () => {
   await FeeStructure.syncIndexes();
 });
 afterAll(stopTestDatabase);
+afterEach(async () => {
+  (await cookies()).delete(SESSION_COOKIE);
+});
 beforeEach(async () => {
   await clearDatabase();
   await makeInstitution("INS0001");
@@ -135,5 +187,72 @@ describe("FeeStructureService.createMany", () => {
     ).rejects.toThrow(/appears more than once/i);
 
     expect(await FeeStructure.countDocuments({})).toBe(0);
+  });
+});
+
+describe("POST /api/settings/fees/bulk — the route's security boundary", () => {
+  it("an admin bulk-creates over HTTP — 200 with the correct created count", async () => {
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await createBulk(
+      cookieRequest({ body: input(), origin: "http://localhost" }),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.created).toBe(2);
+    expect(payload.skipped).toHaveLength(0);
+  });
+
+  it("turns away everyone but an institution admin: 401 anonymous, 403 Counselor, Front Desk, and a platform admin", async () => {
+    const anon = await createBulk(cookieRequest({ body: input(), origin: "http://localhost" }));
+    expect(anon.status).toBe(401);
+
+    await signIn("INS0001", "COUNSELOR", "c@infinityschool.edu.in");
+    const counselor = await createBulk(
+      cookieRequest({ body: input(), origin: "http://localhost" }),
+    );
+    expect(counselor.status).toBe(403);
+    (await cookies()).delete(SESSION_COOKIE);
+
+    await signIn("INS0001", "FRONT_DESK", "fd@infinityschool.edu.in");
+    const frontDesk = await createBulk(
+      cookieRequest({ body: input(), origin: "http://localhost" }),
+    );
+    expect(frontDesk.status).toBe(403);
+    (await cookies()).delete(SESSION_COOKIE);
+
+    await signInPlatformAdmin();
+    const platformAdmin = await createBulk(
+      cookieRequest({ body: input(), origin: "http://localhost" }),
+    );
+    expect(platformAdmin.status).toBe(403);
+  });
+
+  it("a foreign academicUnitId returns 404 with error.code NOT_FOUND — never 403", async () => {
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await createBulk(
+      cookieRequest({
+        body: input({ academicUnitIds: [unitA.id, foreignUnit.id] }),
+        origin: "http://localhost",
+      }),
+    );
+
+    expect(response.status).toBe(404);
+    const payload = await response.json();
+    expect(payload.error.code).toBe("NOT_FOUND");
+  });
+
+  it("a cross-origin write is rejected with 403 FORBIDDEN", async () => {
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await createBulk(
+      cookieRequest({ body: input(), origin: "http://evil.example" }),
+    );
+
+    expect(response.status).toBe(403);
+    const payload = await response.json();
+    expect(payload.error.code).toBe("FORBIDDEN");
   });
 });
