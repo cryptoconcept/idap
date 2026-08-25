@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Plus, Tags } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
@@ -21,12 +21,25 @@ export function FeeStructuresListView({ feeStructures }: { feeStructures: FeeStr
         title="Fees"
         description="Class and course fee structures your website and partner sites read from the public API."
         actions={
-          <Button asChild size="sm">
-            <Link href="/fees/new">
-              <Plus className="size-4" />
-              Add a fee structure
-            </Link>
-          </Button>
+          <div className="flex items-center gap-2">
+            {/*
+              Secondary to "Add a fee structure": configuring heads is preparation,
+              creating a structure is the page's actual job. `variant="outline"`
+              matches how `academic-structure-view.tsx` marks a secondary header action.
+            */}
+            <Button asChild size="sm" variant="outline">
+              <Link href="/fees/heads">
+                <Tags className="size-3.5" />
+                Fee heads
+              </Link>
+            </Button>
+            <Button asChild size="sm">
+              <Link href="/fees/new">
+                <Plus className="size-4" />
+                Add a fee structure
+              </Link>
+            </Button>
+          </div>
         }
       />
 
