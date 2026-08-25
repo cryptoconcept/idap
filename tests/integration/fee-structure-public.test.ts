@@ -3,21 +3,33 @@ import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/d
 import { makeProfiledInstitution } from "../helpers/factories";
 import { GET as getByInstitutionId } from "@/app/api/public/[institutionId]/fees/route";
 import { GET as getBySlug } from "@/app/api/public/institutions/[slug]/fees/route";
+import { AcademicUnit, FeeStructure } from "@/models";
+import { AcademicStructureService } from "@/services/academic-structure.service";
 import { FeeStructureService } from "@/services/fee-structure.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 const lineItems = [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" as const }];
 
-beforeAll(() => startTestDatabase("fee-structure-public"));
+/** A root SCHOOL unit named "Grade 10" — its pathLabel is just the name. */
+function unitFor(institutionId: string) {
+  return AcademicStructureService.create(institutionId, { segment: "SCHOOL", name: "Grade 10" }, actor);
+}
+
+beforeAll(async () => {
+  await startTestDatabase("fee-structure-public");
+  await AcademicUnit.syncIndexes();
+  await FeeStructure.syncIndexes();
+});
 afterAll(stopTestDatabase);
 beforeEach(clearDatabase);
 
 describe("GET /api/public/:institutionId/fees", () => {
   it("returns a published fee structure by institutionId", async () => {
     await makeProfiledInstitution("INS0001", { profileStatus: "PUBLISHED" });
+    const unit = await unitFor("INS0001");
     const created = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27", lineItems },
+      { academicUnitId: unit.id, academicYear: "2026-27", lineItems },
       actor,
     );
     await FeeStructureService.setStatus("INS0001", created.id, "publish", actor);
@@ -38,9 +50,10 @@ describe("GET /api/public/:institutionId/fees", () => {
       profileStatus: "PUBLISHED",
       slug: "infinity-school",
     });
+    const unit = await unitFor("INS0001");
     const created = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27", lineItems },
+      { academicUnitId: unit.id, academicYear: "2026-27", lineItems },
       actor,
     );
     await FeeStructureService.setStatus("INS0001", created.id, "publish", actor);
@@ -68,9 +81,10 @@ describe("GET /api/public/:institutionId/fees", () => {
 
   it("excludes a draft fee structure", async () => {
     await makeProfiledInstitution("INS0001", { profileStatus: "PUBLISHED" });
+    const unit = await unitFor("INS0001");
     await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27" },
+      { academicUnitId: unit.id, academicYear: "2026-27" },
       actor,
     );
 
@@ -84,9 +98,10 @@ describe("GET /api/public/:institutionId/fees", () => {
 
   it("excludes an archived fee structure", async () => {
     await makeProfiledInstitution("INS0001", { profileStatus: "PUBLISHED" });
+    const unit = await unitFor("INS0001");
     const created = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27", lineItems },
+      { academicUnitId: unit.id, academicYear: "2026-27", lineItems },
       actor,
     );
     await FeeStructureService.setStatus("INS0001", created.id, "publish", actor);
@@ -102,9 +117,10 @@ describe("GET /api/public/:institutionId/fees", () => {
 
   it("404s for a suspended institution even with a published fee structure", async () => {
     await makeProfiledInstitution("INS0001", { profileStatus: "PUBLISHED", active: false });
+    const unit = await unitFor("INS0001");
     const created = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27", lineItems },
+      { academicUnitId: unit.id, academicYear: "2026-27", lineItems },
       actor,
     );
     await FeeStructureService.setStatus("INS0001", created.id, "publish", actor);
@@ -128,14 +144,15 @@ describe("GET /api/public/:institutionId/fees", () => {
 
   it("filters by academicYear", async () => {
     await makeProfiledInstitution("INS0001", { profileStatus: "PUBLISHED" });
+    const unit = await unitFor("INS0001");
     const older = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2025-26", lineItems },
+      { academicUnitId: unit.id, academicYear: "2025-26", lineItems },
       actor,
     );
     const newer = await FeeStructureService.create(
       "INS0001",
-      { classOrCourse: "Grade 10", academicYear: "2026-27", lineItems },
+      { academicUnitId: unit.id, academicYear: "2026-27", lineItems },
       actor,
     );
     await FeeStructureService.setStatus("INS0001", older.id, "publish", actor);
