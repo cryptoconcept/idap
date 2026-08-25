@@ -15,7 +15,6 @@ beforeEach(clearDatabase);
 const root = {
   institutionId: "INS0001",
   segment: "SCHOOL",
-  parentId: null,
   depth: 0,
   name: "Grade 1",
   pathLabel: "Grade 1",
@@ -27,6 +26,9 @@ describe("AcademicUnit model", () => {
 
     expect(created.active).toBe(true);
     expect(created.sortOrder).toBe(0);
+    // `parentId` was never supplied — this is the schema default materialising
+    // as an explicit null, which is what keeps the sibling-uniqueness index
+    // seeing one consistent value for "no parent".
     expect(created.parentId).toBeNull();
   });
 
