@@ -29,7 +29,15 @@ function compact<T extends Record<string, unknown>>(block: T): T | undefined {
 
 export type PublicProfile = ReturnType<typeof toPublicProfile>;
 
-export function toPublicProfile(institution: Doc) {
+export function toPublicProfile(
+  institution: Doc,
+  /**
+   * Offerings derived from the academic tree. Optional on purpose: without it
+   * the stored arrays are used exactly as before, which is what an institution
+   * that has not built a tree keeps publishing.
+   */
+  offerings?: { classesOffered: string[]; coursesOffered: string[] },
+) {
   const doc = institution ?? {};
 
   const geo = compact({
@@ -47,8 +55,16 @@ export function toPublicProfile(institution: Doc) {
     medium: list((doc.academic as Record<string, unknown> | undefined)?.medium),
     genderType: text((doc.academic as Record<string, unknown> | undefined)?.genderType),
     currentAcademicYear: text((doc.academic as Record<string, unknown> | undefined)?.currentAcademicYear),
-    classesOffered: list((doc.academic as Record<string, unknown> | undefined)?.classesOffered),
-    coursesOffered: list((doc.academic as Record<string, unknown> | undefined)?.coursesOffered),
+    classesOffered: list(
+      offerings
+        ? offerings.classesOffered
+        : (doc.academic as Record<string, unknown> | undefined)?.classesOffered,
+    ),
+    coursesOffered: list(
+      offerings
+        ? offerings.coursesOffered
+        : (doc.academic as Record<string, unknown> | undefined)?.coursesOffered,
+    ),
   });
 
   // Names and designations only. The head's direct line is not public.

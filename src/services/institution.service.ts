@@ -19,6 +19,7 @@ import {
 import { storage } from "@/lib/storage";
 import { calculateCompletion, type ProfileCompletion } from "@/lib/profile/completion";
 import { toPublicProfile, type PublicProfile } from "@/lib/profile/public-projection";
+import { AcademicStructureService } from "./academic-structure.service";
 import type { z } from "zod";
 import { mediaUploadSchema } from "@/lib/validation/institution";
 import type {
@@ -715,7 +716,10 @@ export const InstitutionService = {
       profileStatus: "PUBLISHED",
     }).lean();
     if (!row) return null;
-    return toPublicProfile(row as Record<string, unknown>);
+    // Derived offerings replace the stored arrays only when a tree exists, so
+    // nothing disappears from a live public profile on release day.
+    const offerings = await AcademicStructureService.offeringsFor(row.institutionId);
+    return toPublicProfile(row as Record<string, unknown>, offerings ?? undefined);
   },
 
   async list(query: {
