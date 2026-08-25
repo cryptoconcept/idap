@@ -38,6 +38,20 @@ async function signIn(
   return user;
 }
 
+/** Platform-admin session: no institutionId, role SUPER_ADMIN — the 403 case. */
+async function signInPlatformAdmin(email = "platform-fee-heads@example.test") {
+  const user = await makeUser(undefined, "SUPER_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "SUPER_ADMIN",
+    institutionId: undefined,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
 beforeAll(() => startTestDatabase("fee-heads"));
 afterAll(stopTestDatabase);
 beforeEach(async () => {
@@ -173,5 +187,74 @@ describe("fee heads routes — admin read/replace over real HTTP", () => {
     );
     expect(asFeeId.status).toBe(404);
     expect((await asFeeId.json()).error.code).toBe("NOT_FOUND");
+  });
+});
+
+describe("GET/PUT /api/settings/fees/heads — the route's security boundary", () => {
+  it("PUT turns away everyone but an institution admin: 401 anonymous, 403 Counselor, Front Desk, and a platform admin", async () => {
+    const anon = await putFeeHeads(
+      cookieRequest({ body: { feeHeads: [] }, origin: "http://localhost" }),
+    );
+    expect(anon.status).toBe(401);
+
+    await signIn("INS0001", "COUNSELOR", "c@infinityschool.edu.in");
+    const counselor = await putFeeHeads(
+      cookieRequest({ body: { feeHeads: [] }, origin: "http://localhost" }),
+    );
+    expect(counselor.status).toBe(403);
+    // The CODE, not just the status: DEFAULT_STATUS maps both FORBIDDEN and
+    // INACTIVE_INSTITUTION to 403, so a bare status check cannot tell the role
+    // gate firing from some other 403 branch firing in its place.
+    expect((await counselor.json()).error.code).toBe("FORBIDDEN");
+    (await cookies()).delete(SESSION_COOKIE);
+
+    await signIn("INS0001", "FRONT_DESK", "fd@infinityschool.edu.in");
+    const frontDesk = await putFeeHeads(
+      cookieRequest({ body: { feeHeads: [] }, origin: "http://localhost" }),
+    );
+    expect(frontDesk.status).toBe(403);
+    expect((await frontDesk.json()).error.code).toBe("FORBIDDEN");
+    (await cookies()).delete(SESSION_COOKIE);
+
+    await signInPlatformAdmin();
+    const platformAdmin = await putFeeHeads(
+      cookieRequest({ body: { feeHeads: [] }, origin: "http://localhost" }),
+    );
+    expect(platformAdmin.status).toBe(403);
+    expect((await platformAdmin.json()).error.code).toBe("FORBIDDEN");
+  });
+
+  it("PUT: a cross-origin write is rejected with 403 FORBIDDEN", async () => {
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await putFeeHeads(
+      cookieRequest({ body: { feeHeads: [] }, origin: "http://evil.example" }),
+    );
+
+    expect(response.status).toBe(403);
+    const payload = await response.json();
+    expect(payload.error.code).toBe("FORBIDDEN");
+  });
+
+  it("GET turns away everyone but an institution admin: 401 anonymous, 403 Counselor, Front Desk, and a platform admin", async () => {
+    const anon = await getFeeHeads();
+    expect(anon.status).toBe(401);
+
+    await signIn("INS0001", "COUNSELOR", "c@infinityschool.edu.in");
+    const counselor = await getFeeHeads();
+    expect(counselor.status).toBe(403);
+    expect((await counselor.json()).error.code).toBe("FORBIDDEN");
+    (await cookies()).delete(SESSION_COOKIE);
+
+    await signIn("INS0001", "FRONT_DESK", "fd@infinityschool.edu.in");
+    const frontDesk = await getFeeHeads();
+    expect(frontDesk.status).toBe(403);
+    expect((await frontDesk.json()).error.code).toBe("FORBIDDEN");
+    (await cookies()).delete(SESSION_COOKIE);
+
+    await signInPlatformAdmin();
+    const platformAdmin = await getFeeHeads();
+    expect(platformAdmin.status).toBe(403);
+    expect((await platformAdmin.json()).error.code).toBe("FORBIDDEN");
   });
 });

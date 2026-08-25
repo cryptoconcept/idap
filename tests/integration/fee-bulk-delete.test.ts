@@ -220,4 +220,49 @@ describe("POST /api/settings/fees/bulk/delete — the route's security boundary"
     const payload = await response.json();
     expect(payload.error.code).toBe("FORBIDDEN");
   });
+
+  it("also turns away an anonymous session (401) and a Front Desk session (403)", async () => {
+    const a = await FeeStructureService.create(
+      "INS0001",
+      { academicUnitId: unitA.id, academicYear: "2026-27", lineItems },
+      actor,
+    );
+
+    const anon = await deleteBulk(
+      cookieRequest({ body: { feeStructureIds: [a.id] }, origin: "http://localhost" }),
+    );
+    expect(anon.status).toBe(401);
+
+    await signIn("INS0001", "FRONT_DESK", "fd@infinityschool.edu.in");
+    const frontDesk = await deleteBulk(
+      cookieRequest({ body: { feeStructureIds: [a.id] }, origin: "http://localhost" }),
+    );
+    expect(frontDesk.status).toBe(403);
+    // The CODE, not just the status: DEFAULT_STATUS maps both FORBIDDEN and
+    // INACTIVE_INSTITUTION to 403, so a bare status check cannot tell the role
+    // gate firing from some other 403 branch firing in its place.
+    expect((await frontDesk.json()).error.code).toBe("FORBIDDEN");
+  });
+
+  it("a foreign id returns 404 with error.code NOT_FOUND — never 403", async () => {
+    const a = await FeeStructureService.create(
+      "INS0001",
+      { academicUnitId: unitA.id, academicYear: "2026-27", lineItems },
+      actor,
+    );
+    const foreign = await FeeStructureService.create(
+      "INS0002",
+      { academicUnitId: foreignUnit.id, academicYear: "2026-27", lineItems },
+      actor,
+    );
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await deleteBulk(
+      cookieRequest({ body: { feeStructureIds: [a.id, foreign.id] }, origin: "http://localhost" }),
+    );
+
+    expect(response.status).toBe(404);
+    const payload = await response.json();
+    expect(payload.error.code).toBe("NOT_FOUND");
+  });
 });
