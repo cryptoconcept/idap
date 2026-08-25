@@ -315,6 +315,21 @@ export const FeeStructureService = {
         // feature already calls skipped. Anything else (a real validation failure,
         // a dropped connection, anything not code 11000) is a genuine failure and
         // must propagate rather than being read as a batch of skips.
+        // COUPLING, and it leaves no evidence if it ever breaks: this branch can
+        // only report duplicate-key failures. Mongoose filters a document that
+        // fails schema validation OUT of the batch before the driver sees it, and
+        // the resulting error carries no trace of it — `validationErrors` is only
+        // attached under `rawResult: true`, which this call does not pass. So a
+        // batch containing BOTH a validation failure and a raced duplicate would
+        // pass the check below and drop the invalid document silently.
+        //
+        // That is unreachable today, and only for a reason that is easy to undo:
+        // every document here is byte-identical except `academicUnitId`, which
+        // comes from a `.lean()` read rather than user input, and `FeeStructure`
+        // has no per-document validators — so validation is all-or-nothing for the
+        // batch. Introduce any per-document field (per-unit line-item overrides, a
+        // validator keyed on unit type) and this stops being true, with no failing
+        // test and no error to notice. Re-check this branch if that ever changes.
         const allDuplicates =
           Array.isArray(writeErrors) &&
           writeErrors.length > 0 &&
