@@ -426,6 +426,12 @@ Written test-first, per task, in the existing Vitest layout.
 - `DEFAULT_SEGMENTS_FOR_TYPE` covers every `INSTITUTION_TYPE` and names only real segments;
 - `levelFor(segment, depth)` returns `null` past the end rather than throwing.
 
+**Unit — model (`tests/unit/academic-unit-model.test.ts`)**
+- a root defaults to active and sorts first;
+- two siblings cannot share a name;
+- the same name is fine under two different parents, in two segments, and in
+  two institutions.
+
 **Unit — validation (`tests/unit/academic-structure-validation.test.ts`)**
 - name required, trimmed, capped at 120;
 - `segments` rejects duplicates and rejects an empty array;
@@ -450,7 +456,7 @@ Written test-first, per task, in the existing Vitest layout.
 - creating in an unselected segment is refused;
 - rename cascades `pathLabel` to grandchildren, not just children;
 - delete removes the whole subtree;
-- reorder rewrites `sortOrder` and refuses an id set that does not match the sibling set.
+- a patch carrying `segment` and `parentId` leaves both unchanged.
 
 **Integration — routes (`tests/integration/academic-structure-routes.test.ts`)**
 - each route rejects an anonymous session;
@@ -460,10 +466,25 @@ Written test-first, per task, in the existing Vitest layout.
 - a `parentId` from another institution returns `NOT_FOUND`;
 - unticking a segment that still has units is refused.
 
-**Integration — seed (`tests/integration/academic-structure-seed.test.ts`)**
-- seeds classes and courses into the right segments;
-- refuses when units already exist;
-- a second call is refused, leaving the first call's units untouched.
+**Integration — configuration (`tests/integration/academic-structure-config.test.ts`)**
+
+Reorder, the segment selection and seeding share one file: all three configure
+the structure rather than edit it, and reorder needs a sibling set the CRUD
+file is the wrong shape to build.
+
+- reorder rewrites `sortOrder` to match the order it was given;
+- reorder refuses a partial sibling list rather than silently interleaving;
+- reorder refuses a list holding another institution's id;
+- the segment selection falls back to the institution type's default until one
+  is chosen, and stores in declaration order once it is;
+- deselecting a segment that still holds units is refused, and deselecting an
+  empty one is allowed;
+- seeding places classes and courses per the §10 table, and falls back when the
+  preferred segment is not selected;
+- seeding skips blanks and repeats and reports the count;
+- a second seed is refused, leaving the first one's units untouched;
+- `offeringsFor` returns `null` with no tree and `null` once every unit is
+  deactivated — the two conditions §9's fallback depends on.
 
 **Integration — derived profile (`tests/integration/academic-structure-profile.test.ts`)**
 - an institution with no units still publishes its stored arrays;
