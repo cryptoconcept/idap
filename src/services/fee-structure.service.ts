@@ -83,6 +83,29 @@ function byYearThenLabel(a: FeeStructureRow, b: FeeStructureRow): number {
   return a.classOrCourse.localeCompare(b.classOrCourse);
 }
 
+/** How many removed structures a bulk-delete activity entry names individually. */
+const REMOVED_SUMMARY_MAX = 5;
+
+/**
+ * Fee structures are hard-deleted, so a bulk delete's activity entry is the
+ * only surviving record of what was removed — unlike the single-row `remove`,
+ * which names the one structure it took. Naming all of them here too would
+ * work for ten rows and produce an unreadable wall of text for a hundred, so
+ * this names the academic year(s) touched, the total count, and up to
+ * `REMOVED_SUMMARY_MAX` labels, then summarises the rest as "and N more".
+ */
+function summarizeRemoved(rows: FeeStructureRow[]): string {
+  const sorted = [...rows].sort(byYearThenLabel);
+  const years = Array.from(new Set(sorted.map((row) => row.academicYear))).sort();
+  const named = sorted
+    .slice(0, REMOVED_SUMMARY_MAX)
+    .map((row) => `${row.classOrCourse} ${row.academicYear}`);
+  const remaining = sorted.length - named.length;
+
+  const list = remaining > 0 ? `${named.join(", ")} and ${remaining} more` : named.join(", ");
+  return `${sorted.length} deleted for ${years.join(", ")}: ${list}`;
+}
+
 function serialize(row: FeeStructureRow): FeeStructureDTO {
   return {
     id: String(row._id),
@@ -479,20 +502,32 @@ export const FeeStructureService = {
     await connectToDatabase();
     const ids = feeStructureIds.map(toObjectId);
 
-    // Ownership is verified BEFORE anything is deleted. A scoped `deleteMany`
-    // alone would remove nothing for a foreign id and report a lower count —
-    // succeeding silently where a foreign id must fail the batch.
-    const owned = await FeeStructure.countDocuments({ _id: { $in: ids }, institutionId });
-    if (owned !== ids.length) throw notFound("Fee structure not found");
+    // Ownership is verified BEFORE anything is deleted, via a `find` rather
+    // than the bare `countDocuments` this used to be — the rows are needed
+    // below to describe what gets removed, and `owned.length !== ids.length`
+    // catches a foreign id exactly as the count comparison did. A scoped
+    // `deleteMany` alone would remove nothing for a foreign id and report a
+    // lower count — succeeding silently where a foreign id must fail the
+    // batch. This check is load-bearing; do not weaken it back to a length
+    // check on the delete result.
+    const owned = await FeeStructure.find({ _id: { $in: ids }, institutionId }).lean<
+      FeeStructureDoc[]
+    >();
+    if (owned.length !== ids.length) throw notFound("Fee structure not found");
 
     const result = await FeeStructure.deleteMany({ _id: { $in: ids }, institutionId });
+
+    // Labelled the same way every read path is — see `withLabels` — so a
+    // hard-deleted batch still leaves a description naming what it removed,
+    // not just how many.
+    const removed = await withLabels(institutionId, owned);
 
     await ActivityService.record({
       institutionId,
       entityType: "FEE_STRUCTURE",
       entityRef: institutionId,
       action: "Fee structures deleted in bulk",
-      description: `${result.deletedCount} deleted`,
+      description: summarizeRemoved(removed),
       performedBy: actor.id,
       performedByName: actor.name,
     });
