@@ -42,6 +42,7 @@ export function BulkFeeForm({
     handleSubmit,
     watch,
     setValue,
+    reset,
     formState: { errors, isSubmitting },
   } = useForm<Values>({
     resolver: zodResolver(bulkCreateFeeSchema),
@@ -90,9 +91,22 @@ export function BulkFeeForm({
 
       const { created, skipped } = payload as Result;
       setResult({ created, skipped });
+      // The toast is the first and often the only feedback read, so it carries the
+      // same wording rule as the panel below: "created 0, skipped 3" is a bare zero
+      // dressed as a result. Nothing was created because every class already had a
+      // price — say that.
       toast.success(
-        skipped.length > 0 ? `Created ${created}, skipped ${skipped.length}` : `Created ${created}`,
+        created === 0 && skipped.length > 0
+          ? "Every selected class or course was already priced — nothing new was created"
+          : skipped.length > 0
+            ? `Created ${created}, skipped ${skipped.length} already priced`
+            : `Created ${created}`,
       );
+
+      // Clear the form on success. This screen deliberately stays put — there is no
+      // single created resource to navigate to — so without this the previous
+      // batch's units stay ticked, and the next submit silently includes them.
+      reset({ academicUnitIds: [], academicYear: "", lineItems: [] });
     } catch {
       toast.error("Could not reach the server. Please try again.");
     }
