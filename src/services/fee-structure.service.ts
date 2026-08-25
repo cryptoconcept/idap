@@ -456,6 +456,37 @@ export const FeeStructureService = {
     });
   },
 
+  async removeMany(
+    institutionId: string,
+    feeStructureIds: string[],
+    actor: { id: string; name: string },
+  ): Promise<{ deleted: number }> {
+    await connectToDatabase();
+    const ids = feeStructureIds.map(toObjectId);
+
+    // Ownership is verified BEFORE anything is deleted. A scoped `deleteMany`
+    // alone would remove nothing for a foreign id and report a lower count —
+    // succeeding silently where a foreign id must fail the batch.
+    const owned = await FeeStructure.countDocuments({ _id: { $in: ids }, institutionId });
+    if (owned !== ids.length) throw notFound("Fee structure not found");
+
+    const result = await FeeStructure.deleteMany({ _id: { $in: ids }, institutionId });
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "FEE_STRUCTURE",
+      entityRef: institutionId,
+      action: "Fee structures deleted in bulk",
+      description: `${result.deletedCount} deleted`,
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    // The count the database actually removed, never the length of the id
+    // list — reporting an intended count is how a scoping regression hides.
+    return { deleted: result.deletedCount };
+  },
+
   async getFeeHeads(institutionId: string): Promise<FeeHeadDTO[]> {
     await connectToDatabase();
     const institution = await Institution.findOne({ institutionId })
