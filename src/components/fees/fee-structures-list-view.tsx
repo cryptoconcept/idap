@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus, Tags } from "lucide-react";
+import { Layers, Plus, Tags } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PageHeader } from "@/components/shared/page-header";
@@ -31,6 +31,12 @@ export function FeeStructuresListView({ feeStructures }: { feeStructures: FeeStr
               <Link href="/fees/heads">
                 <Tags className="size-3.5" />
                 Fee heads
+              </Link>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <Link href="/fees/bulk">
+                <Layers className="size-3.5" />
+                Bulk add
               </Link>
             </Button>
             <Button asChild size="sm">
