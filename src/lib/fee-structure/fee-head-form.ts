@@ -24,6 +24,19 @@ import type { FeeFrequency } from "@/lib/constants";
 export const NO_FREQUENCY = "NONE" as const;
 
 /**
+ * Guards the sentinel against a future collision: if `NONE` were ever added to
+ * `FEE_FREQUENCIES`, this line stops compiling rather than letting a real
+ * frequency be silently read as "not set".
+ */
+const _sentinelIsNotARealFrequency: typeof NO_FREQUENCY extends FeeFrequency ? never : true = true;
+void _sentinelIsNotARealFrequency;
+
+/** A number the user actually supplied — not blank (`NaN`), not absent, not `null`. */
+function isSetNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/**
  * Derived from `FeeFrequency` rather than spelled out, so adding a frequency to
  * `FEE_FREQUENCIES` cannot leave this union silently behind.
  */
@@ -39,12 +52,14 @@ export type FeeHeadsFormValues = { feeHeads: FeeHeadFormValue[] };
 
 /** A head the API returned, as the form wants to hold it. */
 export function toFormValues(
-  feeHeads: { label: string; amount?: number; frequency?: string }[],
+  feeHeads: { label: string; amount?: number | null; frequency?: string }[],
 ): FeeHeadsFormValues {
   return {
     feeHeads: feeHeads.map((head) => ({
       label: head.label,
-      amount: head.amount,
+      // `null` is not `undefined`: a stored document could carry one, and passing
+      // it through would break this function's own `amount?: number` contract.
+      amount: isSetNumber(head.amount) ? head.amount : undefined,
       frequency: (head.frequency ?? NO_FREQUENCY) as FrequencyChoice,
     })),
   };
@@ -55,9 +70,7 @@ export function toApiPayload(values: FeeHeadsFormValues): FeeHeadsInput {
   return {
     feeHeads: values.feeHeads.map((head) => ({
       label: head.label,
-      amount: typeof head.amount === "number" && Number.isFinite(head.amount)
-        ? head.amount
-        : undefined,
+      amount: isSetNumber(head.amount) ? head.amount : undefined,
       frequency: head.frequency === NO_FREQUENCY ? undefined : (head.frequency as FeeFrequency),
     })),
   };
@@ -74,6 +87,19 @@ export const feeHeadsFormSchema = z
   // `unknown`, and `zodResolver` requires an input assignable to `FieldValues`.
   // Declaring the input type here keeps the resolver's field paths checked
   // instead of pushing the problem into a wider cast at the call site.
-  .custom<FeeHeadsFormValues>()
+  //
+  // The predicate is not ceremony. `z.custom` with no predicate accepts
+  // anything, so a malformed value would reach `.transform` and throw a raw
+  // TypeError instead of failing validation. The UI cannot produce that —
+  // `useFieldArray` guarantees an array — but this schema is exported, and a
+  // schema that throws instead of returning a validation error is a trap for
+  // its next caller.
+  .custom<FeeHeadsFormValues>(
+    (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      Array.isArray((value as { feeHeads?: unknown }).feeHeads),
+    { message: "Expected a fee head list" },
+  )
   .transform(toApiPayload)
   .pipe(feeHeadsSchema);

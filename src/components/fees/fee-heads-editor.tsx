@@ -20,11 +20,11 @@ import type { FeeHeadDTO } from "@/services/fee-structure.service";
 import {
   NO_FREQUENCY,
   feeHeadsFormSchema,
-  toApiPayload,
   toFormValues,
   type FeeHeadsFormValues,
   type FrequencyChoice,
 } from "@/lib/fee-structure/fee-head-form";
+import type { FeeHeadsInput } from "@/lib/validation/fee-structure";
 import type { Resolver } from "react-hook-form";
 
 export function FeeHeadsEditor({ initialFeeHeads }: { initialFeeHeads: FeeHeadDTO[] }) {
@@ -37,17 +37,27 @@ export function FeeHeadsEditor({ initialFeeHeads }: { initialFeeHeads: FeeHeadDT
     watch,
     setValue,
     formState: { errors, isSubmitting },
-  } = useForm<FeeHeadsFormValues>({
-    resolver: zodResolver(feeHeadsFormSchema) as unknown as Resolver<FeeHeadsFormValues>,
+    // Three generics, not one: the form HOLDS `FeeHeadsFormValues` (sentinel and
+    // all) but `handleSubmit` receives the resolver's PARSED output, which is
+    // already `FeeHeadsInput`. Typing only the first generic would make
+    // `onSubmit`'s parameter a lie and leave the second normalisation below
+    // looking load-bearing when it is really a no-op.
+  } = useForm<FeeHeadsFormValues, unknown, FeeHeadsInput>({
+    resolver: zodResolver(feeHeadsFormSchema) as unknown as Resolver<
+      FeeHeadsFormValues,
+      unknown,
+      FeeHeadsInput
+    >,
     defaultValues: toFormValues(initialFeeHeads),
   });
 
   const { fields, append, remove } = useFieldArray({ control, name: "feeHeads" });
 
-  async function onSubmit(formData: FeeHeadsFormValues) {
+  // Already normalised by the resolver — the sentinel resolved, blank amounts
+  // dropped, labels trimmed. Normalising again here would be a second, silent
+  // transform that no test covers.
+  async function onSubmit(payload: FeeHeadsInput) {
     try {
-      const payload = toApiPayload(formData);
-
       const response = await fetch("/api/settings/fees/heads", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },

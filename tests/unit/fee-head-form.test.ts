@@ -73,4 +73,41 @@ describe("fee head form translation", () => {
     expect(inForm.feeHeads[0].frequency).toBe(NO_FREQUENCY);
     expect(toApiPayload(inForm).feeHeads[0].frequency).toBeUndefined();
   });
+  it("rejects a malformed value instead of throwing — the schema is exported", () => {
+    // Not reachable through the UI (useFieldArray guarantees an array), but this
+    // schema is exported, and one that throws rather than failing validation is
+    // a trap for its next caller.
+    for (const bad of [null, undefined, "feeHeads", 42, {}, { feeHeads: "Tuition" }]) {
+      const result = feeHeadsFormSchema.safeParse(bad);
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it("normalises a null amount, which a stored document can carry", () => {
+    expect(toFormValues([{ label: "Tuition", amount: null }]).feeHeads[0].amount).toBeUndefined();
+  });
+
+  it("hands the caller a payload that needs no further normalising", () => {
+    // The seam the component depends on: react-hook-form gives `handleSubmit`
+    // the resolver's PARSED output, so the submit path sends it straight on. If
+    // that stopped being fully normalised, the wire payload would carry a
+    // sentinel or a NaN and the API would reject it.
+    const parsed = feeHeadsFormSchema.safeParse({
+      feeHeads: [
+        { label: "  Tuition  ", amount: NaN, frequency: NO_FREQUENCY },
+        { label: "Registration", amount: 500, frequency: "ONE_TIME" },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+
+    expect(parsed.data.feeHeads[0]).toEqual({ label: "Tuition" });
+    expect(parsed.data.feeHeads[1]).toEqual({
+      label: "Registration",
+      amount: 500,
+      frequency: "ONE_TIME",
+    });
+    // Re-normalising must be a no-op, since the component no longer does it.
+    expect(toApiPayload(parsed.data as never)).toEqual(parsed.data);
+  });
 });
