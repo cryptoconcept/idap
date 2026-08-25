@@ -294,7 +294,8 @@ describe("AcademicStructureService delete guard", () => {
 
   it("refuses to delete an ANCESTOR of a unit that carries one", async () => {
     // The guard counts across the whole subtree: deleting a programme must be
-    // refused when a fee hangs off a branch below it.
+    // refused when a fee hangs off a year two levels below it. This ensures
+    // the guard walks the entire subtree, not just the root and immediate children.
     await AcademicStructureService.setSegments("INS0004", ["ENGINEERING"], actor);
     const programme = await AcademicStructureService.create(
       "INS0004",
@@ -306,7 +307,12 @@ describe("AcademicStructureService delete guard", () => {
       { segment: "ENGINEERING", parentId: programme.id, name: "Computer Science" },
       actor,
     );
-    await FeeStructureService.create("INS0004", fee(branch.id), actor);
+    const year = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", parentId: branch.id, name: "Year 1" },
+      actor,
+    );
+    await FeeStructureService.create("INS0004", fee(year.id), actor);
 
     await expect(
       AcademicStructureService.remove("INS0004", programme.id, actor),
