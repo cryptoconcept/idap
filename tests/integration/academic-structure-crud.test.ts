@@ -1,14 +1,16 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { AcademicUnit } from "@/models";
+import { AcademicUnit, FeeStructure } from "@/models";
 import { AcademicStructureService } from "@/services/academic-structure.service";
+import { FeeStructureService } from "@/services/fee-structure.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
 beforeAll(async () => {
   await startTestDatabase("academic-structure-crud");
   await AcademicUnit.syncIndexes();
+  await FeeStructure.syncIndexes();
 });
 afterAll(stopTestDatabase);
 beforeEach(async () => {
@@ -266,5 +268,81 @@ describe("AcademicStructureService CRUD", () => {
     const byId = new Map(units.map((unit) => [unit.id, unit]));
     expect(byId.get(branch.id)?.pathLabel).toBe("Y2 › B");
     expect(byId.get(year.id)?.pathLabel).toBe("Y2 › B › Y");
+  });
+});
+
+describe("AcademicStructureService delete guard", () => {
+  const fee = (academicUnitId: string) => ({
+    academicUnitId,
+    academicYear: "2026-27",
+    lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" as const }],
+  });
+
+  it("refuses to delete a unit that carries a fee structure", async () => {
+    const grade = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    await FeeStructureService.create("INS0001", fee(grade.id), actor);
+
+    await expect(AcademicStructureService.remove("INS0001", grade.id, actor)).rejects.toMatchObject(
+      { code: "VALIDATION_ERROR" },
+    );
+    expect(await AcademicStructureService.list("INS0001")).toHaveLength(1);
+  });
+
+  it("refuses to delete an ANCESTOR of a unit that carries one", async () => {
+    // The guard counts across the whole subtree: deleting a programme must be
+    // refused when a fee hangs off a branch below it.
+    await AcademicStructureService.setSegments("INS0004", ["ENGINEERING"], actor);
+    const programme = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", name: "B.E." },
+      actor,
+    );
+    const branch = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", parentId: programme.id, name: "Computer Science" },
+      actor,
+    );
+    await FeeStructureService.create("INS0004", fee(branch.id), actor);
+
+    await expect(
+      AcademicStructureService.remove("INS0004", programme.id, actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("allows the delete once the fee structure is gone", async () => {
+    const grade = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    const created = await FeeStructureService.create("INS0001", fee(grade.id), actor);
+    await FeeStructureService.remove("INS0001", created.id, actor);
+
+    await expect(AcademicStructureService.remove("INS0001", grade.id, actor)).resolves.toEqual({
+      deleted: 1,
+    });
+  });
+
+  it("is not blocked by another institution's fee structure", async () => {
+    // The guard is tenant-scoped. INS0002's fees are not INS0001's problem.
+    const mine = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    const theirs = await AcademicStructureService.create(
+      "INS0002",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    await FeeStructureService.create("INS0002", fee(theirs.id), actor);
+
+    await expect(AcademicStructureService.remove("INS0001", mine.id, actor)).resolves.toEqual({
+      deleted: 1,
+    });
   });
 });

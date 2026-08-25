@@ -2,7 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import type { z } from "zod";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { AcademicUnit, Institution, type AcademicUnitDoc } from "@/models";
+import { AcademicUnit, FeeStructure, Institution, type AcademicUnitDoc } from "@/models";
 import { notFound, validationError } from "@/lib/api/errors";
 import { ACADEMIC_UNIT_MAX_PER_INSTITUTION, type AcademicSegment } from "@/lib/constants";
 import {
@@ -344,10 +344,20 @@ export const AcademicStructureService = {
     await connectToDatabase();
     const before = await findOwned(institutionId, unitId);
 
-    // Phase 6 obligation (spec §15): once `FeeStructure.academicUnitId` exists,
-    // a delete whose subtree is referenced by any fee structure must be refused
-    // right here. Nothing references a unit in Phase 5, so this is unguarded.
     const ids = await subtreeIds(institutionId, before);
+
+    // Counted across the whole subtree, not just this unit: deleting a programme
+    // must be refused when a fee hangs off a branch three levels below it.
+    const referenced = await FeeStructure.countDocuments({
+      institutionId,
+      academicUnitId: { $in: ids },
+    });
+    if (referenced > 0) {
+      throw validationError(
+        `Delete the ${referenced} fee structure(s) under this unit before deleting it`,
+      );
+    }
+
     const result = await AcademicUnit.deleteMany({ _id: { $in: ids }, institutionId });
 
     // The count reported is what the database actually removed, not what we
