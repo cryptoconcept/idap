@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   assertFeeStructureInvariants,
   assertFeeStructurePublishable,
+  bulkCreateFeeSchema,
+  bulkDeleteFeeSchema,
   createFeeStructureSchema,
+  feeHeadsSchema,
   updateFeeStructureSchema,
 } from "@/lib/validation/fee-structure";
 
@@ -95,5 +98,59 @@ describe("updateFeeStructureSchema", () => {
     expect(parsed.academicYear).toBe("2027-28");
     expect(parsed.academicUnitId).toBeUndefined();
     expect(parsed.status).toBeUndefined();
+  });
+});
+
+describe("fee heads validation", () => {
+  it("accepts a label-only head and one with defaults", () => {
+    expect(
+      feeHeadsSchema.safeParse({
+        feeHeads: [{ label: "Transport" }, { label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects duplicate labels", () => {
+    expect(
+      feeHeadsSchema.safeParse({ feeHeads: [{ label: "Tuition" }, { label: "Tuition" }] }).success,
+    ).toBe(false);
+  });
+
+  it("rejects more than the maximum", () => {
+    const heads = Array.from({ length: 31 }, (_, index) => ({ label: `Head ${index}` }));
+    expect(feeHeadsSchema.safeParse({ feeHeads: heads }).success).toBe(false);
+    expect(feeHeadsSchema.safeParse({ feeHeads: heads.slice(0, 30) }).success).toBe(true);
+  });
+});
+
+describe("bulk fee validation", () => {
+  it("requires at least one id and rejects duplicates", () => {
+    expect(bulkCreateFeeSchema.safeParse({ academicUnitIds: [], academicYear: "2026-27" }).success)
+      .toBe(false);
+    expect(
+      bulkCreateFeeSchema.safeParse({
+        academicUnitIds: [OID, OID],
+        academicYear: "2026-27",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("caps the batch at 100 and accepts exactly 100", () => {
+    const ids = (count: number) =>
+      Array.from({ length: count }, (_, index) =>
+        index.toString(16).padStart(24, "0"),
+      );
+    expect(
+      bulkCreateFeeSchema.safeParse({ academicUnitIds: ids(101), academicYear: "2026-27" }).success,
+    ).toBe(false);
+    expect(
+      bulkCreateFeeSchema.safeParse({ academicUnitIds: ids(100), academicYear: "2026-27" }).success,
+    ).toBe(true);
+  });
+
+  it("applies the same id rules to bulk delete", () => {
+    expect(bulkDeleteFeeSchema.safeParse({ feeStructureIds: [] }).success).toBe(false);
+    expect(bulkDeleteFeeSchema.safeParse({ feeStructureIds: [OID, OID] }).success).toBe(false);
+    expect(bulkDeleteFeeSchema.safeParse({ feeStructureIds: [OID] }).success).toBe(true);
   });
 });

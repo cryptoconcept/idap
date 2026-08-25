@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FEE_FREQUENCIES } from "@/lib/constants";
+import { FEE_FREQUENCIES, FEE_HEAD_MAX } from "@/lib/constants";
 import { validationError } from "@/lib/api/errors";
 import { objectIdString, requiredText } from "./common";
 
@@ -74,3 +74,49 @@ export function assertFeeStructurePublishable(input: FeeStructureInvariantInput)
     throw validationError("lineItems: add at least one line item before publishing");
   }
 }
+
+const BULK_MAX_IDS = 100;
+
+/**
+ * Duplicates are rejected rather than silently de-duplicated: a caller sending the
+ * same id twice has a bug, and swallowing it hides the bug rather than the request.
+ */
+const distinctObjectIds = (label: string) =>
+  z
+    .array(objectIdString)
+    .min(1, `Select at least one ${label}`)
+    .max(BULK_MAX_IDS, `Cannot process more than ${BULK_MAX_IDS} at once`)
+    .refine((values) => new Set(values).size === values.length, {
+      message: `Each ${label} can appear only once`,
+    });
+
+const feeHeadSchema = z.object({
+  label: requiredText("Fee head label", 60),
+  amount: z.number().min(0, "Must be 0 or more").optional(),
+  frequency: z.enum(FEE_FREQUENCIES).optional(),
+});
+
+export const feeHeadsSchema = z.object({
+  feeHeads: z
+    .array(feeHeadSchema)
+    .max(FEE_HEAD_MAX, `At most ${FEE_HEAD_MAX} fee heads`)
+    // Same rule and the same reason as line items: a picker with two "Tuition"
+    // entries is a picker with a bug.
+    .refine(
+      (heads) => new Set(heads.map((head) => head.label)).size === heads.length,
+      { message: "Each fee head needs a distinct label" },
+    ),
+});
+export type FeeHeadsInput = z.infer<typeof feeHeadsSchema>;
+
+export const bulkCreateFeeSchema = z.object({
+  academicUnitIds: distinctObjectIds("class or course"),
+  academicYear: requiredText("Academic year", 20),
+  lineItems: z.array(feeLineItemSchema).max(FEE_STRUCTURE_MAX_LINE_ITEMS).optional(),
+});
+export type BulkCreateFeeInput = z.infer<typeof bulkCreateFeeSchema>;
+
+export const bulkDeleteFeeSchema = z.object({
+  feeStructureIds: distinctObjectIds("fee structure"),
+});
+export type BulkDeleteFeeInput = z.infer<typeof bulkDeleteFeeSchema>;
