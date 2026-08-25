@@ -3,12 +3,15 @@ import {
   assertFeeStructureInvariants,
   assertFeeStructurePublishable,
   createFeeStructureSchema,
+  updateFeeStructureSchema,
 } from "@/lib/validation/fee-structure";
+
+const OID = "6a887abd755db527bea51204";
 
 describe("createFeeStructureSchema", () => {
   it("accepts a structure with no line items", () => {
     const result = createFeeStructureSchema.safeParse({
-      classOrCourse: "Grade 10",
+      academicUnitId: OID,
       academicYear: "2026-27",
     });
     expect(result.success).toBe(true);
@@ -22,7 +25,7 @@ describe("createFeeStructureSchema", () => {
     }));
 
     const result = createFeeStructureSchema.safeParse({
-      classOrCourse: "Grade 10",
+      academicUnitId: OID,
       academicYear: "2026-27",
       lineItems,
     });
@@ -31,7 +34,7 @@ describe("createFeeStructureSchema", () => {
 
   it("rejects a negative amount", () => {
     const result = createFeeStructureSchema.safeParse({
-      classOrCourse: "Grade 10",
+      academicUnitId: OID,
       academicYear: "2026-27",
       lineItems: [{ label: "Tuition", amount: -1, frequency: "ANNUAL" }],
     });
@@ -76,5 +79,21 @@ describe("assertFeeStructurePublishable", () => {
         lineItems: [{ label: "Tuition", amount: 60000, frequency: "ANNUAL" }],
       }),
     ).not.toThrow();
+  });
+});
+
+describe("updateFeeStructureSchema", () => {
+  it("strips academicUnitId from a patch instead of applying it", () => {
+    // Same mechanism as `status`: moving a fee structure to another unit would
+    // take its unique key with it, so the field is simply absent from the schema.
+    const parsed = updateFeeStructureSchema.parse({
+      academicYear: "2027-28",
+      academicUnitId: OID,
+      status: "PUBLISHED",
+    }) as Record<string, unknown>;
+
+    expect(parsed.academicYear).toBe("2027-28");
+    expect(parsed.academicUnitId).toBeUndefined();
+    expect(parsed.status).toBeUndefined();
   });
 });

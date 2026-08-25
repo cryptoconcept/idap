@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { FEE_FREQUENCIES } from "@/lib/constants";
 import { validationError } from "@/lib/api/errors";
-import { requiredText } from "./common";
+import { objectIdString, requiredText } from "./common";
 
 const FEE_STRUCTURE_MAX_LINE_ITEMS = 20;
 
@@ -13,7 +13,7 @@ const feeLineItemSchema = z.object({
 });
 
 const identityFields = {
-  classOrCourse: requiredText("Class or course", 120),
+  academicUnitId: objectIdString,
   academicYear: requiredText("Academic year", 20),
 };
 
@@ -24,12 +24,13 @@ export const createFeeStructureSchema = z.object({
 export type CreateFeeStructureInput = z.infer<typeof createFeeStructureSchema>;
 
 /**
- * `status` is absent on purpose: a fee structure changes state only through
- * the publish route, so a PATCH can never smuggle a structure into PUBLISHED
- * and skip the "at least one line item" gate.
+ * `status` is absent so a PATCH can never smuggle a structure into PUBLISHED and
+ * skip the publish gate. `academicUnitId` is absent for the same mechanism and a
+ * different reason: moving a fee structure to another unit would carry its unique
+ * key with it. Both are stripped by Zod, the codebase's established way of making
+ * a field immutable.
  */
 export const updateFeeStructureSchema = z.object({
-  classOrCourse: identityFields.classOrCourse.optional(),
   academicYear: identityFields.academicYear.optional(),
   lineItems: z.array(feeLineItemSchema).max(FEE_STRUCTURE_MAX_LINE_ITEMS).optional(),
 });
