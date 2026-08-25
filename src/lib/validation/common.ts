@@ -103,3 +103,13 @@ export const academicYearSchema = z
     message: "Academic year must look like 2026-27",
   })
   .transform((value) => value.replace(/\s/g, ""));
+
+/**
+ * A 24-character hex object id, as a string. Shape only — whether the id
+ * refers to anything is a service concern, and a malformed one is turned into
+ * NOT_FOUND there rather than a 500.
+ */
+export const objectIdString = z
+  .string()
+  .trim()
+  .regex(/^[0-9a-fA-F]{24}$/, "Not a valid id");

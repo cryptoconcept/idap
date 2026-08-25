@@ -1,14 +1,8 @@
 import { z } from "zod";
 import { ACADEMIC_SEGMENTS } from "@/lib/constants";
-import { requiredText } from "./common";
+import { objectIdString, requiredText } from "./common";
 
 const REORDER_MAX_SIBLINGS = 100;
-
-/** A 24-character hex id. Anything else is "no such unit", never a 500. */
-const objectIdString = z
-  .string()
-  .trim()
-  .regex(/^[0-9a-fA-F]{24}$/, "Not a valid id");
 
 export const createAcademicUnitSchema = z.object({
   segment: z.enum(ACADEMIC_SEGMENTS),
