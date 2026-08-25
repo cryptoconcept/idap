@@ -573,7 +573,10 @@ export const FeeStructureService = {
       entityType: "FEE_HEAD",
       entityRef: institutionId,
       action: "Fee heads updated",
-      description: `${feeHeads.length} head(s)`,
+      // The database's own array, not the input's — identical by construction
+      // today, but a count must reflect what was actually persisted, not what
+      // was requested.
+      description: `${(updated.feeHeads ?? []).length} head(s)`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
