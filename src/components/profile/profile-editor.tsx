@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { PROFILE_STATUS_LABELS, type ProfileStatus } from "@/lib/constants";
 import type { ProfileCompletion } from "@/lib/profile/completion";
+import type { DerivedOfferings } from "@/lib/academic/offerings";
 import type { ProfileDTO } from "@/lib/types";
 import { CompletionMeter } from "@/components/profile/completion-meter";
 import { PublishDialog } from "@/components/profile/publish-dialog";
@@ -65,9 +66,17 @@ function missingForSection(
 export function ProfileEditor({
   initialProfile,
   initialCompletion,
+  initialOfferings,
 }: {
   initialProfile: ProfileDTO;
   initialCompletion: ProfileCompletion;
+  /**
+   * Derived from the academic structure tree, for the read-only summary the
+   * Academic section renders. Nothing in this editor can change it — that
+   * only happens on `/academic-structure` — so it is read once at page load
+   * rather than refreshed on every section save.
+   */
+  initialOfferings: DerivedOfferings | null;
 }) {
   const [profile, setProfile] = useState<ProfileDTO>(initialProfile);
   const [completion, setCompletion] = useState<ProfileCompletion>(initialCompletion);
@@ -245,7 +254,9 @@ export function ProfileEditor({
           {active === "basic" ? <BasicSection {...sectionProps} onProfile={applyProfile} /> : null}
           {active === "contact" ? <ContactSection {...sectionProps} /> : null}
           {active === "address" ? <AddressSection {...sectionProps} /> : null}
-          {active === "academic" ? <AcademicSection {...sectionProps} /> : null}
+          {active === "academic" ? (
+            <AcademicSection {...sectionProps} offerings={initialOfferings} />
+          ) : null}
           {active === "management" ? <ManagementSection {...sectionProps} /> : null}
           {active === "facilities" ? <FacilitiesSection {...sectionProps} /> : null}
           {active === "social" ? <SocialSection {...sectionProps} /> : null}

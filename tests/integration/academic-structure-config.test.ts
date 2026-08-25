@@ -237,6 +237,22 @@ describe("AcademicStructureService seeding", () => {
     // order would put the course under COACHING.
     expect(bySegment.get("B.Com")).toBe("DEGREE");
   });
+
+  it("clears the stored arrays it copied, so they cannot resurface as stale", async () => {
+    await makeInstitution("INS0009", {
+      academic: { classesOffered: ["Grade 1"], segments: ["SCHOOL"] },
+    });
+
+    await AcademicStructureService.seedFromProfile("INS0009", actor);
+
+    const after = await Institution.findOne({ institutionId: "INS0009" }).lean();
+    const academic = (after?.academic ?? {}) as { classesOffered?: string[] };
+    expect(academic.classesOffered).toBeUndefined();
+    // And a second seed is still refused, for the original reason.
+    await expect(AcademicStructureService.seedFromProfile("INS0009", actor)).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+  });
 });
 
 describe("AcademicStructureService offeringsFor", () => {

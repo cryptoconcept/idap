@@ -27,7 +27,9 @@ export default async function ProfilePage() {
   const institution = await getCurrentInstitution();
   if (!institution) redirect("/login");
 
-  const { profile, completion } = await InstitutionService.getProfile(institution.institutionId);
+  const { profile, completion, offerings } = await InstitutionService.getProfile(
+    institution.institutionId,
+  );
 
   return (
     <>
@@ -42,7 +44,7 @@ export default async function ProfilePage() {
         }
       />
 
-      <ProfileEditor initialProfile={profile} initialCompletion={completion} />
+      <ProfileEditor initialProfile={profile} initialCompletion={completion} initialOfferings={offerings} />
     </>
   );
 }

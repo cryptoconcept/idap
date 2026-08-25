@@ -55,13 +55,16 @@ export function toPublicProfile(
     medium: list((doc.academic as Record<string, unknown> | undefined)?.medium),
     genderType: text((doc.academic as Record<string, unknown> | undefined)?.genderType),
     currentAcademicYear: text((doc.academic as Record<string, unknown> | undefined)?.currentAcademicYear),
+    // Per array, not per institution. A school+PU college that has built its class
+    // tree but not its course tree must keep publishing its stored courses — losing
+    // them because a *class* exists is not something the admin did or could predict.
     classesOffered: list(
-      offerings
+      offerings?.classesOffered.length
         ? offerings.classesOffered
         : (doc.academic as Record<string, unknown> | undefined)?.classesOffered,
     ),
     coursesOffered: list(
-      offerings
+      offerings?.coursesOffered.length
         ? offerings.coursesOffered
         : (doc.academic as Record<string, unknown> | undefined)?.coursesOffered,
     ),

@@ -566,7 +566,16 @@ export const AcademicStructureService = {
       });
     }
 
-    if (documents.length > 0) await AcademicUnit.insertMany(documents);
+    if (documents.length > 0) {
+      await AcademicUnit.insertMany(documents);
+
+      // The tree is the source of truth from here. Clearing the hand-typed copies stops
+      // them resurfacing later as a fallback that no remaining UI can edit.
+      await Institution.updateOne(
+        { institutionId },
+        { $unset: { "academic.classesOffered": "", "academic.coursesOffered": "" } },
+      );
+    }
 
     await ActivityService.record({
       institutionId,
@@ -592,7 +601,11 @@ export const AcademicStructureService = {
     const units = await AcademicStructureService.list(institutionId);
     if (units.length === 0) return null;
 
-    const offerings = deriveOfferings(units, await segmentsFor(institutionId));
+    // The segments worth deriving from are exactly the ones the units live in.
+    // `deriveOfferings` never reads a segment with no units, and it calls
+    // `orderSegments` itself, so re-reading the stored selection would be two extra
+    // queries for an identical result.
+    const offerings = deriveOfferings(units, units.map((unit) => unit.segment));
     if (offerings.classesOffered.length === 0 && offerings.coursesOffered.length === 0) {
       return null;
     }

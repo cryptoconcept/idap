@@ -160,7 +160,6 @@ export type ProfileDTO = InstitutionDTO & {
     currentAcademicYear?: string;
     classesOffered?: string[];
     coursesOffered?: string[];
-    segments?: string[];
   };
   management?: {
     managementType?: ManagementType;

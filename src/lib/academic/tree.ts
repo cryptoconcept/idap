@@ -65,14 +65,19 @@ export function inactiveIds(units: TreeUnit[]): Set<string> {
 
   for (const unit of units) {
     let current: TreeUnit | undefined = unit;
+    let reachedRoot = false;
     for (let hops = unit.depth; current && hops >= 0; hops -= 1) {
-      if (!current.active) {
-        inactive.add(unit.id);
+      if (!current.active) break;
+      if (current.parentId === null) {
+        reachedRoot = true;
         break;
       }
-      if (current.parentId === null) break;
       current = byId.get(current.parentId);
     }
+    // Falling out without reaching a root means an orphan — a parent id that resolves
+    // to nothing. `effectivelyActive` in ./offerings excludes it from publishing, so
+    // the editor must dim it rather than showing it as live.
+    if (!reachedRoot) inactive.add(unit.id);
   }
   return inactive;
 }

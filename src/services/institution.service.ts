@@ -19,6 +19,7 @@ import {
 import { storage } from "@/lib/storage";
 import { calculateCompletion, type ProfileCompletion } from "@/lib/profile/completion";
 import { toPublicProfile, type PublicProfile } from "@/lib/profile/public-projection";
+import type { DerivedOfferings } from "@/lib/academic/offerings";
 import { AcademicStructureService } from "./academic-structure.service";
 import type { z } from "zod";
 import { mediaUploadSchema } from "@/lib/validation/institution";
@@ -314,7 +315,7 @@ export const InstitutionService = {
   /** The institution admin's own view: the full profile plus how complete it is. */
   async getProfile(
     institutionId: string,
-  ): Promise<{ profile: ProfileDTO; completion: ProfileCompletion }> {
+  ): Promise<{ profile: ProfileDTO; completion: ProfileCompletion; offerings: DerivedOfferings | null }> {
     await connectToDatabase();
     const row = await Institution.findOne({ institutionId }).lean();
     if (!row) throw notFound("Institution not found");
@@ -329,7 +330,11 @@ export const InstitutionService = {
       ? { ...row, academic: { ...(row.academic ?? {}), ...offerings } }
       : row;
 
-    return { profile: serialize(row as InstitutionRow), completion: calculateCompletion(scored) };
+    return {
+      profile: serialize(row as InstitutionRow),
+      completion: calculateCompletion(scored),
+      offerings,
+    };
   },
 
   /**

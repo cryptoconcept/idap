@@ -51,4 +51,10 @@ describe("inactiveIds", () => {
     expect(inactive.has("child")).toBe(true);
     expect(inactive.has("live")).toBe(false);
   });
+
+  it("treats an orphan as inactive, matching what the publisher does", () => {
+    const orphan = unit({ id: "orphan", parentId: "gone", depth: 1 });
+
+    expect(inactiveIds([orphan]).has("orphan")).toBe(true);
+  });
 });

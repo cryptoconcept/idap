@@ -7,6 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import type { z } from "zod";
 import { updateProfileSchema } from "@/lib/validation/institution";
 import { GENDER_TYPES, GENDER_TYPE_LABELS } from "@/lib/constants";
+import type { DerivedOfferings } from "@/lib/academic/offerings";
 import { Button } from "@/components/ui/button";
 import {
   FieldGroup,
@@ -28,7 +29,15 @@ const GENDER_OPTIONS = GENDER_TYPES.map((value) => ({
 }));
 
 /** Board, affiliation and what is actually taught. Two of the heaviest completion checks live here. */
-export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps) {
+export function AcademicSection({
+  profile,
+  onSave,
+  onDirtyChange,
+  offerings,
+}: SectionProps & {
+  /** Derived from the academic structure tree; `null` when no tree exists yet. */
+  offerings: DerivedOfferings | null;
+}) {
   const {
     register,
     control,
@@ -55,6 +64,16 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
   useEffect(() => {
     onDirtyChange(isDirty);
   }, [isDirty, onDirtyChange]);
+
+  // Per array, not per institution — mirrors the public projection's fallback
+  // (item 1) so this card never claims something the profile does not actually
+  // publish.
+  const classesOffered = offerings?.classesOffered.length
+    ? offerings.classesOffered
+    : (profile.academic?.classesOffered ?? []);
+  const coursesOffered = offerings?.coursesOffered.length
+    ? offerings.coursesOffered
+    : (profile.academic?.coursesOffered ?? []);
 
   async function onSubmit(values: Parsed) {
     if (await onSave(values as Record<string, unknown>)) reset(getValues());
@@ -157,7 +176,21 @@ export function AcademicSection({ profile, onSave, onDirtyChange }: SectionProps
             These are published from your academic structure, so they stay in step with what you
             actually offer.
           </p>
-          <Button asChild size="sm" variant="outline" className="mt-2">
+          <dl className="mt-3 space-y-2 text-xs">
+            <div>
+              <dt className="font-medium text-foreground">Classes offered</dt>
+              <dd className="mt-0.5 text-muted-foreground">
+                {classesOffered.length > 0 ? classesOffered.join(", ") : "Nothing published yet"}
+              </dd>
+            </div>
+            <div>
+              <dt className="font-medium text-foreground">Courses offered</dt>
+              <dd className="mt-0.5 text-muted-foreground">
+                {coursesOffered.length > 0 ? coursesOffered.join(", ") : "Nothing published yet"}
+              </dd>
+            </div>
+          </dl>
+          <Button asChild size="sm" variant="outline" className="mt-3">
             <Link href="/academic-structure">Edit academic structure</Link>
           </Button>
         </div>

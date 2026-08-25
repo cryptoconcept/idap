@@ -44,7 +44,9 @@ describe("public profile offerings", () => {
     const profile = await InstitutionService.getPublicProfile({ institutionId: "INS0002" });
 
     expect(profile?.academic?.classesOffered).toEqual(["Grade 9", "Grade 10"]);
-    expect(profile?.academic?.coursesOffered).toBeUndefined();
+    // The course tree is empty, so the stored courses keep publishing. Deriving one
+    // array must never silently unpublish the other.
+    expect(profile?.academic?.coursesOffered).toEqual(["Also stale"]);
   });
 
   it("reads a PU tree at the combination tier", async () => {
@@ -88,5 +90,19 @@ describe("public profile offerings", () => {
     const academic = completion.groups.find((group) => group.key === "academic");
 
     expect(academic?.missing).not.toContain("Classes or courses offered");
+  });
+
+  it("does not unpublish stored courses when only a class tree exists", async () => {
+    await publishedInstitution("INS0006", {
+      academic: { classesOffered: ["Old 1", "Old 2"], coursesOffered: ["PCMB", "CEBA"] },
+    });
+    // One hand-typed class, mid-migration — the exact keystroke that used to wipe
+    // both arrays.
+    await AcademicStructureService.create("INS0006", { segment: "SCHOOL", name: "Grade 1" }, actor);
+
+    const profile = await InstitutionService.getPublicProfile({ institutionId: "INS0006" });
+
+    expect(profile?.academic?.classesOffered).toEqual(["Grade 1"]);
+    expect(profile?.academic?.coursesOffered).toEqual(["PCMB", "CEBA"]);
   });
 });
