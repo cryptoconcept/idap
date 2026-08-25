@@ -296,3 +296,54 @@ export const FEE_STRUCTURE_STATUS_LABELS: Record<FeeStructureStatus, string> = {
   PUBLISHED: "Published",
   ARCHIVED: "Archived",
 };
+
+/**
+ * What an institution actually runs. Curated so every entry is a genuinely
+ * different *shape* — medical, nursing and B.Ed colleges all have the shape
+ * `Course → Year / semester`, so they share `DEGREE` rather than each getting
+ * an entry. This is not a list of institution types.
+ */
+export const ACADEMIC_SEGMENTS = [
+  "SCHOOL",
+  "PRE_UNIVERSITY",
+  "DEGREE",
+  "ENGINEERING",
+  "POLYTECHNIC",
+  "UNIVERSITY",
+  "COACHING",
+  "OTHER",
+] as const;
+export type AcademicSegment = (typeof ACADEMIC_SEGMENTS)[number];
+
+export const ACADEMIC_SEGMENT_LABELS: Record<AcademicSegment, string> = {
+  SCHOOL: "School (up to Class 10 / SSLC)",
+  PRE_UNIVERSITY: "Pre-University (PUC)",
+  DEGREE: "Degree college",
+  ENGINEERING: "Engineering college",
+  POLYTECHNIC: "Polytechnic / Diploma",
+  UNIVERSITY: "University",
+  COACHING: "Coaching / Training",
+  OTHER: "Other",
+};
+
+/** A tier name, shared wherever the tier genuinely is the same thing. */
+export const ACADEMIC_LEVEL_KEYS = [
+  "CLASS",
+  "PU_YEAR",
+  "COMBINATION",
+  "COURSE",
+  "PROGRAMME",
+  "BRANCH",
+  "PROGRAMME_LEVEL",
+  "SPECIALISATION",
+  "YEAR",
+  "BATCH",
+] as const;
+export type AcademicLevelKey = (typeof ACADEMIC_LEVEL_KEYS)[number];
+
+/**
+ * A rename rewrites its subtree in application code and a delete collects one
+ * in memory. Both are correct at tens of nodes and neither is at thousands —
+ * this is the guard that keeps the assumption true.
+ */
+export const ACADEMIC_UNIT_MAX_PER_INSTITUTION = 500;
