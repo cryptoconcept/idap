@@ -2,7 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import type { z } from "zod";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { FeeStructure, Institution, type FeeStructureDoc } from "@/models";
+import { AcademicUnit, FeeStructure, Institution, type FeeStructureDoc } from "@/models";
 import { notFound } from "@/lib/api/errors";
 import {
   assertFeeStructureInvariants,
@@ -18,6 +18,7 @@ type UpdateInput = z.infer<typeof updateFeeStructureSchema>;
 
 export type FeeStructureDTO = {
   id: string;
+  academicUnitId: string;
   classOrCourse: string;
   academicYear: string;
   lineItems?: { label: string; amount: number; frequency: string; optional: boolean }[];
@@ -32,9 +33,57 @@ function toObjectId(feeStructureId: string): Types.ObjectId {
   return new Types.ObjectId(feeStructureId);
 }
 
-function serialize(row: FeeStructureDoc): FeeStructureDTO {
+/** A row with its label attached. The label is never stored — see `withLabels`. */
+type FeeStructureRow = FeeStructureDoc & { classOrCourse: string };
+
+/** A malformed unit id must read as "no such unit", not as a 500. */
+function unitObjectId(academicUnitId: string): Types.ObjectId {
+  if (!Types.ObjectId.isValid(academicUnitId)) throw notFound("Academic unit not found");
+  return new Types.ObjectId(academicUnitId);
+}
+
+/**
+ * Fee structures store a unit id, not a label. Every read path passes its rows
+ * through here, which fetches the referenced units in ONE query and attaches each
+ * row's `classOrCourse` from the unit's current `pathLabel`.
+ *
+ * Deriving rather than storing is what makes renaming a branch fix every fee
+ * structure beneath it on the next read, with no cascade to maintain.
+ */
+async function withLabels(
+  institutionId: string,
+  rows: FeeStructureDoc[],
+): Promise<FeeStructureRow[]> {
+  if (rows.length === 0) return [];
+
+  const units = await AcademicUnit.find({
+    _id: { $in: rows.map((row) => row.academicUnitId) },
+    institutionId,
+  })
+    .select("_id pathLabel")
+    .lean<{ _id: Types.ObjectId; pathLabel: string }[]>();
+
+  const labelById = new Map(units.map((unit) => [String(unit._id), unit.pathLabel]));
+
+  return rows.map((row) => ({
+    ...row,
+    // A referenced unit cannot be missing while the delete guard holds. An empty
+    // string keeps the DTO honest, and the public projection's `text()` drops an
+    // empty value rather than publishing one.
+    classOrCourse: labelById.get(String(row.academicUnitId)) ?? "",
+  }));
+}
+
+/** Newest year first, then by the label a reader actually sees. */
+function byYearThenLabel(a: FeeStructureRow, b: FeeStructureRow): number {
+  if (a.academicYear !== b.academicYear) return b.academicYear.localeCompare(a.academicYear);
+  return a.classOrCourse.localeCompare(b.classOrCourse);
+}
+
+function serialize(row: FeeStructureRow): FeeStructureDTO {
   return {
     id: String(row._id),
+    academicUnitId: String(row.academicUnitId),
     classOrCourse: row.classOrCourse,
     academicYear: row.academicYear,
     lineItems: row.lineItems?.length
@@ -82,10 +131,10 @@ const ACTION_LABELS: Record<"publish" | "unpublish" | "archive", string> = {
 export const FeeStructureService = {
   async list(institutionId: string): Promise<FeeStructureDTO[]> {
     await connectToDatabase();
-    const rows = await FeeStructure.find({ institutionId })
-      .sort({ academicYear: -1, classOrCourse: 1 })
-      .lean<FeeStructureDoc[]>();
-    return rows.map(serialize);
+    const rows = await FeeStructure.find({ institutionId }).lean<FeeStructureDoc[]>();
+    // Sorted in memory: the database cannot sort by a label that lives on another
+    // collection, and a $lookup is disproportionate for tens of rows.
+    return (await withLabels(institutionId, rows)).sort(byYearThenLabel).map(serialize);
   },
 
   /**
@@ -121,20 +170,21 @@ export const FeeStructureService = {
     };
     if (query.academicYear) filter.academicYear = query.academicYear;
 
-    const rows = await FeeStructure.find(filter)
-      .sort({ academicYear: -1, classOrCourse: 1 })
-      .lean<FeeStructureDoc[]>();
+    const rows = await FeeStructure.find(filter).lean<FeeStructureDoc[]>();
 
     // The projection is the allow-list; it also re-checks PUBLISHED, so a
     // filter mistake here cannot leak an unpublished record.
-    return rows
+    return (await withLabels(institution.institutionId, rows))
+      .sort(byYearThenLabel)
       .map((row) => toPublicFeeStructure(row as unknown as Record<string, unknown>))
       .filter((row): row is PublicFeeStructure => row !== null);
   },
 
   async get(institutionId: string, feeStructureId: string): Promise<FeeStructureDTO> {
     await connectToDatabase();
-    return serialize(await findOwned(institutionId, feeStructureId));
+    const row = await findOwned(institutionId, feeStructureId);
+    const [enriched] = await withLabels(institutionId, [row]);
+    return serialize(enriched);
   },
 
   async create(
@@ -146,7 +196,17 @@ export const FeeStructureService = {
 
     assertFeeStructureInvariants({ lineItems: input.lineItems });
 
-    // Duplicate (classOrCourse, academicYear) is refused by the unique index
+    // Scoped by institutionId, so another institution's unit is "no such unit" —
+    // NOT_FOUND, never FORBIDDEN.
+    const unit = await AcademicUnit.findOne({
+      _id: unitObjectId(input.academicUnitId),
+      institutionId,
+    })
+      .select("_id pathLabel")
+      .lean();
+    if (!unit) throw notFound("Academic unit not found");
+
+    // Duplicate (academicUnitId, academicYear) is refused by the unique index
     // rather than a pre-read: a read-then-write races two browser tabs and
     // creates both.
     const created = await FeeStructure.create({ ...input, institutionId, status: "DRAFT" });
@@ -157,12 +217,15 @@ export const FeeStructureService = {
       entityId: created._id,
       entityRef: institutionId,
       action: "Fee structure created",
-      description: `${input.classOrCourse} ${input.academicYear} created`,
+      description: `${unit.pathLabel} ${input.academicYear} created`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
 
-    return serialize(created.toObject() as FeeStructureDoc);
+    return serialize({
+      ...(created.toObject() as FeeStructureDoc),
+      classOrCourse: unit.pathLabel,
+    });
   },
 
   async update(
@@ -194,6 +257,7 @@ export const FeeStructureService = {
       { new: true },
     ).lean<FeeStructureDoc>();
     if (!updated) throw notFound("Fee structure not found");
+    const [enriched] = await withLabels(institutionId, [updated]);
 
     await ActivityService.record({
       institutionId,
@@ -205,7 +269,7 @@ export const FeeStructureService = {
       performedByName: actor.name,
     });
 
-    return serialize(updated);
+    return serialize(enriched);
   },
 
   async setStatus(
@@ -234,6 +298,7 @@ export const FeeStructureService = {
       { new: true },
     ).lean<FeeStructureDoc>();
     if (!updated) throw notFound("Fee structure not found");
+    const [enriched] = await withLabels(institutionId, [updated]);
 
     await ActivityService.record({
       institutionId,
@@ -241,12 +306,12 @@ export const FeeStructureService = {
       entityId: updated._id,
       entityRef: institutionId,
       action: `Fee structure ${ACTION_LABELS[action]}`,
-      description: `${updated.classOrCourse} ${updated.academicYear}`,
+      description: `${enriched.classOrCourse} ${enriched.academicYear}`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
 
-    return serialize(updated);
+    return serialize(enriched);
   },
 
   async remove(
@@ -256,6 +321,7 @@ export const FeeStructureService = {
   ): Promise<void> {
     await connectToDatabase();
     const before = await findOwned(institutionId, feeStructureId);
+    const [enriched] = await withLabels(institutionId, [before]);
 
     await FeeStructure.deleteOne({ _id: before._id, institutionId });
 
@@ -265,7 +331,7 @@ export const FeeStructureService = {
       entityId: before._id,
       entityRef: institutionId,
       action: "Fee structure deleted",
-      description: `${before.classOrCourse} ${before.academicYear} deleted`,
+      description: `${enriched.classOrCourse} ${enriched.academicYear} deleted`,
       performedBy: actor.id,
       performedByName: actor.name,
     });
