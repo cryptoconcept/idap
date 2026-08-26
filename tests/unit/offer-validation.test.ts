@@ -32,6 +32,44 @@ describe("createOfferSchema", () => {
     expect(parsed.validUntil).toBeInstanceOf(Date);
   });
 
+  it("normalises a date-only validUntil to the LAST instant of that day, not the first", () => {
+    // "Valid until 31 August" must include 31 August. A bare date-only
+    // string used to coerce to 2026-08-31T00:00:00.000Z, which is the
+    // FIRST instant of the day — the offer would already look expired for
+    // the whole of the 31st.
+    const parsed = createOfferSchema.parse({
+      title: "X",
+      kind: "FLAT",
+      value: 1,
+      validUntil: "2026-08-31",
+    });
+    expect(parsed.validUntil?.toISOString()).toBe("2026-08-31T23:59:59.999Z");
+  });
+
+  it("still parses a date-only validFrom to the START of that day — unchanged", () => {
+    // An offer becomes valid at the start of its first day, so validFrom
+    // gets no end-of-day adjustment — only validUntil does.
+    const parsed = createOfferSchema.parse({
+      title: "X",
+      kind: "FLAT",
+      value: 1,
+      validFrom: "2026-08-31",
+    });
+    expect(parsed.validFrom?.toISOString()).toBe("2026-08-31T00:00:00.000Z");
+  });
+
+  it("respects a validUntil that already carries a time component", () => {
+    // Only the ambiguous date-only shorthand gets an opinion applied to it;
+    // a full ISO timestamp is trusted as given.
+    const parsed = createOfferSchema.parse({
+      title: "X",
+      kind: "FLAT",
+      value: 1,
+      validUntil: "2026-08-31T10:00:00.000Z",
+    });
+    expect(parsed.validUntil?.toISOString()).toBe("2026-08-31T10:00:00.000Z");
+  });
+
   it("strips status so a create cannot set it", () => {
     const parsed = createOfferSchema.parse({
       title: "X",
@@ -80,6 +118,28 @@ describe("assertOfferInvariants", () => {
     const day = new Date("2026-06-01");
     expect(() =>
       assertOfferInvariants({ kind: "FLAT", value: 1, validFrom: day, validUntil: day }),
+    ).not.toThrow();
+  });
+
+  it("accepts a one-day offer parsed from the same date-only string on both bounds", () => {
+    // The case most likely to break from the validUntil end-of-day change:
+    // validFrom now lands at 00:00:00.000Z and validUntil at 23:59:59.999Z
+    // of the SAME calendar day, so validUntil must still be >= validFrom
+    // rather than tripping the date-order rule.
+    const parsed = createOfferSchema.parse({
+      title: "One-Day Offer",
+      kind: "FLAT",
+      value: 1,
+      validFrom: "2026-08-31",
+      validUntil: "2026-08-31",
+    });
+    expect(() =>
+      assertOfferInvariants({
+        kind: "FLAT",
+        value: 1,
+        validFrom: parsed.validFrom,
+        validUntil: parsed.validUntil,
+      }),
     ).not.toThrow();
   });
 

@@ -18,6 +18,33 @@ const clearableDate = z.preprocess(
   z.coerce.date().nullable().optional(),
 );
 
+/** Matches a bare `YYYY-MM-DD`, never a full ISO timestamp. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * `validUntil` only. A bare `YYYY-MM-DD` — what a `type="date"` control
+ * submits — is ambiguous about which instant of that day it names, and
+ * `z.coerce.date()` resolves the ambiguity to the FIRST instant
+ * (`00:00:00.000Z`). For an end date that reads backwards: "valid until 31
+ * August" means 31 August is included, so the field must resolve to the
+ * LAST instant of that day instead. Rewriting the string to carry an
+ * explicit end-of-day time before coercion gets there without touching
+ * `listPublic`'s `$gte: new Date()` filter, which is what actually decides
+ * visibility.
+ *
+ * A value that already carries a time component (a full ISO timestamp, or a
+ * `Date` instance passed directly by a service) is left exactly as given —
+ * only the date-only shorthand is ambiguous enough to need an opinion.
+ * `validFrom` keeps using the plain `clearableDate` above: a start date at
+ * midnight is already the earliest moment it should apply, so it needs no
+ * such adjustment.
+ */
+const clearableEndOfDayDate = z.preprocess((value) => {
+  if (value === "") return null;
+  if (typeof value === "string" && DATE_ONLY.test(value)) return `${value}T23:59:59.999Z`;
+  return value;
+}, z.coerce.date().nullable().optional());
+
 export const createOfferSchema = z.object({
   title: requiredText("Offer title", 120),
   description: z.string().trim().max(600).optional(),
@@ -36,7 +63,7 @@ export const createOfferSchema = z.object({
    */
   academicUnitId: objectIdString.nullable().optional(),
   validFrom: clearableDate,
-  validUntil: clearableDate,
+  validUntil: clearableEndOfDayDate,
 });
 export type CreateOfferInput = z.infer<typeof createOfferSchema>;
 

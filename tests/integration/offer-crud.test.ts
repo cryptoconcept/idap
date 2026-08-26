@@ -4,6 +4,7 @@ import { makeInstitution, makeProfiledInstitution } from "../helpers/factories";
 import { AcademicUnit, Offer } from "@/models";
 import { AcademicStructureService, type AcademicUnitDTO } from "@/services/academic-structure.service";
 import { OfferService } from "@/services/offer.service";
+import { createOfferSchema } from "@/lib/validation/offer";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -304,6 +305,28 @@ describe("OfferService", () => {
 
     expect(list).toHaveLength(1);
     expect(list?.[0]?.title).toBe("Future");
+  });
+
+  it("listPublic includes an offer whose validUntil is today — the exact scenario that used to fail", async () => {
+    // Parsed through the real schema, exactly as the route does: a date-only
+    // "today" string used to coerce to today's midnight UTC, so the offer
+    // would already read as expired for the whole of today. It must remain
+    // visible all day.
+    await makeProfiledInstitution("INS0003", { profileStatus: "PUBLISHED" });
+    const today = new Date().toISOString().slice(0, 10);
+    const input = createOfferSchema.parse({
+      title: "Ends Today",
+      kind: "PERCENTAGE",
+      value: 10,
+      validUntil: today,
+    });
+    const created = await OfferService.create("INS0003", input, actor);
+    await OfferService.setStatus("INS0003", created.id, "publish", actor);
+
+    const list = await OfferService.listPublic({ institutionId: "INS0003" });
+
+    expect(list).toHaveLength(1);
+    expect(list?.[0]?.title).toBe("Ends Today");
   });
 
   it("listPublic drops an expired offer while the dashboard list keeps it", async () => {
