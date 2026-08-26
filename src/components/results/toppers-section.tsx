@@ -52,7 +52,7 @@ export function ToppersSection({
   onSave,
   onDirtyChange,
   onResult,
-}: ResultSectionProps & { onResult: (result: ResultDTO) => void }) {
+}: ResultSectionProps) {
   const {
     register,
     control,

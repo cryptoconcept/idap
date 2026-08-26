@@ -60,7 +60,7 @@ const toFormRow = (selection: Selection) => ({
  * on save by its `examCode`, so already-chosen exams are excluded from the
  * picker rather than accepted and rejected afterward by the uniqueness rule.
  */
-export function SelectionsSection({ result, onSave, onDirtyChange }: ResultSectionProps) {
+export function SelectionsSection({ result, onSave, onDirtyChange, onResult }: ResultSectionProps) {
   const {
     register,
     control,
@@ -313,7 +313,7 @@ export function SelectionsSection({ result, onSave, onDirtyChange }: ResultSecti
                               <TopperPhoto
                                 resultId={result.id}
                                 topper={savedTopper}
-                                onResult={() => {}}
+                                onResult={onResult}
                                 position={topperIndex + 1}
                               />
                             ) : (

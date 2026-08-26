@@ -30,6 +30,9 @@ import { ResultStatusBadge } from "@/components/results/result-status-badge";
 import { CycleSection } from "@/components/results/cycle-section";
 import { OutcomeSection } from "@/components/results/outcome-section";
 import { ToppersSection } from "@/components/results/toppers-section";
+import { CombinationsSection } from "@/components/results/combinations-section";
+import { PlacementSection } from "@/components/results/placement-section";
+import { SelectionsSection } from "@/components/results/selections-section";
 
 /**
  * One save per section, carrying only that section's fields. Resolves with the
@@ -43,11 +46,15 @@ export type ResultSectionProps = {
   result: ResultDTO;
   onSave: SaveSection;
   onDirtyChange: (dirty: boolean) => void;
+  onResult: (result: ResultDTO) => void;
 };
 
 const SECTIONS = [
   { key: "cycle", label: "Exam cycle" },
   { key: "outcome", label: "Outcome" },
+  { key: "combinations", label: "Combinations" },
+  { key: "placement", label: "Placement" },
+  { key: "entrance-exams", label: "Entrance exams" },
   { key: "toppers", label: "Toppers" },
 ] as const;
 
@@ -63,10 +70,9 @@ export function ResultEditor({
 }: {
   initialResult: ResultDTO;
   institutionId: string;
-  // Threaded through to `sectionProps` here so it reaches a section as soon
-  // as one is wired into `SECTIONS` — the combinations editor is not yet
-  // (that's Task 9), so this has no reader today beyond satisfying the type
-  // the page passes.
+  // Threaded through to `sectionProps` and on to `CombinationsSection`, the
+  // only section that reads the academic tree (its "fill from academic unit"
+  // picker).
   units: AcademicUnitDTO[];
 }) {
   const [result, setResult] = useState<ResultDTO>(initialResult);
@@ -127,7 +133,7 @@ export function ResultEditor({
     setDirty(false);
   }
 
-  const sectionProps = { result, onSave: saveSection, onDirtyChange, units };
+  const sectionProps = { result, onSave: saveSection, onDirtyChange, units, onResult: applyResult };
 
   return (
     <div className="space-y-5">
@@ -202,9 +208,12 @@ export function ResultEditor({
         <div className="min-w-0">
           {active === "cycle" ? <CycleSection {...sectionProps} /> : null}
           {active === "outcome" ? <OutcomeSection {...sectionProps} /> : null}
-          {active === "toppers" ? (
-            <ToppersSection {...sectionProps} onResult={applyResult} />
+          {active === "combinations" ? (
+            <CombinationsSection {...sectionProps} units={units} />
           ) : null}
+          {active === "placement" ? <PlacementSection {...sectionProps} /> : null}
+          {active === "entrance-exams" ? <SelectionsSection {...sectionProps} /> : null}
+          {active === "toppers" ? <ToppersSection {...sectionProps} /> : null}
         </div>
       </div>
 

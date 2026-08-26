@@ -68,6 +68,7 @@ export function CombinationsSection({
   result,
   onSave,
   onDirtyChange,
+  onResult,
   units,
 }: ResultSectionProps & { units: AcademicUnitDTO[] }) {
   const {
@@ -437,7 +438,7 @@ export function CombinationsSection({
                               <TopperPhoto
                                 resultId={result.id}
                                 topper={savedTopper}
-                                onResult={() => {}}
+                                onResult={onResult}
                                 position={topperIndex + 1}
                               />
                             ) : (
