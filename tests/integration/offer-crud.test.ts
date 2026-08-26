@@ -227,6 +227,38 @@ describe("OfferService", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
+  it("refuses to patch a PUBLISHED offer's value down to 0", async () => {
+    // value: 0 is a valid payload under the create/update schema
+    // (z.number().min(0)), so only the PUBLISHED branch of `update`'s publish
+    // gate — assertOfferPublishable, not assertOfferInvariants — stops a
+    // live discount from being patched down to nothing while staying public.
+    const created = await OfferService.create(
+      "INS0001",
+      { title: "Half Off", kind: "PERCENTAGE", value: 50 },
+      actor,
+    );
+    await OfferService.setStatus("INS0001", created.id, "publish", actor);
+
+    await expect(
+      OfferService.update("INS0001", created.id, { value: 0 }, actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("allows patching a DRAFT offer's value down to 0 — a draft may be incomplete", async () => {
+    // Proves the value: 0 gate is status-dependent, not a blanket rule on
+    // `update`: a DRAFT offer is not required to be publishable yet.
+    const created = await OfferService.create(
+      "INS0001",
+      { title: "Half Off", kind: "PERCENTAGE", value: 50 },
+      actor,
+    );
+
+    const patched = await OfferService.update("INS0001", created.id, { value: 0 }, actor);
+
+    expect(patched.value).toBe(0);
+    expect(patched.status).toBe("DRAFT");
+  });
+
   it("refuses to create beyond the per-institution cap", async () => {
     for (let i = 0; i < 40; i += 1) {
       await OfferService.create(
