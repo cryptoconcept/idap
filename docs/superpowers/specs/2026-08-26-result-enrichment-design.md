@@ -457,3 +457,42 @@ The connector phase will need, and this phase deliberately does not provide:
    indistinguishable from a sync bug when an admin cannot find their results.
 4. **Grade-bucket conversion** for any platform whose buckets differ from the
    fixed set adopted in Decision 4.
+
+---
+
+## 13. As built
+
+Implemented via Subagent-Driven Development, 9 tasks, merged to `main` at
+`b87a3f7` (fast-forwarded from `feat/result-enrichment`, forked at `02418e1`).
+754 tests passing, 77 files, `tsc`/lint clean.
+
+**Fixed before merge, found by the whole-branch review:**
+- Nested topper photos (in `combinations[]`/`selections[]`) were orphaned on
+  removal in both `update()` and `remove()` — the latter undisclosed by any
+  task review until the final review found it independently. A shared
+  `collectToppers()` helper in `result.service.ts` now enumerates every
+  topper across all three arrays for both cleanup sites.
+- Nested topper `consentAcknowledged` was captured and displayed but never
+  enforced — `assertPublishable`/`blockingPublishReasons` only checked
+  top-level toppers. Both now check all three arrays; `setStatus`'s call site
+  was extended to pass `combinations`/`selections` through.
+- `placement`'s average-vs-highest-package check used a truthiness guard
+  (`highest > 0`) instead of this file's own `!= null` convention, letting
+  `highestPackage: 0` coexist with a positive average. Fixed to match every
+  sibling invariant.
+- `recruiters[].roles` had no length cap, the only array in this phase without
+  one. Added `RESULT_MAX_RECRUITER_ROLES`.
+
+**Deliberate non-fixes, carried forward rather than fixed under time pressure
+in the one available fix wave** — recorded so neither is rediscovered as a
+fresh finding:
+- A PATCH that omits `combinations[].toppers`/`selections[].toppers` silently
+  deletes them, unlike top-level `toppers`' preserve-on-omission semantics.
+  Not reachable today — the UI always sends `toppers` — but a trap for a
+  future maintainer who patches these arrays directly.
+- `combinations[].academicUnitId` is accepted with no check that the unit
+  belongs to the calling institution. No read amplification today since
+  nothing resolves it server-side and the UI only offers same-tenant units;
+  becomes real the moment the connector phase (§12) resolves it to a label.
+  Fix by mirroring `fee-structure.service.ts`'s existing
+  `AcademicUnit.findOne({ _id, institutionId })` → `notFound` pattern.
