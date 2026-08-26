@@ -15,3 +15,6 @@ export { FeeStructure, type FeeStructureDoc } from "./FeeStructure";
 export { AcademicUnit, type AcademicUnitDoc } from "./AcademicUnit";
 export { Scholarship, type ScholarshipDoc } from "./Scholarship";
 export { Offer, type OfferDoc } from "./Offer";
+export { PlatformCredential, type PlatformCredentialDoc } from "./PlatformCredential";
+export { PlatformConnection, type PlatformConnectionDoc } from "./PlatformConnection";
+export { SyncRun, type SyncRunDoc } from "./SyncRun";
