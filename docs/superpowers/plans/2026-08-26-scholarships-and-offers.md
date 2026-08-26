@@ -60,7 +60,7 @@
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces: `SCHOLARSHIP_STATUSES`, `ScholarshipStatus`, `SCHOLARSHIP_STATUS_LABELS`, `OFFER_STATUSES`, `OfferStatus`, `OFFER_STATUS_LABELS`, `OFFER_KINDS`, `OfferKind`, `OFFER_KIND_LABELS`, `SCHOLARSHIP_MAX_PER_INSTITUTION`, `OFFER_MAX_PER_INSTITUTION`; and `assertOwnedAcademicUnit(institutionId: string, academicUnitId: string | undefined): Promise<{ _id: Types.ObjectId; pathLabel: string } | null>`.
+- Produces: `SCHOLARSHIP_STATUSES`, `ScholarshipStatus`, `SCHOLARSHIP_STATUS_LABELS`, `OFFER_STATUSES`, `OfferStatus`, `OFFER_STATUS_LABELS`, `OFFER_KINDS`, `OfferKind`, `OFFER_KIND_LABELS`, `SCHOLARSHIP_MAX_PER_INSTITUTION`, `OFFER_MAX_PER_INSTITUTION`; and `assertOwnedAcademicUnit(institutionId: string, academicUnitId: string | undefined | null): Promise<{ _id: Types.ObjectId; pathLabel: string } | null>`. The third parameter type includes `null` deliberately: Tasks 4 and 8 pass `patch.academicUnitId` straight through, and a caller that explicitly nulls the field must reach the same "no unit supplied" branch as an absent one.
 
 - [ ] **Step 1: Add the constants**
 
