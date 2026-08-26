@@ -1,9 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { AcademicUnit, FeeStructure } from "@/models";
+import { AcademicUnit, FeeStructure, Offer, Scholarship } from "@/models";
 import { AcademicStructureService } from "@/services/academic-structure.service";
 import { FeeStructureService } from "@/services/fee-structure.service";
+import { ScholarshipService } from "@/services/scholarship.service";
+import { OfferService } from "@/services/offer.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -11,6 +13,8 @@ beforeAll(async () => {
   await startTestDatabase("academic-structure-crud");
   await AcademicUnit.syncIndexes();
   await FeeStructure.syncIndexes();
+  await Scholarship.syncIndexes();
+  await Offer.syncIndexes();
 });
 afterAll(stopTestDatabase);
 beforeEach(async () => {
@@ -350,5 +354,85 @@ describe("AcademicStructureService delete guard", () => {
     await expect(AcademicStructureService.remove("INS0001", mine.id, actor)).resolves.toEqual({
       deleted: 1,
     });
+  });
+
+  it("refuses to delete a unit that carries a scholarship", async () => {
+    const grade = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    await ScholarshipService.create(
+      "INS0001",
+      { name: "Merit Scholarship", academicUnitId: grade.id },
+      actor,
+    );
+
+    await expect(AcademicStructureService.remove("INS0001", grade.id, actor)).rejects.toMatchObject(
+      { code: "VALIDATION_ERROR" },
+    );
+    expect(await AcademicStructureService.list("INS0001")).toHaveLength(1);
+  });
+
+  it("refuses to delete a unit that carries an offer", async () => {
+    const grade = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    await OfferService.create(
+      "INS0001",
+      { title: "Early Bird Discount", kind: "FLAT", value: 5000, academicUnitId: grade.id },
+      actor,
+    );
+
+    await expect(AcademicStructureService.remove("INS0001", grade.id, actor)).rejects.toMatchObject(
+      { code: "VALIDATION_ERROR" },
+    );
+    expect(await AcademicStructureService.list("INS0001")).toHaveLength(1);
+  });
+
+  it("refuses to delete an ANCESTOR of a unit that carries a scholarship", async () => {
+    // Same subtree walk as the fee-structure case above, proved independently
+    // for Scholarship: a scholarship two levels below the target must still
+    // block the delete of the ancestor.
+    await AcademicStructureService.setSegments("INS0004", ["ENGINEERING"], actor);
+    const programme = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", name: "B.E." },
+      actor,
+    );
+    const branch = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", parentId: programme.id, name: "Computer Science" },
+      actor,
+    );
+    const year = await AcademicStructureService.create(
+      "INS0004",
+      { segment: "ENGINEERING", parentId: branch.id, name: "Year 1" },
+      actor,
+    );
+    await ScholarshipService.create(
+      "INS0004",
+      { name: "Merit Scholarship", academicUnitId: year.id },
+      actor,
+    );
+
+    await expect(
+      AcademicStructureService.remove("INS0004", programme.id, actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
+  it("deletes a unit with nothing under it — the guard is not universally blocking", async () => {
+    const grade = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 11" },
+      actor,
+    );
+
+    await expect(AcademicStructureService.remove("INS0001", grade.id, actor)).resolves.toEqual({
+      deleted: 1,
+    });
+    expect(await AcademicStructureService.list("INS0001")).toHaveLength(0);
   });
 });

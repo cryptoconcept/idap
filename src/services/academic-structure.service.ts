@@ -2,7 +2,7 @@ import "server-only";
 import { Types } from "mongoose";
 import type { z } from "zod";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { AcademicUnit, FeeStructure, Institution, type AcademicUnitDoc } from "@/models";
+import { AcademicUnit, FeeStructure, Institution, Offer, Scholarship, type AcademicUnitDoc } from "@/models";
 import { notFound, validationError } from "@/lib/api/errors";
 import { ACADEMIC_UNIT_MAX_PER_INSTITUTION, type AcademicSegment } from "@/lib/constants";
 import {
@@ -346,16 +346,23 @@ export const AcademicStructureService = {
 
     const ids = await subtreeIds(institutionId, before);
 
-    // Counted across the whole subtree, not just this unit: deleting a programme
-    // must be refused when a fee hangs off a branch anywhere below it.
-    const referenced = await FeeStructure.countDocuments({
-      institutionId,
-      academicUnitId: { $in: ids },
-    });
-    if (referenced > 0) {
-      throw validationError(
-        `Delete the ${referenced} fee structure(s) under this unit before deleting it`,
-      );
+    // Counted across the whole subtree, not just this unit: deleting a
+    // programme must be refused when anything hangs off a branch below it.
+    // All three referencing models are counted — a dangling academicUnitId
+    // silently re-reads as "applies institution-wide", which on the public
+    // API misstates what an institution has committed to.
+    const [fees, scholarships, offers] = await Promise.all([
+      FeeStructure.countDocuments({ institutionId, academicUnitId: { $in: ids } }),
+      Scholarship.countDocuments({ institutionId, academicUnitId: { $in: ids } }),
+      Offer.countDocuments({ institutionId, academicUnitId: { $in: ids } }),
+    ]);
+    if (fees > 0 || scholarships > 0 || offers > 0) {
+      const blockers = [
+        fees > 0 ? `${fees} fee structure(s)` : null,
+        scholarships > 0 ? `${scholarships} scholarship(s)` : null,
+        offers > 0 ? `${offers} offer(s)` : null,
+      ].filter((part): part is string => part !== null);
+      throw validationError(`Delete the ${blockers.join(", ")} under this unit before deleting it`);
     }
 
     const result = await AcademicUnit.deleteMany({ _id: { $in: ids }, institutionId });
