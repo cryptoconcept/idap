@@ -244,6 +244,8 @@ Why: topper photos are public media whose stored key is a relative path on the l
 
 - [ ] **Step 2: Confirm failure.** **Step 3: Implement.** Interface addition in `types.ts` with a doc comment mirroring `putPublic`'s ("public media ONLY"). Local: resolve under the same `PUBLIC_UPLOAD_DIR ?? .uploads-public` root the media route uses, with the same path-escape guard (`resolve` + `startsWith(root + sep)` — copy the guard from `src/app/api/media/[...key]/route.ts`), reading the `.content-type` sidecar as that route does. Blob: keys are absolute URLs — `fetch`, return `null` unless `response.ok`.
 
+**Testing the escape guard — the trap:** a traversal fixture must resolve to a path that ACTUALLY EXISTS, or the test passes via ENOENT whether or not the guard ran. From this repo's root, `../../etc/passwd` resolves to `/Users/automicai/etc/passwd` (nonexistent) and is therefore confounded; `../../../../etc/hosts` resolves to the real `/etc/hosts`. Verify by mutation: disable the guard and confirm the traversal test FAILS — found by Task 3's implementer, whose first-pass fixture came from this plan and was confounded.
+
 - [ ] **Step 4: Green. Step 5: `npx tsc --noEmit` (this proves both adapters still satisfy the widened interface), commit** `feat: add getPublic to the storage adapters`.
 
 ---
