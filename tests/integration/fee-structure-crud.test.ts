@@ -205,6 +205,27 @@ describe("FeeStructureService CRUD", () => {
     expect(list[0]?.academicYear).toBe("2026-27");
   });
 
+  it("reports distinct years and taken (unit, year) pairs, scoped to the calling institution", async () => {
+    await FeeStructureService.create("INS0001", input({ academicYear: "2025-26" }), actor);
+    await FeeStructureService.create(
+      "INS0001",
+      input({ academicUnitId: unitB.id, academicYear: "2026-27" }),
+      actor,
+    );
+    await FeeStructureService.create("INS0002", input({ academicUnitId: foreignUnit.id }), actor);
+
+    const planning = await FeeStructureService.getYearPlanning("INS0001");
+
+    expect(planning.years).toEqual(["2026-27", "2025-26"]);
+    expect(planning.taken).toHaveLength(2);
+    expect(planning.taken).toEqual(
+      expect.arrayContaining([
+        { academicUnitId: unitA.id, academicYear: "2025-26" },
+        { academicUnitId: unitB.id, academicYear: "2026-27" },
+      ]),
+    );
+  });
+
   it("deletes a fee structure", async () => {
     const created = await FeeStructureService.create("INS0001", input(), actor);
     await FeeStructureService.remove("INS0001", created.id, actor);

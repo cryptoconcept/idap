@@ -30,6 +30,13 @@ export type FeeStructureDTO = {
 
 export type FeeHeadDTO = { label: string; amount?: number; frequency?: string };
 
+export type FeeYearPlanningDTO = {
+  /** Every distinct academic year already used on this institution's fee structures, newest first. */
+  years: string[];
+  /** Every (academicUnitId, academicYear) pair already priced, so a create form can rule out a doomed combination before submit. */
+  taken: { academicUnitId: string; academicYear: string }[];
+};
+
 /** A malformed id must read as "no such fee structure", not as a 500. */
 function toObjectId(feeStructureId: string): Types.ObjectId {
   if (!Types.ObjectId.isValid(feeStructureId)) throw notFound("Fee structure not found");
@@ -161,6 +168,28 @@ export const FeeStructureService = {
     // Sorted in memory: the database cannot sort by a label that lives on another
     // collection, and a $lookup is disproportionate for tens of rows.
     return (await withLabels(institutionId, rows)).sort(byYearThenLabel).map(serialize);
+  },
+
+  /**
+   * Lean, label-free read for the create form's year-first flow: every year
+   * already in use (to populate the year picker) and every unit already
+   * priced per year (to filter the class picker once a year is chosen).
+   * Deliberately skips `withLabels` — the create page already has every
+   * unit's `pathLabel` from `AcademicStructureService.list`.
+   */
+  async getYearPlanning(institutionId: string): Promise<FeeYearPlanningDTO> {
+    await connectToDatabase();
+    const rows = await FeeStructure.find({ institutionId })
+      .select("academicUnitId academicYear")
+      .lean<{ academicUnitId: Types.ObjectId; academicYear: string }[]>();
+
+    const years = Array.from(new Set(rows.map((row) => row.academicYear))).sort().reverse();
+    const taken = rows.map((row) => ({
+      academicUnitId: String(row.academicUnitId),
+      academicYear: row.academicYear,
+    }));
+
+    return { years, taken };
   },
 
   /**

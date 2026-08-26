@@ -7,6 +7,7 @@ import { getCurrentInstitution } from "@/lib/tenant";
 import { AcademicStructureService } from "@/services/academic-structure.service";
 import { FeeStructureService } from "@/services/fee-structure.service";
 import { flattenTree, inactiveIds } from "@/lib/academic/tree";
+import { suggestNextAcademicYear } from "@/lib/fee-structure/academic-year";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/page-header";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -31,6 +32,9 @@ export default async function NewFeeStructurePage() {
   const hidden = inactiveIds(allUnits);
   const units = flattenTree(allUnits).filter((unit) => !hidden.has(unit.id));
   const feeHeads = await FeeStructureService.getFeeHeads(institution.institutionId);
+  const { years, taken } = await FeeStructureService.getYearPlanning(institution.institutionId);
+  const suggestedYear = suggestNextAcademicYear(years);
+  const academicYears = years.includes(suggestedYear) ? years : [suggestedYear, ...years];
 
   return (
     <>
@@ -43,7 +47,7 @@ export default async function NewFeeStructurePage() {
 
       <PageHeader
         title="Add a fee structure"
-        description="Pick the class or course and its academic year, then add line items."
+        description="Pick the academic year, then the class or course, then add line items."
       />
 
       {units.length === 0 ? (
@@ -54,7 +58,13 @@ export default async function NewFeeStructurePage() {
           actionHref="/academic-structure"
         />
       ) : (
-        <FeeStructureForm initialFeeStructure={null} units={units} feeHeads={feeHeads} />
+        <FeeStructureForm
+          initialFeeStructure={null}
+          units={units}
+          feeHeads={feeHeads}
+          academicYears={academicYears}
+          takenUnitYearPairs={taken}
+        />
       )}
     </>
   );
