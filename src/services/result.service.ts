@@ -223,6 +223,32 @@ async function deleteOwnedPhoto(url: string | null | undefined, institutionId: s
   await storage.deletePublic(url as string).catch(() => undefined);
 }
 
+/**
+ * A topper's `_id` is unique across the whole document regardless of which
+ * array holds it — top-level, one combination's, or one selection's. Locates
+ * it in all three so the photo endpoint stays unaware of where a topper
+ * actually lives; only this function and the write below it need to know.
+ */
+function locateTopper(
+  before: ResultDoc,
+  topperId: string,
+): { path: "toppers" | `combinations.${number}.toppers` | `selections.${number}.toppers`; topper: ExistingTopperDoc } | null {
+  const direct = before.toppers?.find((row) => String(row._id) === topperId);
+  if (direct) return { path: "toppers", topper: direct };
+
+  for (let i = 0; i < (before.combinations?.length ?? 0); i += 1) {
+    const found = before.combinations?.[i]?.toppers?.find((row) => String(row._id) === topperId);
+    if (found) return { path: `combinations.${i}.toppers`, topper: found };
+  }
+
+  for (let i = 0; i < (before.selections?.length ?? 0); i += 1) {
+    const found = before.selections?.[i]?.toppers?.find((row) => String(row._id) === topperId);
+    if (found) return { path: `selections.${i}.toppers`, topper: found };
+  }
+
+  return null;
+}
+
 /** `"archive" + "ed"` reads as "archiveed" — spelled out instead of concatenated. */
 const ACTION_LABELS: Record<"publish" | "unpublish" | "archive", string> = {
   publish: "published",
@@ -473,8 +499,9 @@ export const ResultService = {
     await connectToDatabase();
     const before = await findOwned(institutionId, resultId);
 
-    const topper = before.toppers?.find((row) => String(row._id) === topperId);
-    if (!topper) throw notFound("Topper not found");
+    const located = locateTopper(before, topperId);
+    if (!located) throw notFound("Topper not found");
+    const { path, topper } = located;
 
     const { extension } = validateImage(input);
 
@@ -488,10 +515,13 @@ export const ResultService = {
       contentType: input.contentType,
     });
 
+    // arrayFilters addresses the exact matched element regardless of which of
+    // the three arrays it came from — `path` already resolved WHICH array;
+    // this resolves WHICH ELEMENT of it, by that topper's own `_id`.
     const updated = await Result.findOneAndUpdate(
-      { _id: before._id, institutionId, "toppers._id": topper._id },
-      { $set: { "toppers.$.photoUrl": stored.key } },
-      { new: true },
+      { _id: before._id, institutionId },
+      { $set: { [`${path}.$[topper].photoUrl`]: stored.key } },
+      { new: true, arrayFilters: [{ "topper._id": topper._id }] },
     ).lean<ResultDoc>();
     if (!updated) {
       await storage.deletePublic(stored.key).catch(() => undefined);
@@ -522,13 +552,14 @@ export const ResultService = {
     await connectToDatabase();
     const before = await findOwned(institutionId, resultId);
 
-    const topper = before.toppers?.find((row) => String(row._id) === topperId);
-    if (!topper) throw notFound("Topper not found");
+    const located = locateTopper(before, topperId);
+    if (!located) throw notFound("Topper not found");
+    const { path, topper } = located;
 
     const updated = await Result.findOneAndUpdate(
-      { _id: before._id, institutionId, "toppers._id": topper._id },
-      { $unset: { "toppers.$.photoUrl": "" } },
-      { new: true },
+      { _id: before._id, institutionId },
+      { $unset: { [`${path}.$[topper].photoUrl`]: "" } },
+      { new: true, arrayFilters: [{ "topper._id": topper._id }] },
     ).lean<ResultDoc>();
     if (!updated) throw notFound("Result not found");
 

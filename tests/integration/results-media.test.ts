@@ -19,6 +19,9 @@ const PUBLIC_ROOT = resolve(process.env.PUBLIC_UPLOAD_DIR ?? join(process.cwd(),
 const storedPath = (url: string) => resolve(PUBLIC_ROOT, url.replace(/^\/api\/media\//, ""));
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
+// A syntactically valid ObjectId that is never assigned to any actual topper
+// in these tests — used to exercise the NOT_FOUND path deliberately.
+const UNKNOWN_TOPPER_ID = "6a887abd755db527bea51205";
 const cycle = {
   board: "CBSE" as const,
   level: "CLASS_10" as const,
@@ -199,6 +202,100 @@ describe("topper photos", () => {
         "INS0001",
         created.id,
         "6a887abd755db527bea51204",
+        { contentType: "image/png", bytes: PNG },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("nested toppers", () => {
+  it("sets a photo on a combination's own topper", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        combinations: [{ label: "PCMB", toppers: [{ name: "Priya S", percentage: 98.6 }] }],
+      },
+      actor,
+    );
+    const topperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+
+    const updated = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    expect(updated.combinations?.[0]?.toppers?.[0]?.photoUrl).toBeDefined();
+    expect(existsSync(storedPath(updated.combinations?.[0]?.toppers?.[0]?.photoUrl as string))).toBe(
+      true,
+    );
+  });
+
+  it("sets a photo on a selection's own topper", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        selections: [{ examCode: "KCET", toppers: [{ name: "Rahul K", percentage: 97.8 }] }],
+      },
+      actor,
+    );
+    const topperId = created.selections?.[0]?.toppers?.[0]?.id as string;
+
+    const updated = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    expect(updated.selections?.[0]?.toppers?.[0]?.photoUrl).toBeDefined();
+  });
+
+  it("removes a photo from a combination's own topper", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        combinations: [{ label: "PCMB", toppers: [{ name: "Priya S", percentage: 98.6 }] }],
+      },
+      actor,
+    );
+    const topperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+    await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    const updated = await ResultService.removeTopperPhoto("INS0001", created.id, topperId, actor);
+
+    expect(updated.combinations?.[0]?.toppers?.[0]?.photoUrl).toBeUndefined();
+  });
+
+  it("a foreign topperId still reads as NOT_FOUND when the result has combinations and selections", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        combinations: [{ label: "PCMB", toppers: [{ name: "Priya S", percentage: 98.6 }] }],
+        selections: [{ examCode: "KCET", toppers: [{ name: "Rahul K", percentage: 97.8 }] }],
+      },
+      actor,
+    );
+
+    await expect(
+      ResultService.setTopperPhoto(
+        "INS0001",
+        created.id,
+        UNKNOWN_TOPPER_ID,
         { contentType: "image/png", bytes: PNG },
         actor,
       ),
