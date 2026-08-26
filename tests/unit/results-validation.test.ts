@@ -109,6 +109,54 @@ describe("publish gate", () => {
   it("still applies the ordinary invariants at publish time", () => {
     expect(() => assertPublishable({ ...base, appeared: 10, passed: 11 })).toThrow(/cannot exceed/i);
   });
+
+  it("refuses to publish while a topper nested inside a combination lacks acknowledged consent", () => {
+    expect(() =>
+      assertPublishable({
+        ...base,
+        combinations: [
+          {
+            label: "PCMB",
+            toppers: [{ name: "Rahul K", percentage: 97.8, consentAcknowledged: false }],
+          },
+        ],
+      }),
+    ).toThrow(/Rahul K/);
+  });
+
+  it("refuses to publish while a topper nested inside a selection lacks acknowledged consent", () => {
+    expect(() =>
+      assertPublishable({
+        ...base,
+        selections: [
+          {
+            examCode: "KCET",
+            toppers: [{ name: "Meera N", percentage: 97.1, consentAcknowledged: false }],
+          },
+        ],
+      }),
+    ).toThrow(/Meera N/);
+  });
+
+  it("publishes when nested combination and selection toppers have all acknowledged consent", () => {
+    expect(() =>
+      assertPublishable({
+        ...base,
+        combinations: [
+          {
+            label: "PCMB",
+            toppers: [{ name: "Rahul K", percentage: 97.8, consentAcknowledged: true }],
+          },
+        ],
+        selections: [
+          {
+            examCode: "KCET",
+            toppers: [{ name: "Meera N", percentage: 97.1, consentAcknowledged: true }],
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe("result schemas", () => {
@@ -154,6 +202,16 @@ describe("result schemas", () => {
   it("caps the number of toppers", () => {
     const toppers = Array.from({ length: 26 }, (_, i) => ({ name: `S${i}`, percentage: 90 }));
     expect(() => createResultSchema.parse({ ...base, toppers })).toThrow();
+  });
+
+  it("caps the number of roles on a recruiter", () => {
+    const roles = Array.from({ length: 11 }, (_, i) => `Role ${i}`);
+    expect(() =>
+      createResultSchema.parse({
+        ...base,
+        placement: { recruiters: [{ name: "Acme", roles }] },
+      }),
+    ).toThrow();
   });
 });
 
@@ -344,6 +402,27 @@ describe("placement invariants", () => {
         placement: { highestPackage: 10, averagePackage: 15 },
       }),
     ).toThrow(/the average package cannot exceed the highest/);
+  });
+
+  it("refuses a reported average package when the highest package is reported as zero", () => {
+    // `highestPackage: 0` is a reported value, not "not reported" — a positive
+    // average alongside it is nonsensical data, not a value the truthiness
+    // check should let through.
+    expect(() =>
+      assertResultInvariants({
+        ...base,
+        placement: { highestPackage: 0, averagePackage: 5 },
+      }),
+    ).toThrow(/the average package cannot exceed the highest/);
+  });
+
+  it("accepts an average package with no highest package reported", () => {
+    expect(() =>
+      assertResultInvariants({
+        ...base,
+        placement: { averagePackage: 5 },
+      }),
+    ).not.toThrow();
   });
 
   it("refuses two recruiters with the same name after trimming", () => {

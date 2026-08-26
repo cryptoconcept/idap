@@ -47,4 +47,36 @@ describe("blockingPublishReasons", () => {
     const reasons = blockingPublishReasons({ ...ready, appeared: 10, passed: 11 });
     expect(reasons.join(" ")).toMatch(/cannot exceed|more than/i);
   });
+
+  it("names a topper nested inside a combination that still lacks consent", () => {
+    const reasons = blockingPublishReasons({
+      ...ready,
+      combinations: [
+        {
+          toppers: [
+            { id: "a", name: "Rahul K", percentage: 97.8, consentAcknowledged: false },
+          ],
+        },
+      ],
+    });
+
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(reasons.join(" ")).toContain("Rahul K");
+  });
+
+  it("names a topper nested inside a selection that still lacks consent", () => {
+    const reasons = blockingPublishReasons({
+      ...ready,
+      selections: [
+        {
+          toppers: [
+            { id: "b", name: "Meera N", percentage: 97.1, consentAcknowledged: false },
+          ],
+        },
+      ],
+    });
+
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(reasons.join(" ")).toContain("Meera N");
+  });
 });

@@ -7,6 +7,7 @@ import {
   RESULT_LEVELS,
   RESULT_MAX_BANDS,
   RESULT_MAX_COMBINATIONS,
+  RESULT_MAX_RECRUITER_ROLES,
   RESULT_MAX_RECRUITERS,
   RESULT_MAX_SELECTIONS,
   RESULT_MAX_TOPPERS,
@@ -87,7 +88,7 @@ export const recruiterSchema = z.object({
   selected: z.number().int().min(0).optional(),
   averagePackage: z.number().min(0).optional(),
   tieUp: z.boolean().optional(),
-  roles: z.array(requiredText("Role", 60)).optional(),
+  roles: z.array(requiredText("Role", 60)).max(RESULT_MAX_RECRUITER_ROLES).optional(),
 });
 
 export const placementSchema = z.object({
@@ -208,6 +209,7 @@ export type ResultInvariantInput = {
           "50-60"?: number | null;
           below50?: number | null;
         } | null;
+        toppers?: { name: string; percentage?: number; consentAcknowledged?: boolean | null }[] | null;
       }[]
     | null;
   placement?: {
@@ -217,7 +219,14 @@ export type ResultInvariantInput = {
     averagePackage?: number | null;
     recruiters?: { name: string; selected?: number | null }[] | null;
   } | null;
-  selections?: { examCode: ExamCode; appeared?: number | null; qualified?: number | null }[] | null;
+  selections?:
+    | {
+        examCode: ExamCode;
+        appeared?: number | null;
+        qualified?: number | null;
+        toppers?: { name: string; percentage?: number; consentAcknowledged?: boolean | null }[] | null;
+      }[]
+    | null;
 };
 
 /**
@@ -361,9 +370,9 @@ export function assertResultInvariants(input: ResultInvariantInput): void {
       );
     }
 
-    const highest = placement.highestPackage ?? 0;
-    const average = placement.averagePackage ?? 0;
-    if (average > highest && highest > 0) {
+    const highest = placement.highestPackage;
+    const average = placement.averagePackage;
+    if (highest != null && average != null && average > highest) {
       throw validationError("placement: the average package cannot exceed the highest");
     }
   }
@@ -443,7 +452,12 @@ export function assertPublishable(input: ResultInvariantInput): void {
     throw validationError("appeared: enter how many students appeared before publishing");
   }
 
-  const unconsented = (input.toppers ?? []).filter((topper) => topper.consentAcknowledged !== true);
+  const allToppers = [
+    ...(input.toppers ?? []),
+    ...(input.combinations ?? []).flatMap((c) => c.toppers ?? []),
+    ...(input.selections ?? []).flatMap((s) => s.toppers ?? []),
+  ];
+  const unconsented = allToppers.filter((topper) => topper.consentAcknowledged !== true);
   if (unconsented.length > 0) {
     const names = unconsented.map((topper) => topper.name).join(", ");
     throw validationError(

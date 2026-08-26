@@ -240,6 +240,8 @@ export const RESULT_MAX_BANDS = 8;
 export const RESULT_MAX_TOPPERS = 25;
 export const RESULT_MAX_COMBINATIONS = 12;
 export const RESULT_MAX_RECRUITERS = 30;
+/** A recruiter's hiring roles are realistically a handful of names, not dozens. */
+export const RESULT_MAX_RECRUITER_ROLES = 10;
 
 export const EXAM_CODES = ["NEET", "JEE_MAIN", "JEE_ADVANCED", "KCET", "COMEDK"] as const;
 export type ExamCode = (typeof EXAM_CODES)[number];

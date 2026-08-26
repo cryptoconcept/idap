@@ -223,6 +223,35 @@ async function deleteOwnedPhoto(url: string | null | undefined, institutionId: s
   await storage.deletePublic(url as string).catch(() => undefined);
 }
 
+type ToppersHolder = { toppers?: { _id?: unknown; photoUrl?: string | null }[] | null };
+
+/**
+ * Flattens every topper across the three arrays a topper can live in —
+ * top-level, nested in a combination, or nested in a selection — from either a
+ * `ResultDoc`-shaped "before" object or a "merged/after" object built from
+ * `MergedTopper[]`/`MergedCombination[]`/`MergedSelection[]`. Both shapes carry
+ * `_id?`/`photoUrl?` on each topper, so one structural parameter accepts
+ * either without a cast. Used by both `update`'s and `remove`'s photo cleanup
+ * so there is exactly one place that knows how to enumerate "every topper on
+ * this result", not two independently-written array walks (the shape of how
+ * this got missed the first time).
+ */
+function collectToppers(owner: {
+  toppers?: { _id?: unknown; photoUrl?: string | null }[] | null;
+  combinations?: ToppersHolder[] | null;
+  selections?: ToppersHolder[] | null;
+}): { id?: unknown; photoUrl?: string | null }[] {
+  const all: { id?: unknown; photoUrl?: string | null }[] = [];
+  for (const t of owner.toppers ?? []) all.push({ id: t._id, photoUrl: t.photoUrl });
+  for (const c of owner.combinations ?? []) {
+    for (const t of c.toppers ?? []) all.push({ id: t._id, photoUrl: t.photoUrl });
+  }
+  for (const s of owner.selections ?? []) {
+    for (const t of s.toppers ?? []) all.push({ id: t._id, photoUrl: t.photoUrl });
+  }
+  return all;
+}
+
 /**
  * A topper's `_id` is unique across the whole document regardless of which
  * array holds it — top-level, one combination's, or one selection's. Locates
@@ -415,16 +444,30 @@ export const ResultService = {
     ).lean<ResultDoc>();
     if (!updated) throw notFound("Result not found");
 
-    // A patched `toppers` list replaces the array wholesale — a row simply
-    // absent from it (not merged by id) is a topper the caller deleted, and
-    // its photo, if any, is now unreferenced. Only genuinely-gone toppers are
-    // cleaned up here; ones `mergeToppers` matched by id keep their photo.
-    if (toppers) {
-      const kept = new Set(toppers.filter((t) => t._id).map((t) => String(t._id)));
-      for (const stale of before.toppers ?? []) {
-        if (!kept.has(String(stale._id))) {
-          await deleteOwnedPhoto(stale.photoUrl, institutionId);
-        }
+    // A patched array replaces its list wholesale — a topper simply absent
+    // from the final toppers/combinations/selections (not merged by id) is
+    // one the caller deleted, nested or not, and its photo, if any, is now
+    // unreferenced. Runs unconditionally, not gated on which field the patch
+    // touched — a combinations-only or selections-only save must still clean
+    // up a nested topper it dropped. A topper any of mergeToppers /
+    // mergeCombinations / mergeSelections matched by id keeps its photo
+    // either way, so it always survives into `afterToppers` and is never
+    // treated as stale.
+    // Falls back to `before`, not `merged`, for whichever array this patch
+    // did not touch: when the local `toppers`/`combinations`/`selections`
+    // var is undefined, the corresponding key was never in `set` either, so
+    // `merged.x` and `before.x` hold the identical value — but `before.x` is
+    // typed purely from `ResultDoc`, avoiding a union with the raw,
+    // un-merged patch shape (which carries neither `_id` nor `photoUrl`).
+    const afterToppers = collectToppers({
+      toppers: toppers ?? before.toppers,
+      combinations: combinations ?? before.combinations,
+      selections: selections ?? before.selections,
+    });
+    const keptIds = new Set(afterToppers.filter((t) => t.id).map((t) => String(t.id)));
+    for (const stale of collectToppers(before)) {
+      if (!keptIds.has(String(stale.id))) {
+        await deleteOwnedPhoto(stale.photoUrl, institutionId);
       }
     }
 
@@ -460,6 +503,8 @@ export const ResultService = {
         passed: before.passed ?? 0,
         bands: before.bands,
         toppers: before.toppers,
+        combinations: before.combinations,
+        selections: before.selections,
       });
     }
 
@@ -597,7 +642,7 @@ export const ResultService = {
 
     await Result.deleteOne({ _id: before._id, institutionId });
 
-    for (const topper of before.toppers ?? []) {
+    for (const topper of collectToppers(before)) {
       await deleteOwnedPhoto(topper.photoUrl, institutionId);
     }
 

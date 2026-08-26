@@ -60,6 +60,28 @@ describe("publish lifecycle", () => {
     ).rejects.toThrow(/Rahul K/);
   });
 
+  it("refuses to publish while a topper nested inside a combination lacks acknowledged consent", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        level: "PUC_2",
+        combinations: [
+          {
+            label: "PCMB",
+            appeared: 40,
+            toppers: [{ name: "Rahul K", percentage: 97.8, consentAcknowledged: false }],
+          },
+        ],
+      },
+      actor,
+    );
+
+    await expect(
+      ResultService.setStatus("INS0001", created.id, "publish", actor),
+    ).rejects.toThrow(/Rahul K/);
+  });
+
   it("keeps publishedAt at the FIRST publication across a republish", async () => {
     const created = await ResultService.create("INS0001", cycle, actor);
     const first = await ResultService.setStatus("INS0001", created.id, "publish", actor);

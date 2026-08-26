@@ -11,6 +11,8 @@ type Readable = {
    * `ResultDTO` hands over, and a narrower type would reject it at the literal.
    */
   toppers?: { id?: string; name: string; percentage?: number; consentAcknowledged: boolean }[];
+  combinations?: { toppers?: { id?: string; name: string; percentage?: number; consentAcknowledged: boolean }[] }[];
+  selections?: { toppers?: { id?: string; name: string; percentage?: number; consentAcknowledged: boolean }[] }[];
 };
 
 /**
@@ -37,7 +39,12 @@ export function blockingPublishReasons(result: Readable): string[] {
     reasons.push("Name the board that awarded these results.");
   }
 
-  const unconsented = (result.toppers ?? []).filter((topper) => !topper.consentAcknowledged);
+  const allToppers = [
+    ...(result.toppers ?? []),
+    ...(result.combinations ?? []).flatMap((c) => c.toppers ?? []),
+    ...(result.selections ?? []).flatMap((s) => s.toppers ?? []),
+  ];
+  const unconsented = allToppers.filter((topper) => !topper.consentAcknowledged);
   if (unconsented.length > 0) {
     reasons.push(
       `Confirm consent to publish for ${unconsented.map((topper) => topper.name).join(", ")}.`,

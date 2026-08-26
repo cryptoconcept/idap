@@ -284,6 +284,182 @@ describe("ResultService CRUD", () => {
     expect(existsSync(storedPath(foreign))).toBe(true);
   });
 
+  it("deletes a nested combination topper's stored photo when a patch drops it", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        level: "PUC_2",
+        combinations: [
+          { label: "PCMB", appeared: 40, toppers: [{ name: "Priya S", percentage: 98.6 }] },
+        ],
+      },
+      actor,
+    );
+    const combinationId = created.combinations?.[0]?.id as string;
+    const topperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+
+    const withPhoto = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const photoUrl = withPhoto.combinations?.[0]?.toppers?.[0]?.photoUrl as string;
+    expect(photoUrl).toBeDefined();
+
+    // The incoming combination keeps its own identity but drops the topper.
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      { combinations: [{ id: combinationId, label: "PCMB", appeared: 40, toppers: [] }] },
+      actor,
+    );
+
+    expect(updated.combinations?.[0]?.toppers).toBeUndefined();
+    expect(existsSync(storedPath(photoUrl))).toBe(false);
+  });
+
+  it("deletes a nested selection topper's stored photo when a patch drops it", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        selections: [
+          { examCode: "KCET", qualified: 20, toppers: [{ name: "Priya S", percentage: 98.6 }] },
+        ],
+      },
+      actor,
+    );
+    const topperId = created.selections?.[0]?.toppers?.[0]?.id as string;
+
+    const withPhoto = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const photoUrl = withPhoto.selections?.[0]?.toppers?.[0]?.photoUrl as string;
+    expect(photoUrl).toBeDefined();
+
+    // The incoming selection is matched by examCode but drops the topper.
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      { selections: [{ examCode: "KCET", qualified: 20, toppers: [] }] },
+      actor,
+    );
+
+    expect(updated.selections?.[0]?.toppers).toBeUndefined();
+    expect(existsSync(storedPath(photoUrl))).toBe(false);
+  });
+
+  it("keeps a nested combination topper's photo when the patch edits an unrelated field on that same combination", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        level: "PUC_2",
+        combinations: [
+          { label: "PCMB", appeared: 40, toppers: [{ name: "Priya S", percentage: 98.6 }] },
+        ],
+      },
+      actor,
+    );
+    const combinationId = created.combinations?.[0]?.id as string;
+    const topperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+
+    const withPhoto = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const photoUrl = withPhoto.combinations?.[0]?.toppers?.[0]?.photoUrl as string;
+    expect(photoUrl).toBeDefined();
+
+    // Same topper id, unrelated field (label) changes — the photo must survive.
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      {
+        combinations: [
+          {
+            id: combinationId,
+            label: "PCMB (Revised)",
+            appeared: 40,
+            toppers: [{ id: topperId, name: "Priya S", percentage: 98.6 }],
+          },
+        ],
+      },
+      actor,
+    );
+
+    expect(updated.combinations?.[0]?.label).toBe("PCMB (Revised)");
+    expect(updated.combinations?.[0]?.toppers?.[0]?.photoUrl).toBe(photoUrl);
+    expect(existsSync(storedPath(photoUrl))).toBe(true);
+  });
+
+  it("remove() deletes every topper's stored photo — top-level, nested combination, and nested selection", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        level: "PUC_2",
+        toppers: [{ name: "Priya S", percentage: 98.6, consentAcknowledged: true }],
+        combinations: [
+          { label: "PCMB", appeared: 40, toppers: [{ name: "Rahul K", percentage: 96.4 }] },
+        ],
+        selections: [
+          { examCode: "KCET", qualified: 20, toppers: [{ name: "Meera N", percentage: 97.1 }] },
+        ],
+      },
+      actor,
+    );
+
+    const topLevelId = created.toppers?.[0]?.id as string;
+    const combinationTopperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+    const selectionTopperId = created.selections?.[0]?.toppers?.[0]?.id as string;
+
+    const afterTopLevel = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topLevelId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const afterCombination = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      combinationTopperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+    const afterSelection = await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      selectionTopperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    const topLevelPhoto = afterTopLevel.toppers?.[0]?.photoUrl as string;
+    const combinationPhoto = afterCombination.combinations?.[0]?.toppers?.[0]?.photoUrl as string;
+    const selectionPhoto = afterSelection.selections?.[0]?.toppers?.[0]?.photoUrl as string;
+    expect(topLevelPhoto).toBeDefined();
+    expect(combinationPhoto).toBeDefined();
+    expect(selectionPhoto).toBeDefined();
+
+    await ResultService.remove("INS0001", created.id, actor);
+
+    expect(existsSync(storedPath(topLevelPhoto))).toBe(false);
+    expect(existsSync(storedPath(combinationPhoto))).toBe(false);
+    expect(existsSync(storedPath(selectionPhoto))).toBe(false);
+  });
+
   it("returns NOT_FOUND, never FORBIDDEN, for another institution's result", async () => {
     const created = await ResultService.create("INS0001", cycle, actor);
 
