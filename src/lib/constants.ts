@@ -417,3 +417,36 @@ export const OFFER_KIND_LABELS: Record<OfferKind, string> = {
 /** Document-count caps. Neither is enforced by an index — the service checks before insert. */
 export const SCHOLARSHIP_MAX_PER_INSTITUTION = 40;
 export const OFFER_MAX_PER_INSTITUTION = 40;
+
+export const PLATFORMS = ["PASSPERCENT", "FEESBASKET"] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
+export const PLATFORM_LABELS: Record<Platform, string> = {
+  PASSPERCENT: "PassPercent",
+  FEESBASKET: "FeesBasket",
+};
+
+export const CONNECTION_STATUSES = [
+  "PENDING",
+  "AWAITING_APPROVAL",
+  "CONNECTED",
+  "REJECTED",
+  "DISCONNECTED",
+  "ERROR",
+] as const;
+export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
+
+export const CONNECTION_STATUS_LABELS: Record<ConnectionStatus, string> = {
+  PENDING: "Requested",
+  AWAITING_APPROVAL: "Awaiting school approval",
+  CONNECTED: "Connected",
+  REJECTED: "Rejected",
+  DISCONNECTED: "Disconnected",
+  ERROR: "Needs attention",
+};
+
+export const SYNC_STATUSES = ["SUCCESS", "PARTIAL", "FAILED"] as const;
+export type SyncStatus = (typeof SYNC_STATUSES)[number];
+
+/** SyncRun rows kept per (institution, platform) — a log, not an archive. */
+export const SYNC_RUN_KEEP = 20;
