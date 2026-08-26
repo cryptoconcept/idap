@@ -1,5 +1,12 @@
 import type { Platform } from "@/lib/constants";
 import type { PlatformAdapter } from "./types";
+// Side-effect import: `passpercent.ts` calls `registerAdapter` at module
+// scope. It also imports `registerAdapter` back from this file — a
+// deliberate small cycle. It's safe because `registerAdapter` is a hoisted
+// function declaration and ES module named exports are live bindings, so by
+// the time `passpercent.ts`'s top-level call actually runs, the binding it
+// closed over already resolves to the real function.
+import "./passpercent";
 
 /**
  * One registry, one lookup point. Adapters register themselves as a
