@@ -25,6 +25,7 @@ import type { ResultStatus } from "@/lib/constants";
 import { describeCycle } from "@/lib/results/label";
 import { blockingPublishReasons } from "@/lib/results/publish-readiness";
 import type { ResultDTO } from "@/services/result.service";
+import type { AcademicUnitDTO } from "@/services/academic-structure.service";
 import { ResultStatusBadge } from "@/components/results/result-status-badge";
 import { CycleSection } from "@/components/results/cycle-section";
 import { OutcomeSection } from "@/components/results/outcome-section";
@@ -58,9 +59,15 @@ const IGNORE_DIRTY = () => {};
 export function ResultEditor({
   initialResult,
   institutionId,
+  units,
 }: {
   initialResult: ResultDTO;
   institutionId: string;
+  // Threaded through to `sectionProps` here so it reaches a section as soon
+  // as one is wired into `SECTIONS` — the combinations editor is not yet
+  // (that's Task 9), so this has no reader today beyond satisfying the type
+  // the page passes.
+  units: AcademicUnitDTO[];
 }) {
   const [result, setResult] = useState<ResultDTO>(initialResult);
 
@@ -120,7 +127,7 @@ export function ResultEditor({
     setDirty(false);
   }
 
-  const sectionProps = { result, onSave: saveSection, onDirtyChange };
+  const sectionProps = { result, onSave: saveSection, onDirtyChange, units };
 
   return (
     <div className="space-y-5">

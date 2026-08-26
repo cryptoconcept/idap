@@ -6,6 +6,8 @@ import { getCurrentUser } from "@/lib/auth/current-user";
 import { getCurrentInstitution } from "@/lib/tenant";
 import { AppError } from "@/lib/api/errors";
 import { ResultService, type ResultDTO } from "@/services/result.service";
+import { AcademicStructureService } from "@/services/academic-structure.service";
+import { flattenTree, inactiveIds } from "@/lib/academic/tree";
 import { describeCycle } from "@/lib/results/label";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/page-header";
@@ -40,6 +42,13 @@ export default async function ResultEditorPage(props: PageProps<"/results/[resul
     throw error;
   }
 
+  // Same read-time rule `/fees/new` uses: a unit that is inactive, or sits
+  // under a branch that is, is not offered as a combination's academic-unit
+  // link — an admin cannot tie a result to a class or course they have hidden.
+  const allUnits = await AcademicStructureService.list(institution.institutionId);
+  const hidden = inactiveIds(allUnits);
+  const units = flattenTree(allUnits).filter((unit) => !hidden.has(unit.id));
+
   return (
     <>
       <Button asChild variant="ghost" size="sm" className="-ml-2.5 mb-3 text-muted-foreground">
@@ -54,7 +63,11 @@ export default async function ResultEditorPage(props: PageProps<"/results/[resul
         description="Everything a website reading your public results endpoint would see."
       />
 
-      <ResultEditor initialResult={result} institutionId={institution.institutionId} />
+      <ResultEditor
+        initialResult={result}
+        institutionId={institution.institutionId}
+        units={units}
+      />
     </>
   );
 }
