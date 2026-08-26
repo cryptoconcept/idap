@@ -387,3 +387,33 @@ export const ACADEMIC_UNIT_MAX_PER_INSTITUTION = 500;
  * feature solves.
  */
 export const FEE_HEAD_MAX = 30;
+
+export const SCHOLARSHIP_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type ScholarshipStatus = (typeof SCHOLARSHIP_STATUSES)[number];
+
+export const SCHOLARSHIP_STATUS_LABELS: Record<ScholarshipStatus, string> = {
+  DRAFT: "Draft",
+  PUBLISHED: "Published",
+  ARCHIVED: "Archived",
+};
+
+export const OFFER_STATUSES = ["DRAFT", "PUBLISHED", "ARCHIVED"] as const;
+export type OfferStatus = (typeof OFFER_STATUSES)[number];
+
+export const OFFER_STATUS_LABELS: Record<OfferStatus, string> = {
+  DRAFT: "Draft",
+  PUBLISHED: "Published",
+  ARCHIVED: "Archived",
+};
+
+export const OFFER_KINDS = ["PERCENTAGE", "FLAT"] as const;
+export type OfferKind = (typeof OFFER_KINDS)[number];
+
+export const OFFER_KIND_LABELS: Record<OfferKind, string> = {
+  PERCENTAGE: "Percentage off",
+  FLAT: "Flat amount off",
+};
+
+/** Document-count caps. Neither is enforced by an index — the service checks before insert. */
+export const SCHOLARSHIP_MAX_PER_INSTITUTION = 40;
+export const OFFER_MAX_PER_INSTITUTION = 40;
