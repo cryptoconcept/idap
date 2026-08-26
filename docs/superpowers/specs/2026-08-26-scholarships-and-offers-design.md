@@ -421,3 +421,59 @@ reinvent:
 2. The **tenant-check-on-write** helper for `academicUnitId` (§5.2). If a third
    consumer appears in Phase 9, extract it to `src/lib/academic/assert-owned.ts`
    rather than copying it a third time.
+
+---
+
+## 13. As built
+
+Implemented via Subagent-Driven Development, 12 tasks, 24 commits.
+901 tests in 92 files (760/78 before this phase), `tsc` clean, lint unchanged
+at 0 errors / 7 pre-existing `react-hooks/incompatible-library` warnings.
+
+### Scope changes made during execution, beyond §§1–12
+
+1. **`academicUnitId` is nullable, not merely optional.** As specced, an
+   optional field could be *set* but never *cleared*: `null` was rejected by
+   `objectIdString.optional()` and an omitted key is absorbed by the service's
+   `stripUndefined` as "leave alone". A scholarship scoped to a class by
+   mistake could only be fixed by delete-and-recreate, discarding
+   `publishedAt`. `null` now means "clear the scope"; an absent key still
+   means "leave alone". Both halves of that distinction are pinned by tests.
+2. **`validFrom`/`validUntil` are nullable for the same reason**, so a date
+   set by mistake can be removed.
+3. **`validUntil` normalises a date-only value to end-of-day.**
+   `"2026-08-31"` coerced to `T00:00:00Z`, so `listPublic`'s `$gte: new Date()`
+   filter dropped the offer at the first instant of the 31st — an offer was
+   never visible on its own end date. A value carrying an explicit time is
+   respected as given; `validFrom` still lands at start-of-day.
+4. **The academic-unit delete guard now counts all three referencing models.**
+   It counted only `FeeStructure`; deleting a unit silently orphaned a
+   scholarship's or offer's `academicUnitId`, and a dangling reference re-reads
+   as "applies institution-wide" — on the credential-free public API, which
+   misstated what an institution had committed to. Found by the whole-branch
+   review; no single task owned that file.
+
+### Deliberate non-fixes, recorded so they are not re-found as new bugs
+
+- **`serialize` uses `||`, not `??`, on optional text.** `??` would be a
+  regression: the edit form PATCHes `""` for an untouched optional field, and
+  `||` is what collapses that to `undefined`.
+- **`setStatus` tests `!before.publishedAt` by truthiness.** Safe — a `Date` is
+  always truthy, so only null/undefined are falsy; there is no zero-value
+  pitfall of the kind the house `!= null` rule guards against.
+- **`create` counts then inserts** when enforcing the 40-per-institution cap.
+  A concurrent double-submit can land at 41. Same read-then-write shape as the
+  existing cap in `academic-structure.service.ts`.
+- **Scholarship's `update` publish-gate re-check has no test.** Genuinely
+  defensive-only: a validated PATCH cannot blank `name`. Offer's equivalent IS
+  tested, because `assertOfferPublishable` also rejects `value <= 0` and
+  `value: 0` is a valid payload — the two are deliberately asymmetric.
+- **Scholarships and offers use one rate-limit key per URL alias; profile,
+  fees and results each share one key across both aliases.** The new split is
+  the divergence, not a fix. Splitting arguably lets a scraper double its read
+  budget by alternating the id and slug forms of the same resource — worth
+  revisiting across all five endpoint families at once rather than piecemeal.
+- **`notFound()` renders with HTTP 200 in dev** rather than 404, identical to
+  the existing `/fees/[feeId]` route. A framework dev-mode characteristic.
+- **The offers list has no "expired" affordance.** An expired offer shows its
+  end date and stays `PUBLISHED`; nothing marks it as no longer public.
