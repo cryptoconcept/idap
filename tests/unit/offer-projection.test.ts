@@ -78,4 +78,25 @@ describe("toPublicOffer", () => {
 
     expect(result).not.toHaveProperty("internalMargin");
   });
+
+  it("drops a non-finite value rather than emitting NaN or Infinity", () => {
+    // A stored NaN reaching public JSON serialises to `null` and breaks
+    // consumers. `num()` uses Number.isFinite for exactly this reason — a
+    // `typeof value === "number"` check would let both through.
+    expect(toPublicOffer({ ...published, value: NaN })?.value).toBeUndefined();
+    expect(toPublicOffer({ ...published, value: Infinity })?.value).toBeUndefined();
+  });
+
+  it("emits a zero value rather than dropping it as falsy", () => {
+    // 0 is falsy, so a truthiness-based helper would silently drop a
+    // legitimate zero. Number.isFinite(0) is true, so it survives.
+    expect(toPublicOffer({ ...published, value: 0 })?.value).toBe(0);
+  });
+
+  it("passes through a date already stored as an ISO string", () => {
+    // Documents read via .lean() can carry either a Date or a string
+    // depending on the driver path; iso() must handle both.
+    const result = toPublicOffer({ ...published, validUntil: "2026-03-31T00:00:00.000Z" });
+    expect(result?.validUntil).toBe("2026-03-31T00:00:00.000Z");
+  });
 });
