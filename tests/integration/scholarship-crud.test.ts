@@ -112,6 +112,44 @@ describe("ScholarshipService", () => {
     expect(updated.classOrCourse).toBe("Grade 10");
   });
 
+  it("clears an existing scope back to institution-wide when academicUnitId is explicitly null", async () => {
+    const created = await ScholarshipService.create(
+      "INS0001",
+      { name: "Scoped Merit", academicUnitId: unit.id },
+      actor,
+    );
+    expect(created.classOrCourse).toBe("Grade 10");
+
+    const cleared = await ScholarshipService.update(
+      "INS0001",
+      created.id,
+      { academicUnitId: null },
+      actor,
+    );
+
+    expect(cleared.academicUnitId).toBeUndefined();
+    expect(cleared.classOrCourse).toBeUndefined();
+  });
+
+  it("leaves an existing scope intact when a patch omits academicUnitId entirely — null clears, absent preserves", async () => {
+    const created = await ScholarshipService.create(
+      "INS0001",
+      { name: "Scoped Merit", academicUnitId: unit.id },
+      actor,
+    );
+
+    const patched = await ScholarshipService.update(
+      "INS0001",
+      created.id,
+      { amount: "Up to ₹20,000" },
+      actor,
+    );
+
+    expect(patched.amount).toBe("Up to ₹20,000");
+    expect(patched.academicUnitId).toBe(unit.id);
+    expect(patched.classOrCourse).toBe("Grade 10");
+  });
+
   it("publishes, stamps publishedAt, and keeps it across a republish", async () => {
     const created = await ScholarshipService.create("INS0001", { name: "Merit" }, actor);
 

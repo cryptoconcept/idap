@@ -11,6 +11,7 @@ import {
 } from "@/app/api/settings/scholarships/[scholarshipId]/route";
 import { POST as publishScholarship } from "@/app/api/settings/scholarships/[scholarshipId]/publish/route";
 import { ScholarshipService } from "@/services/scholarship.service";
+import { AcademicStructureService } from "@/services/academic-structure.service";
 import type { NextRequest } from "next/server";
 
 function cookieRequest(init: { url?: string; body?: unknown; origin?: string } = {}) {
@@ -146,6 +147,40 @@ describe("scholarship routes — admin CRUD over real HTTP", () => {
     );
     expect(response.status).toBe(200);
     expect((await response.json()).scholarship.amount).toBe("₹75,000");
+  });
+
+  it("PATCH with academicUnitId: null clears an existing scope", async () => {
+    const unit = await AcademicStructureService.create(
+      "INS0001",
+      { segment: "SCHOOL", name: "Grade 10" },
+      actor,
+    );
+    const created = await ScholarshipService.create(
+      "INS0001",
+      input(),
+      actor,
+    );
+    const scoped = await ScholarshipService.update(
+      "INS0001",
+      created.id,
+      { academicUnitId: unit.id },
+      actor,
+    );
+    expect(scoped.classOrCourse).toBe("Grade 10");
+    await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
+
+    const response = await patchScholarship(
+      cookieRequest({
+        url: `http://localhost/api/settings/scholarships/${created.id}`,
+        body: { academicUnitId: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ scholarshipId: created.id }) } as never,
+    );
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.scholarship.academicUnitId).toBeUndefined();
+    expect(payload.scholarship.classOrCourse).toBeUndefined();
   });
 
   it("PATCH on another institution's scholarship returns 404", async () => {

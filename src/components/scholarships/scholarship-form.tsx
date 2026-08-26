@@ -69,13 +69,17 @@ export function ScholarshipForm({
 
   async function onSubmit(values: Values) {
     // Belt-and-braces, not the primary defence: the Select's onValueChange
-    // above already keeps the sentinel out of form state, so `values`
+    // below already keeps the sentinel out of form state, so `values`
     // should never carry `ALL_UNITS` here. This guards against a future
     // regression re-introducing it without ever failing to strip it before
-    // the request goes out.
+    // the request goes out. `null`, not `undefined`, is what "institution-
+    // wide" means on the wire: `academicUnitId` is nullable on both create
+    // and update schemas now, and only `null` survives `JSON.stringify` —
+    // `undefined` keys are dropped, which the update schema treats as "leave
+    // this field alone" rather than "clear it".
     const body = {
       ...values,
-      academicUnitId: values.academicUnitId === ALL_UNITS ? undefined : values.academicUnitId,
+      academicUnitId: values.academicUnitId === ALL_UNITS ? null : values.academicUnitId,
     };
 
     try {
@@ -147,13 +151,18 @@ export function ScholarshipForm({
             `onSubmit` ever runs, and `academicUnitId` is `objectIdString`,
             so a sentinel sitting in form state would fail validation and
             silently block every submit with no institution-wide unit
-            selected. `onValueChange` maps it to `undefined` right here,
-            before `setValue` ever writes it into react-hook-form.
+            selected. `onValueChange` maps it to `null` right here, before
+            `setValue` ever writes it into react-hook-form — `null`, not
+            `undefined`, because an omitted `academicUnitId` means "leave
+            the existing scope alone" to the update API, while `null` is the
+            one payload that actually clears it back to institution-wide.
+            `JSON.stringify` would drop an `undefined` key entirely, so
+            `null` is also the only one of the two that survives the fetch.
           */}
           <Select
             defaultValue={initialScholarship?.academicUnitId ?? ALL_UNITS}
             onValueChange={(value) =>
-              setValue("academicUnitId", value === ALL_UNITS ? undefined : value, {
+              setValue("academicUnitId", value === ALL_UNITS ? null : value, {
                 shouldDirty: true,
               })
             }
