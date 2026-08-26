@@ -36,6 +36,16 @@ describe("assertOwnedAcademicUnit", () => {
     expect(await assertOwnedAcademicUnit("INS0001", undefined)).toBeNull();
   });
 
+  it("returns null when the id is explicitly null", async () => {
+    expect(await assertOwnedAcademicUnit("INS0001", null)).toBeNull();
+  });
+
+  it("throws NOT_FOUND for an empty string id rather than treating it as absent", async () => {
+    await expect(assertOwnedAcademicUnit("INS0001", "")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+
   it("throws NOT_FOUND for another institution's unit", async () => {
     const foreign = await AcademicStructureService.create(
       "INS0002",
