@@ -293,7 +293,14 @@ export function assertResultInvariants(input: ResultInvariantInput): void {
       );
     }
 
-    if ((combination.distinction ?? 0) + (combination.firstClass ?? 0) > cPassed) {
+    // Guarded on `passed` being given for this combination: absent means
+    // unknown, not zero, so it cannot be the basis for "distinction and
+    // first class exceed passed" — unlike the top level, `passed` here is
+    // optional (Task 3 review fix — see task-3-report.md).
+    if (
+      combination.passed != null &&
+      (combination.distinction ?? 0) + (combination.firstClass ?? 0) > cPassed
+    ) {
       throw validationError(
         "distinction and first class together exceed the number who passed",
       );
@@ -394,10 +401,13 @@ function assertCohortSplit(
   // `boys.passed` already exceeds its own `boys.appeared` should be told
   // that specifically, not folded into the aggregate "together exceed"
   // message (Task 3 fix — see task-3-report.md).
-  if (boys && (boys.passed ?? 0) > (boys.appeared ?? 0)) {
+  // Guarded on `appeared` being given for that half: an absent `appeared`
+  // is unknown, not zero, so a half reporting `passed` alone cannot be
+  // judged against it (Task 3 review fix — see task-3-report.md).
+  if (boys && boys.appeared != null && (boys.passed ?? 0) > boys.appeared) {
     throw validationError(`${context}boys: more passed than appeared`);
   }
-  if (girls && (girls.passed ?? 0) > (girls.appeared ?? 0)) {
+  if (girls && girls.appeared != null && (girls.passed ?? 0) > girls.appeared) {
     throw validationError(`${context}girls: more passed than appeared`);
   }
 

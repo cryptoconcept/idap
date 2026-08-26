@@ -219,6 +219,15 @@ describe("combination invariants", () => {
     ).toThrow(/distinction and first class together exceed the number who passed/);
   });
 
+  it("accepts a combination's distinction and firstClass with no passed reported", () => {
+    expect(() =>
+      assertResultInvariants({
+        ...base,
+        combinations: [{ label: "PCMB", distinction: 3, firstClass: 3 }],
+      }),
+    ).not.toThrow();
+  });
+
   it("refuses a combination's boys and girls together exceeding its appeared", () => {
     expect(() =>
       assertResultInvariants({
@@ -267,6 +276,10 @@ describe("result-level distinction/firstClass and gender-split invariants", () =
         girls: { appeared: 6 },
       }),
     ).toThrow(/boys and girls together exceed the number who appeared/);
+  });
+
+  it("accepts a boys/girls split that reports passed with no appeared", () => {
+    expect(() => assertResultInvariants({ ...base, girls: { passed: 5 } })).not.toThrow();
   });
 });
 
