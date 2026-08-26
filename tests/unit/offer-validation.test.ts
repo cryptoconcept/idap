@@ -84,8 +84,13 @@ describe("assertOfferInvariants", () => {
   });
 
   it("does not fire the date rule when only ONE bound is given", () => {
+    // Deliberately pre-epoch: with the correct `validFrom != null` guard this
+    // does not throw, but a regression that defaults the missing bound
+    // (`validFrom ?? new Date(0)`) WOULD throw, because 1960 precedes the
+    // epoch. A post-epoch date such as 2020-01-01 passes under both the
+    // correct guard and that regression, so it cannot defend this rule.
     expect(() =>
-      assertOfferInvariants({ kind: "FLAT", value: 1, validUntil: new Date("2020-01-01") }),
+      assertOfferInvariants({ kind: "FLAT", value: 1, validUntil: new Date("1960-01-01") }),
     ).not.toThrow();
     expect(() =>
       assertOfferInvariants({ kind: "FLAT", value: 1, validFrom: new Date("2030-01-01") }),
