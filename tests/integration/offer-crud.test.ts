@@ -97,6 +97,43 @@ describe("OfferService", () => {
     expect(patched.classOrCourse).toBe("Grade 10");
   });
 
+  it("clears a previously-set end date when validUntil is explicitly null", async () => {
+    const created = await OfferService.create(
+      "INS0001",
+      {
+        title: "Time-Limited Offer",
+        kind: "FLAT",
+        value: 1000,
+        validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      },
+      actor,
+    );
+    expect(created.validUntil).toBeDefined();
+
+    const cleared = await OfferService.update(
+      "INS0001",
+      created.id,
+      { validUntil: null },
+      actor,
+    );
+
+    expect(cleared.validUntil).toBeUndefined();
+  });
+
+  it("leaves an existing end date intact when a patch omits validUntil entirely — null clears, absent preserves", async () => {
+    const validUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const created = await OfferService.create(
+      "INS0001",
+      { title: "Time-Limited Offer", kind: "FLAT", value: 1000, validUntil },
+      actor,
+    );
+
+    const patched = await OfferService.update("INS0001", created.id, { value: 2000 }, actor);
+
+    expect(patched.value).toBe(2000);
+    expect(patched.validUntil).toBe(validUntil.toISOString());
+  });
+
   it("refuses another institution's academic unit as NOT_FOUND", async () => {
     await expect(
       OfferService.create(
@@ -270,5 +307,30 @@ describe("OfferService", () => {
     const list = await OfferService.listPublic({ institutionId: "INS0003" });
 
     expect(list).toHaveLength(1);
+  });
+
+  it("listPublic includes an offer whose validUntil was cleared to null — it never expires now", async () => {
+    await makeProfiledInstitution("INS0003", { profileStatus: "PUBLISHED" });
+    const created = await OfferService.create(
+      "INS0003",
+      {
+        title: "Formerly Time-Limited",
+        kind: "FLAT",
+        value: 5000,
+        // Expired already — if the clear didn't take, listPublic's filter
+        // would exclude this row, and this test would fail for the wrong
+        // reason instead of proving the clear itself.
+        validUntil: new Date(Date.now() - 24 * 60 * 60 * 1000),
+      },
+      actor,
+    );
+    await OfferService.setStatus("INS0003", created.id, "publish", actor);
+
+    await OfferService.update("INS0003", created.id, { validUntil: null }, actor);
+
+    const list = await OfferService.listPublic({ institutionId: "INS0003" });
+
+    expect(list).toHaveLength(1);
+    expect(list?.[0]?.title).toBe("Formerly Time-Limited");
   });
 });

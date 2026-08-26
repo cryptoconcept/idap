@@ -99,4 +99,13 @@ describe("toPublicOffer", () => {
     const result = toPublicOffer({ ...published, validUntil: "2026-03-31T00:00:00.000Z" });
     expect(result?.validUntil).toBe("2026-03-31T00:00:00.000Z");
   });
+
+  it("treats a stored null validUntil as absent, never the string \"null\"", () => {
+    // An offer whose end date was explicitly cleared stores `null`, not a
+    // missing key. `iso()` takes `unknown`, and a naive `String(value)` or
+    // `value?.toISOString()` on a non-Date would either throw or stringify
+    // to "null" — either would corrupt or crash the public response.
+    const result = toPublicOffer({ ...published, validUntil: null });
+    expect(result?.validUntil).toBeUndefined();
+  });
 });

@@ -4,19 +4,18 @@ import { validationError } from "@/lib/api/errors";
 import { objectIdString, requiredText } from "./common";
 
 /**
- * A `type="date"` input reports an untouched or cleared field as `""`, never
- * as an absent key — the DOM has no way to omit a registered form field's
- * value entirely. Bare `z.coerce.date().optional()` treats only `undefined`
- * as "no value supplied" and tries to coerce anything else, so a blank date
- * input becomes `new Date("")` (an Invalid Date) and fails validation on
- * every offer with no `validFrom`/`validUntil` — which, per the brief's own
- * verification step, must be a valid, publishable state ("No end date").
- * Folding the empty string to `undefined` before coercion runs is what makes
- * the plain `register()` + `type="date"` pattern actually work.
+ * A blank `type="date"` input submits `""`, which `z.coerce.date()` rejects
+ * outright (it coerces to an Invalid Date and fails the type check) — and
+ * `undefined` cannot mean "clear this" because the service's `stripUndefined`
+ * reads an absent key as "leave alone" on a PATCH, the same reason
+ * `academicUnitId` above is nullable rather than just optional. So `""`
+ * folds to `null` here, which survives `JSON.stringify`, passes through
+ * `stripUndefined` into the `$set`, and clears a previously-set date. Same
+ * null-means-clear rule as `academicUnitId`, applied to both date fields.
  */
-const optionalDate = z.preprocess(
-  (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
-  z.coerce.date().optional(),
+const clearableDate = z.preprocess(
+  (value) => (value === "" ? null : value),
+  z.coerce.date().nullable().optional(),
 );
 
 export const createOfferSchema = z.object({
@@ -36,8 +35,8 @@ export const createOfferSchema = z.object({
    * the distinction matters there.
    */
   academicUnitId: objectIdString.nullable().optional(),
-  validFrom: optionalDate,
-  validUntil: optionalDate,
+  validFrom: clearableDate,
+  validUntil: clearableDate,
 });
 export type CreateOfferInput = z.infer<typeof createOfferSchema>;
 
@@ -45,16 +44,17 @@ export type CreateOfferInput = z.infer<typeof createOfferSchema>;
  * `status` is absent so a PATCH cannot skip the publish gate — Zod strips it,
  * the same mechanism `updateScholarshipSchema` uses.
  *
- * `academicUnitId` inherits `createOfferSchema`'s nullable-and-optional shape
- * via `.partial()`, and here the distinction actually matters: an *omitted*
- * key means "leave it alone" (the service's `stripUndefined` absorbs it, so
- * a PATCH touching only `value` cannot accidentally erase an existing
- * scope), while an explicit `null` is the only payload that means "clear the
- * scope and make this offer institution-wide". Without a nullable field
- * there would be no way to ever un-scope an offer once given one —
- * `undefined` cannot serve double duty as both "leave alone" and "clear",
- * since a browser's `JSON.stringify` drops `undefined` keys entirely, making
- * the two indistinguishable on the wire.
+ * `academicUnitId`, `validFrom` and `validUntil` all inherit
+ * `createOfferSchema`'s nullable-and-optional shape via `.partial()`, and for
+ * all three the distinction actually matters: an *omitted* key means "leave
+ * it alone" (the service's `stripUndefined` absorbs it, so a PATCH touching
+ * only `value` cannot accidentally erase an existing scope or date), while an
+ * explicit `null` is the only payload that clears one — back to
+ * institution-wide for `academicUnitId`, to "no end date" for `validUntil`.
+ * Without a nullable field there would be no way to ever un-scope an offer,
+ * or remove a date once set — `undefined` cannot serve double duty as both
+ * "leave alone" and "clear", since a browser's `JSON.stringify` drops
+ * `undefined` keys entirely, making the two indistinguishable on the wire.
  */
 export const updateOfferSchema = createOfferSchema.partial();
 export type UpdateOfferInput = z.infer<typeof updateOfferSchema>;

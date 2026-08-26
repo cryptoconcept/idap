@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useForm, type Resolver } from "react-hook-form";
+import { useForm, useWatch, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { toast } from "sonner";
 import type { z } from "zod";
@@ -47,8 +47,8 @@ export function OfferForm({
 
   const {
     register,
+    control,
     handleSubmit,
-    watch,
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<Values>({
@@ -79,7 +79,11 @@ export function OfferForm({
     },
   });
 
-  const kind = watch("kind");
+  // `useWatch` rather than `watch`: it is the subscription form, and the one
+  // the React Compiler can memoize — `watch()` here tripped
+  // `react-hooks/incompatible-library` and pushed the file's baseline warning
+  // count past the repo total. Same idiom as `results/outcome-section.tsx`.
+  const kind = useWatch({ control, name: "kind" });
 
   async function onSubmit(values: Values) {
     // Belt-and-braces, not the primary defence: the Select's onValueChange
@@ -141,7 +145,7 @@ export function OfferForm({
           <Label htmlFor="kind">Discount type</Label>
           {/*
             A Radix Select is a button, not a native input, so it cannot be
-            wired up with register(). This one IS driven by watch/setValue —
+            wired up with register(). This one IS driven by useWatch/setValue —
             unlike the academicUnitId picker below — because the value
             field's label depends on which kind is selected, so this field
             needs to be read reactively rather than just written to.
@@ -226,6 +230,16 @@ export function OfferForm({
         </div>
       </div>
 
+      {/*
+        Unlike the academicUnitId sentinel above, clearing one of these needs
+        no mapping here in onSubmit: `zodResolver` runs `createOfferSchema` /
+        `updateOfferSchema` against the raw form values BEFORE `onSubmit` ever
+        sees them, and `handleSubmit` hands `onSubmit` the resolver's parsed
+        OUTPUT, not the raw input. The schema's own preprocess step already
+        turns a blank `type="date"` input's `""` into `null` at that point,
+        so `values.validFrom`/`values.validUntil` arrive here as `Date | null`
+        — a cleared field is already `null` by the time this function runs.
+      */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label htmlFor="validFrom">Valid from</Label>
