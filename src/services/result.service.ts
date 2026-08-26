@@ -515,11 +515,16 @@ export const ResultService = {
       contentType: input.contentType,
     });
 
-    // arrayFilters addresses the exact matched element regardless of which of
-    // the three arrays it came from — `path` already resolved WHICH array;
-    // this resolves WHICH ELEMENT of it, by that topper's own `_id`.
+    // The top-level filter's `[path]._id` condition is not redundant with
+    // arrayFilters: it re-checks, at write time, that this topper is STILL in
+    // the array `path` names. Without it, a concurrent edit that removed this
+    // topper between the read above and this write would leave arrayFilters
+    // matching zero elements while the document itself still matches — a
+    // silent no-op that reports success and orphans the blob just stored.
+    // With it, that same race makes the WHOLE query fail to match, `updated`
+    // comes back null, and the branch below cleans up and reports NOT_FOUND.
     const updated = await Result.findOneAndUpdate(
-      { _id: before._id, institutionId },
+      { _id: before._id, institutionId, [`${path}._id`]: topper._id },
       { $set: { [`${path}.$[topper].photoUrl`]: stored.key } },
       { new: true, arrayFilters: [{ "topper._id": topper._id }] },
     ).lean<ResultDoc>();
@@ -556,8 +561,12 @@ export const ResultService = {
     if (!located) throw notFound("Topper not found");
     const { path, topper } = located;
 
+    // Same re-check as setTopperPhoto's write, and for the same reason: without
+    // `[path]._id` in the top-level filter, a topper removed between the read
+    // above and this write would leave arrayFilters matching nothing while the
+    // document still matches, silently reporting success on a no-op write.
     const updated = await Result.findOneAndUpdate(
-      { _id: before._id, institutionId },
+      { _id: before._id, institutionId, [`${path}._id`]: topper._id },
       { $unset: { [`${path}.$[topper].photoUrl`]: "" } },
       { new: true, arrayFilters: [{ "topper._id": topper._id }] },
     ).lean<ResultDoc>();

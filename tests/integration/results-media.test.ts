@@ -1,6 +1,7 @@
-import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { Types } from "mongoose";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
@@ -300,6 +301,125 @@ describe("nested toppers", () => {
         actor,
       ),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("a topper vanishing between the read and the write", () => {
+  // Both tests below make an inherently timing-dependent race deterministic by
+  // hooking an async call the service already performs somewhere between
+  // locateTopper's read and its own findOneAndUpdate write, and using that
+  // hook to run the "competing" mutation — another request pulling this exact
+  // topper out of its combination — at exactly the moment production code
+  // would be vulnerable to it landing.
+
+  it("setTopperPhoto returns NOT_FOUND and deletes the just-uploaded blob when the topper is pulled from its combination mid-request", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        combinations: [{ label: "PCMB", toppers: [{ name: "Priya S", percentage: 98.6 }] }],
+      },
+      actor,
+    );
+    const topperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+
+    // storage.putPublic is awaited between locateTopper's read (which still
+    // sees the topper) and the findOneAndUpdate write below — the exact
+    // window a concurrent update() dropping this topper from its combination
+    // would need to land in to trigger the bug. Wrapping it lets the
+    // competing write actually happen, awaited to completion before
+    // setTopperPhoto's own write runs, instead of depending on real timing.
+    let uploadedKey: string | undefined;
+    const originalPutPublic = storage.putPublic.bind(storage);
+    const putPublic = vi.spyOn(storage, "putPublic").mockImplementationOnce(async (input) => {
+      const result = await originalPutPublic(input);
+      uploadedKey = result.key;
+      await Result.updateOne(
+        { _id: created.id },
+        { $pull: { "combinations.0.toppers": { _id: new Types.ObjectId(topperId) } } },
+      );
+      return result;
+    });
+
+    try {
+      await expect(
+        ResultService.setTopperPhoto(
+          "INS0001",
+          created.id,
+          topperId,
+          { contentType: "image/png", bytes: PNG },
+          actor,
+        ),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // Without the top-level query filter's `[path]._id` re-check, this is
+      // exactly the silent case: arrayFilters would match zero elements, the
+      // document would still match the (unguarded) top-level filter, the
+      // write would report success, and this blob would orphan with zero
+      // references anywhere in the document.
+      expect(uploadedKey).toBeDefined();
+      expect(existsSync(storedPath(uploadedKey as string))).toBe(false);
+    } finally {
+      putPublic.mockRestore();
+    }
+  });
+
+  it("removeTopperPhoto returns NOT_FOUND rather than silently no-op'ing when the topper is pulled from its combination mid-request", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        combinations: [{ label: "PCMB", toppers: [{ name: "Priya S", percentage: 98.6 }] }],
+      },
+      actor,
+    );
+    const topperId = created.combinations?.[0]?.toppers?.[0]?.id as string;
+    await ResultService.setTopperPhoto(
+      "INS0001",
+      created.id,
+      topperId,
+      { contentType: "image/png", bytes: PNG },
+      actor,
+    );
+
+    // removeTopperPhoto uploads nothing, so — unlike setTopperPhoto above —
+    // there is no naturally-occurring awaited call between locateTopper's
+    // read and its own write to hook. The fallback is to wrap
+    // findOneAndUpdate's own `exec` (the same technique
+    // tests/integration/fee-bulk-create.test.ts already uses for its
+    // duplicate-write race): the competing pull is awaited to completion
+    // before the real query is allowed to reach the database, which
+    // reproduces the same landing order a genuine race would, deterministically.
+    const originalFindOneAndUpdate = Result.findOneAndUpdate.bind(Result) as (
+      filter?: Record<string, unknown>,
+      update?: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => ReturnType<typeof Result.findOneAndUpdate>;
+    const spy = vi.spyOn(Result, "findOneAndUpdate").mockImplementation(((
+      filter?: Record<string, unknown>,
+      update?: Record<string, unknown>,
+      options?: Record<string, unknown>,
+    ) => {
+      const query = originalFindOneAndUpdate(filter, update, options);
+      const patched = query as unknown as { exec: (...execArgs: unknown[]) => Promise<unknown> };
+      const originalExec = patched.exec.bind(patched);
+      patched.exec = async (...execArgs: unknown[]) => {
+        await Result.updateOne(
+          { _id: created.id },
+          { $pull: { "combinations.0.toppers": { _id: new Types.ObjectId(topperId) } } },
+        );
+        return originalExec(...execArgs);
+      };
+      return query;
+    }) as typeof Result.findOneAndUpdate);
+
+    try {
+      await expect(
+        ResultService.removeTopperPhoto("INS0001", created.id, topperId, actor),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
