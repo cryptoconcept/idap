@@ -348,7 +348,11 @@ export function assertResultInvariants(input: ResultInvariantInput): void {
     }
 
     const selectedTotal = recruiters.reduce((total, r) => total + (r.selected ?? 0), 0);
-    if (selectedTotal > placed) {
+    // Guarded on `placed` being given: absent means unknown, not zero, so a
+    // list of recruiters with their own `selected` counts cannot be judged
+    // against a placed total that was never reported (found during my own
+    // audit for this same bug class — see task-3-report.md).
+    if (placement.placed != null && selectedTotal > placed) {
       throw validationError(
         "placement: the named recruiters account for more selections than the placed total",
       );

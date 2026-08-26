@@ -308,6 +308,15 @@ describe("placement invariants", () => {
     ).toThrow(/the named recruiters account for more selections than the placed total/);
   });
 
+  it("accepts recruiters reporting selected with no placement.placed reported", () => {
+    expect(() =>
+      assertResultInvariants({
+        ...base,
+        placement: { recruiters: [{ name: "Acme", selected: 5 }] },
+      }),
+    ).not.toThrow();
+  });
+
   it("refuses an average package exceeding the highest package", () => {
     expect(() =>
       assertResultInvariants({
