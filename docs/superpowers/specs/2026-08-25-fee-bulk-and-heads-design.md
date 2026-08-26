@@ -334,3 +334,73 @@ to update them. Updating is the bulk-edit feature above.
    confirmation weight as a single publish, not less.
 3. **Fee head usage reporting** — which heads are actually used, so a stale list can be
    pruned. Cheap once heads exist, and only worth building once a list has grown stale.
+
+---
+
+## 16. As-built record
+
+Merged to `main` on 2026-08-26 at `1620d74`, 23 commits. **692 tests in 77 files**,
+`tsc` clean, lint 0 errors / 4 warnings (all the pre-existing
+`react-hooks/incompatible-library` class from the `watch()` + Radix pattern — that
+count rises with each new client component using a Radix Select, and the binding rule
+is 0 errors, not a warning count).
+
+Every test diff versus the pre-phase `main` is a **pure insertion — 1106 added, 0
+deleted**. No test was weakened, loosened or removed. The four protected files
+(`src/lib/api/openapi.ts`, `tests/unit/api-contract.test.ts`,
+`fee-structure-projection.test.ts`, `openapi-fee-structure.test.ts`) are byte-identical
+to their pre-phase state: the credential-free public contract did not move.
+
+### Defects found and fixed during execution, worth not rediscovering
+
+- **`createMany` half-applied a batch under concurrency.** `insertMany` defaults to
+  `ordered: true`, so a duplicate-key collision at document *k* persisted 1..*k*-1 and
+  never attempted the rest — reachable with no caller bug, via any write landing between
+  the "already priced" read and the insert. Now `{ ordered: false, throwOnValidationError:
+  true }`, with raced duplicates reclassified as **skipped** (the feature's own word for
+  that collision) and `created` derived from `insertedDocs`, never `fresh.length`.
+  **The error shape is not what surface-reading suggests:** a write error's code lives at
+  `writeErrors[i].err.code`, one level down. Guessing `.code` would make the
+  all-duplicates test silently false and turn every raced duplicate into a 500.
+- **`assertSameOrigin` on `PUT /api/settings/fees/heads` was pinned by no test at all.**
+  §12 requires all four routes to reject anonymous, Counselor, Front Desk, platform-admin
+  and cross-origin; the implementation plan's briefs asked for a subset. The matrix is now
+  complete and mutation-proven on every route.
+- **The fee-heads form validated raw form state**, which carries the `NONE` sentinel and
+  the `NaN` that `valueAsNumber` yields from an empty input — so the only two cases those
+  optional fields exist for were the two that could not be saved, silently. Normalisation
+  now lives in `src/lib/fee-structure/fee-head-form.ts`, tested, and `.pipe()`s into
+  `feeHeadsSchema` rather than restating its rules.
+- **Bulk delete's audit record said only `"40 deleted"`** on a hard delete, where the same
+  work done singly leaves 40 records each naming class and year.
+
+### Deliberate non-fixes — reviewed, judged, and left alone
+
+1. `DELETE /api/settings/fees/[feeId]` returns `{deleted: true}`; bulk delete returns
+   `{deleted: <number>}`. Changing the existing route's shape is outside this phase.
+2. `getFeeHeads` re-reads an `Institution` that `getCurrentInstitution()` already loaded —
+   one redundant round trip per fee page. Fixing it means plumbing the institution through
+   four pages.
+3. Academic year is free text on both forms, so a typo (`2026-2027` for `2026-27`) is
+   amplified by bulk. Pre-existing on the single-fee path; bulk delete is the recovery.
+4. `src/components/ui/checkbox.tsx` has no `data-indeterminate` variant, so a partial
+   selection renders a checkmark-in-outline rather than a dash. `aria-checked="mixed"` is
+   correct, so this is cosmetic and pre-existing.
+5. `/fees/bulk`'s unit picker shows `unit.name` with depth indentation where every other
+   surface shows `pathLabel`. Deliberate (§11); reversing it would be redesign.
+6. `summarizeRemoved` bounds named labels at 5 but not the list of distinct academic years.
+7. `removeMany`'s ownership gate compares `owned.length !== ids.length`, which a duplicate
+   id would trip into a spurious `NOT_FOUND`. Unreachable: `distinctObjectIds` rejects
+   duplicates before the service is called. Revisit if either bulk method gains a caller
+   that bypasses the Zod schema.
+
+### One coupling that leaves no evidence if it breaks
+
+`createMany`'s duplicate-key branch can only report duplicates. Mongoose filters a
+validation-failing document out of the batch before the driver sees it, and the resulting
+error carries no trace of it. A batch containing **both** a validation failure and a raced
+duplicate would therefore drop the invalid document silently. That is unreachable only
+because every document in a batch is byte-identical except `academicUnitId` (which comes
+from a `.lean()` read, never user text) and `FeeStructure` has no per-document validators —
+so validation is all-or-nothing. **Introduce any per-document field and this reopens with no
+failing test and no error to notice.** The comment at that branch says so in place.
