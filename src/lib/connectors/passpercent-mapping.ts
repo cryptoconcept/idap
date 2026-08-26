@@ -278,16 +278,27 @@ function mapSelectionToppers(source: unknown, warnings: string[], context: strin
  * grades (verbatim — IDAP's combination-level `grades` already uses
  * PassPercent's exact fixed bucket keys, see the GAP note below),
  * boys/girls, toppers (same rank-less-skip rule as board toppers).
+ *
+ * FIX ROUND 1: `passPct` was missing from the brief's combination field list
+ * — a genuine oversight (`CombinationDataSchema.passPct` is real on
+ * PassPercent's live schema). Computed with the same `!= null` discipline as
+ * the stream-level rollup: `passed/appeared*100` to 1 decimal, emitted ONLY
+ * when both bounds are reported and `appeared > 0` — an unreported bound
+ * means "unknown", not zero, and `appeared: 0` must never divide to
+ * NaN/Infinity in a payload bound for a live partner API.
  */
 function mapCombination(raw: Rec, warnings: string[], context: string): Rec {
   const boys = rec(raw.boys);
   const girls = rec(raw.girls);
   const toppers = mapToppers(raw.toppers, warnings, context);
   const grades = rec(raw.grades);
+  const appeared = num(raw.appeared);
+  const passed = num(raw.passed);
 
   return omitUndefined({
-    appeared: num(raw.appeared),
-    passed: num(raw.passed),
+    appeared,
+    passed,
+    passPct: appeared != null && passed != null && appeared > 0 ? round1((passed / appeared) * 100) : undefined,
     distinction: num(raw.distinction),
     firstClass: num(raw.firstClass),
     highestScore: num(raw.highestScore),
@@ -408,8 +419,11 @@ function mapSelections(list: unknown[], warnings: string[], context: string): Re
  * `grades` through verbatim at the COMBINATION level only (see
  * `mapCombination`) and does not populate a top-level `grades` field on the
  * stream object — inventing a bands-to-buckets conversion isn't specified
- * anywhere and would be re-deriving a value the brief didn't pin. Flagged in
- * this task's report for confirmation before Task 6/8 assume otherwise.
+ * anywhere and would be re-deriving a value the brief didn't pin, and would
+ * risk fabricating data on a public listing if an institution's bands don't
+ * align with the fixed buckets. CONFIRMED as the right call in fix round 1;
+ * per that ruling, a result whose `bands` are consequently dropped now gets
+ * one explicit warning (see the `bands` check at the top of the loop below).
  */
 function buildStreamData(streamKey: string, year: string, group: Rec[], warnings: string[]): Rec {
   const context = `stream "${streamKey}" / year "${year}"`;
@@ -436,6 +450,19 @@ function buildStreamData(streamKey: string, year: string, group: Rec[], warnings
 
   for (const raw of group) {
     const resultId = nonEmptyStr(raw.id) ?? nonEmptyStr(raw.board) ?? "(unidentified result)";
+
+    // FIX ROUND 1: a result's `bands` (IDAP's freeform label/min/max/count
+    // score bands) are never converted to PassPercent's top-level `grades`
+    // (fixed buckets: 90+/80-90/70-80/60-70/50-60/below50) — see the GAP note
+    // on `buildStreamData` above. Silently dropping them would be
+    // indistinguishable from a bug to the admin reading the sync report, so
+    // one warning is emitted per result that actually carries bands.
+    const bands = arr(raw.bands);
+    if (bands && bands.length > 0) {
+      warnings.push(
+        `Result ${resultId} in ${context}: bands not pushed — PassPercent expects fixed grade buckets and IDAP's bands are free-form ranges`,
+      );
+    }
 
     // appeared/passed: summed ONLY across results where the field `!= null`
     // — a reported zero (`appeared: 0`) counts and contributes 0; a result

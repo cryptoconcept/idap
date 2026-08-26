@@ -416,6 +416,65 @@ describe("buildResultsPayloads", () => {
     });
   });
 
+  describe("bands (fix round 1: dropped, but never silently)", () => {
+    it("warns once, by name, for a result that carries bands — they are never converted to PassPercent's fixed grade buckets", () => {
+      const { byYear, warnings } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "CLASS_10",
+            academicYear: "2024-25",
+            appeared: 10,
+            passed: 9,
+            bands: [{ label: "Distinction", minPercentage: 75, maxPercentage: 100, count: 4 }],
+          },
+        ],
+        institutionType: "SCHOOL",
+      });
+      const sslc = byYear.get("2024-25")!.streams.sslc as Record<string, unknown>;
+      expect(sslc).not.toHaveProperty("grades"); // no top-level grades fabricated from bands
+      const bandsWarnings = warnings.filter((w) => w.includes("r1") && w.toLowerCase().includes("bands"));
+      expect(bandsWarnings).toHaveLength(1);
+      expect(bandsWarnings[0]).toContain("bands not pushed");
+    });
+
+    it("does not warn about bands for a result that has none", () => {
+      const { warnings } = buildResultsPayloads({
+        results: [{ id: "r1", level: "CLASS_10", academicYear: "2024-25", appeared: 10, passed: 9 }],
+        institutionType: "SCHOOL",
+      });
+      expect(warnings.some((w) => w.toLowerCase().includes("bands"))).toBe(false);
+    });
+
+    it("warns once per result when two results in the same rollup group both carry bands", () => {
+      const { warnings } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "CLASS_12",
+            academicYear: "2024-25",
+            appeared: 50,
+            passed: 45,
+            bands: [{ label: "A", minPercentage: 90, maxPercentage: 100, count: 2 }],
+          },
+          {
+            id: "r2",
+            level: "PUC_2",
+            academicYear: "2024-25",
+            appeared: 10,
+            passed: 9,
+            bands: [{ label: "B", minPercentage: 80, maxPercentage: 90, count: 1 }],
+          },
+        ],
+        institutionType: "PU_COLLEGE",
+      });
+      const bandsWarnings = warnings.filter((w) => w.toLowerCase().includes("bands"));
+      expect(bandsWarnings).toHaveLength(2);
+      expect(bandsWarnings.some((w) => w.includes("r1"))).toBe(true);
+      expect(bandsWarnings.some((w) => w.includes("r2"))).toBe(true);
+    });
+  });
+
   describe("toppers", () => {
     it("skips a topper with rank == null and warns, keeping percentage -> pct for the rest", () => {
       const { byYear, warnings } = buildResultsPayloads({
@@ -520,6 +579,65 @@ describe("buildResultsPayloads", () => {
       expect(combo).not.toHaveProperty("averageScore");
       expect(combo.highestScore).toBe(99); // unrenamed
       expect(combo.grades).toEqual({ "90+": 5, "80-90": 10, "70-80": 15, "60-70": 10, "50-60": 5, below50: 5 });
+    });
+
+    it("computes combination passPct from appeared/passed, rounded to 1 decimal (fix round 1: brief's field list omitted it)", () => {
+      const { byYear } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "CLASS_12",
+            academicYear: "2024-25",
+            appeared: 50,
+            passed: 45,
+            combinations: [{ label: "PCMB", appeared: 3, passed: 1 }], // 33.333...% -> 33.3
+          },
+        ],
+        institutionType: "PU_COLLEGE",
+      });
+      const puc = byYear.get("2024-25")!.streams.puc as Record<string, unknown>;
+      const combo = (puc.combinations as Record<string, Record<string, unknown>>).PCMB;
+      expect(combo.passPct).toBe(33.3);
+    });
+
+    it("omits combination passPct when appeared is null (unreported bound means unknown, not zero)", () => {
+      const { byYear } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "CLASS_12",
+            academicYear: "2024-25",
+            appeared: 50,
+            passed: 45,
+            combinations: [{ label: "PCMB", passed: 10 }], // appeared never reported
+          },
+        ],
+        institutionType: "PU_COLLEGE",
+      });
+      const puc = byYear.get("2024-25")!.streams.puc as Record<string, unknown>;
+      const combo = (puc.combinations as Record<string, Record<string, unknown>>).PCMB;
+      expect(combo).not.toHaveProperty("passPct");
+    });
+
+    it("omits combination passPct when appeared is a reported 0 — must never divide to NaN/Infinity", () => {
+      const { byYear } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "CLASS_12",
+            academicYear: "2024-25",
+            appeared: 50,
+            passed: 45,
+            combinations: [{ label: "PCMB", appeared: 0, passed: 0 }],
+          },
+        ],
+        institutionType: "PU_COLLEGE",
+      });
+      const puc = byYear.get("2024-25")!.streams.puc as Record<string, unknown>;
+      const combo = (puc.combinations as Record<string, Record<string, unknown>>).PCMB;
+      expect(combo).not.toHaveProperty("passPct");
+      expect(combo.passPct).not.toBe(Number.NaN);
+      expect(Number.isFinite(combo.passPct as number | undefined)).toBe(false); // undefined, not NaN/Infinity
     });
 
     it("keeps the FIRST combination on a duplicate label and warns, discarding the second", () => {
