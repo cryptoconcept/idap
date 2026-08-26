@@ -55,6 +55,7 @@ never recorded. So the data comes first.
 | 5 | `selections` is an **array with a unique `examCode`**, not a map | Matches how `bands` and `toppers` are already modelled here; Mongoose validates arrays more naturally | Slightly more work to look up one exam by code |
 | 6 | `placement` attaches to the **`Result`**, not to a combination | PassPercent models placement at stream level, and a college recruits across branches from one drive | A college wanting per-branch placement splits cannot express it |
 | 7 | New fields are **absent from the public projection** | It is an allow-list guarded by a contract test. Adding fields there is a deliberate act with its own decision, not a side effect | External consumers cannot read the new data until a later phase adds it deliberately |
+| 8 | Combinations carry an **`id` handle** in the write schema, exactly like toppers; selections are matched by **`examCode`** instead of a synthetic handle | Both nest toppers, and this codebase already has one bug class it treats as a precedent: replacing an array wholesale on every PATCH silently destroys a `photoUrl` only an upload endpoint can write (the existing code comment calls this "the shape of Phase 1's Critical finding"). Without an identity to match on, that recurs one level down the first time a combination's label is corrected | A combination's or selection's toppers lose their photos on the next unrelated edit — reproducing a bug this codebase has already had once |
 
 ---
 
@@ -106,6 +107,9 @@ CohortSplit   = { appeared?: number; passed?: number }           // each min 0
 ### 4.2 Combinations
 
 ```ts
+// Stored shape — keeps its _id (unlike BandSchema's `{_id: false}`), because a
+// combination nests toppers and needs an identity for the same reason a
+// topper does: see Decision 8 and §4.5a.
 combinations: [{
   academicUnitId?: ObjectId;   // optional link to the Phase 5 tree
   label: string;               // required, trimmed; what publishes
@@ -122,9 +126,17 @@ combinations: [{
 }]
 ```
 
+The write schema (`createResultSchema`/`updateResultSchema`) adds one field this
+stored shape does not have: `id?: string`, following `topperSchema`'s own
+pattern exactly. It names an existing combination on this result so a patch can
+be matched back to the row it came from — a handle, not a stored field, and
+never used to set the stored `_id` directly.
+
 `toppers` reuses `TopperSchema` unchanged, so a combination topper gets the same
 `photoUrl` write protection and the same `consentAcknowledged` flag. Reaching
-those toppers from the photo endpoint is not automatic — see §4.5.
+those toppers from the photo endpoint is not automatic — see §4.5. Preserving
+them across an edit to their parent combination is not automatic either — see
+§4.5a.
 
 ### 4.3 Placement
 
@@ -171,6 +183,12 @@ selections: [{
 label map beside it, following `RESULT_BOARD_LABELS`. Adding an exam later is one
 entry in each.
 
+Selections need no separate `id` handle the way combinations do: `examCode` is
+already a stable, non-free-text key — unlike a label, it cannot be edited into
+a typo — and §5.1 already requires it unique within a result. A patch matches
+an existing selection by `examCode` directly. Its nested toppers are preserved
+across that match exactly as a combination's are — see §4.5a.
+
 ### 4.5 Topper photos must reach nested toppers
 
 Reusing `TopperSchema` gives combination and selection toppers a `photoUrl` —
@@ -196,6 +214,49 @@ rather than trusting a `findOneAndUpdate` that matched nothing.
 Ownership is unaffected — `findOwned` already scopes by `institutionId` before
 any of this runs, and the storage key stays under the institution's own prefix
 so `isOwnedMediaUrl` continues to cover it.
+
+### 4.5a Preserving nested topper identity across an update
+
+This is the deeper half of the problem §4.5 opens: reaching a nested topper
+from the photo endpoint is one thing; not silently destroying it on an
+unrelated edit is another, and the two are separate defects with separate
+fixes.
+
+`mergeToppers` already exists in `result.service.ts` and is already generic —
+nothing about it is specific to the top-level `toppers` array; it takes an
+incoming list, an existing list, matches by the `id` handle, and carries each
+match's `_id` and `photoUrl` across untouched. It is reused as-is for a
+combination's `toppers` and a selection's `toppers` — not reimplemented.
+
+What this phase adds is the layer above it: `update()` currently replaces
+`combinations`, `selections` and `placement` wholesale on any patch, the same
+way it replaces `bands` — correct for `bands` and `placement.recruiters`,
+because neither nests anything with identity to lose (Decision 8's converse:
+`placement.recruiters` carries no photo in this phase, so it is safe to
+replace exactly like `bands`). It is wrong for `combinations` and `selections`,
+because both nest toppers.
+
+So `update()` gains two more merge functions, called only when the patch
+actually touches that field — mirroring exactly how `mergeToppers` is only
+invoked `if (patch.toppers)`:
+
+- **`mergeCombinations(incoming, existing)`** — matches each incoming row to an
+  existing one by its `id` handle (Decision 8), the same shape `mergeToppers`
+  already has for the top level, and then calls `mergeToppers` again on
+  *that combination's own* `toppers` field before returning it. A combination
+  with no matching `id`, or no `id` at all, is a new combination with fresh
+  toppers — again identical to how an un-matched top-level topper is created
+  fresh today.
+- **`mergeSelections(incoming, existing)`** — matches by `examCode` instead of
+  a handle (§4.4), otherwise identical: recurses into `mergeToppers` for that
+  selection's own toppers.
+
+Both are invoked exactly where `mergeToppers` already is, and their output
+feeds the same merged record `assertResultInvariants` checks — so what is
+validated is still exactly what is written, unchanged from today's rule.
+
+No such step exists for `placement`, and none is needed: it replaces wholesale,
+because it nests nothing with server-written identity to lose.
 
 ### 4.6 Result-level additions
 
@@ -322,7 +383,7 @@ Extend the existing files rather than adding parallel ones:
 |---|---|
 | `tests/unit/result-model.test.ts` | schema defaults, enums, `min`/`max`, absent-means-absent for each new optional block |
 | `tests/unit/results-validation.test.ts` | one test per invariant in §5.1, plus the two deliberately-unenforced rules asserted as **accepted** |
-| `tests/integration/results-crud.test.ts` | create and update round-trip each new axis; tenant scoping unchanged |
+| `tests/integration/results-crud.test.ts` | create and update round-trip each new axis; tenant scoping unchanged; **a combination's or selection's topper photo survives an unrelated PATCH to that same combination/selection** — the test §4.5a exists to pass |
 | `tests/integration/results-media.test.ts` | a photo set on a **combination** topper and on a **selection** topper lands on that topper and no other; a foreign `topperId` still reads as `NOT_FOUND` |
 | `tests/unit/results-projection.test.ts` | **unedited** — and one new assertion that a result carrying every new field still projects exactly the pre-existing public keys |
 
@@ -344,6 +405,10 @@ wears a badge saying covered.
 - `TopperSchema` is **reused**, not redefined, by combinations and selections —
   and `setTopperPhoto`/`removeTopperPhoto` can actually reach those toppers, so
   `photoUrl` is never a field nothing can write.
+- A combination's or selection's toppers survive a PATCH that edits an unrelated
+  field on that same combination or selection — `mergeCombinations`/
+  `mergeSelections` (§4.5a) genuinely preserve identity, not merely `mergeToppers`
+  at the top level.
 - Every invariant in §5.1 is enforced and independently mutation-checked.
 - The three new editor sections save and reload every field they show.
 - `src/lib/api/openapi.ts` untouched; `results-projection`, `openapi-results`
@@ -364,9 +429,14 @@ wears a badge saying covered.
 2. **A renamed academic unit does not retitle past results** (Decision 3).
    Intended: a result is a historical record.
 3. **Placement cannot be split per branch** (Decision 6).
-4. **Recruiters have no logo** (§4.3) — deliberate, pending an upload endpoint.
-5. **Nothing new is publicly readable** (§7) until a later phase decides so.
-6. **Academic year remains free text**, so a typo (`2026-2027` for `2026-27`)
+4. **A combination matched by no `id`, or an `id` matching nothing on the
+   result, is created fresh with fresh toppers** — identical to how an
+   un-matched top-level topper behaves today (§4.5a). Not a new limitation;
+   naming it here so it is not mistaken for one when this phase's tests
+   exercise it.
+5. **Recruiters have no logo** (§4.3) — deliberate, pending an upload endpoint.
+6. **Nothing new is publicly readable** (§7) until a later phase decides so.
+7. **Academic year remains free text**, so a typo (`2026-2027` for `2026-27`)
    still creates a separate cycle. Pre-existing; unchanged here.
 
 ---
