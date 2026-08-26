@@ -867,6 +867,40 @@ describe("buildResultsPayloads", () => {
         true,
       );
     });
+
+    it("FIX ROUND 2: with THREE results in one group, the duplicate-placement warning names the specific discarded result, not just stream/year", () => {
+      // r1 carries placement (kept), r2 carries none (irrelevant to this rule),
+      // r3 also carries placement (discarded). A two-result fixture can't prove
+      // the warning identifies WHICH result was dropped, since there is only
+      // ever one candidate; three results make "r3" the only correct answer.
+      const { warnings } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "UG",
+            academicYear: "2024-25",
+            appeared: 100,
+            passed: 90,
+            placement: { eligible: 100, placed: 90 },
+          },
+          { id: "r2", level: "UG", academicYear: "2024-25", appeared: 20, passed: 15 },
+          {
+            id: "r3",
+            level: "UG",
+            academicYear: "2024-25",
+            appeared: 50,
+            passed: 40,
+            placement: { eligible: 999, placed: 999 },
+          },
+        ],
+        institutionType: "ENGINEERING_COLLEGE",
+      });
+      const placementWarnings = warnings.filter((w) => w.toLowerCase().includes("duplicate") && w.toLowerCase().includes("placement"));
+      expect(placementWarnings).toHaveLength(1);
+      expect(placementWarnings[0]).toContain("r3");
+      expect(placementWarnings[0]).not.toContain("r1");
+      expect(placementWarnings[0]).not.toContain("r2");
+    });
   });
 
   describe("selections", () => {
@@ -953,6 +987,42 @@ describe("buildResultsPayloads", () => {
       expect(
         warnings.some((w) => w.toLowerCase().includes("duplicate") && w.toLowerCase().includes("selection")),
       ).toBe(true);
+    });
+
+    it("FIX ROUND 2: with THREE results in one group, the duplicate-selections warning names the specific discarded result, not just stream/year", () => {
+      // r1 carries selections (kept), r2 carries none, r3 also carries
+      // selections (discarded). Only a three-result fixture can prove the
+      // warning names the right one, since a two-result case has only one
+      // possible culprit.
+      const { warnings } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "PUC_2",
+            academicYear: "2024-25",
+            appeared: 10,
+            passed: 9,
+            selections: [{ examCode: "NEET", qualified: 1 }],
+          },
+          { id: "r2", level: "CLASS_12", academicYear: "2024-25", appeared: 5, passed: 4 },
+          {
+            id: "r3",
+            level: "CLASS_12",
+            academicYear: "2024-25",
+            appeared: 10,
+            passed: 9,
+            selections: [{ examCode: "NEET", qualified: 999 }],
+          },
+        ],
+        institutionType: "PU_COLLEGE",
+      });
+      const selectionWarnings = warnings.filter(
+        (w) => w.toLowerCase().includes("duplicate") && w.toLowerCase().includes("selection"),
+      );
+      expect(selectionWarnings).toHaveLength(1);
+      expect(selectionWarnings[0]).toContain("r3");
+      expect(selectionWarnings[0]).not.toContain("r1");
+      expect(selectionWarnings[0]).not.toContain("r2");
     });
   });
 });
