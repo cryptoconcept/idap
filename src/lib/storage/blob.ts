@@ -67,4 +67,19 @@ export const blobStorageAdapter: StorageAdapter = {
   async deletePublic(key) {
     await del(key).catch(() => undefined);
   },
+
+  async getPublic(key) {
+    try {
+      const response = await fetch(key);
+      if (!response.ok) return null;
+
+      const body = Buffer.from(await response.arrayBuffer());
+      return {
+        body,
+        contentType: response.headers.get("content-type") || "application/octet-stream",
+      };
+    } catch {
+      return null;
+    }
+  },
 };

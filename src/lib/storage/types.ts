@@ -33,4 +33,13 @@ export interface StorageAdapter {
    */
   putPublic(input: { key: string; body: Buffer; contentType: string }): Promise<StoredObject>;
   deletePublic(key: string): Promise<void>;
+
+  /**
+   * Public path — institution media ONLY (logo, cover, gallery). Reads back
+   * whatever `putPublic` returned as the stored key — a relative path on the
+   * local adapter, an absolute blob URL on Vercel Blob. Returns `null` rather
+   * than throwing when the media is unavailable; admission documents never go
+   * through here.
+   */
+  getPublic(key: string): Promise<{ body: Buffer; contentType: string } | null>;
 }

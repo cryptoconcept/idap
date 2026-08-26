@@ -84,4 +84,19 @@ export const localStorageAdapter: StorageAdapter = {
     const target = resolvePublicKey(key.replace(/^\/api\/media\//, ""));
     await Promise.allSettled([unlink(target), unlink(`${target}${CONTENT_TYPE_SUFFIX}`)]);
   },
+
+  async getPublic(key) {
+    try {
+      const target = resolvePublicKey(key);
+      const [body, contentType] = await Promise.all([
+        readFile(target),
+        readFile(`${target}${CONTENT_TYPE_SUFFIX}`, "utf8").catch(
+          () => "application/octet-stream",
+        ),
+      ]);
+      return { body, contentType: contentType.trim() };
+    } catch {
+      return null;
+    }
+  },
 };
