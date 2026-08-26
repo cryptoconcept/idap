@@ -13,3 +13,4 @@ export { RefreshToken, type RefreshTokenDoc } from "./RefreshToken";
 export { Result, type ResultDoc } from "./Result";
 export { FeeStructure, type FeeStructureDoc } from "./FeeStructure";
 export { AcademicUnit, type AcademicUnitDoc } from "./AcademicUnit";
+export { Scholarship, type ScholarshipDoc } from "./Scholarship";
