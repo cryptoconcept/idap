@@ -64,6 +64,39 @@ describe("OfferService", () => {
     expect(read.classOrCourse).toBe("Class 10");
   });
 
+  it("clears an existing scope back to institution-wide when academicUnitId is explicitly null", async () => {
+    const created = await OfferService.create(
+      "INS0001",
+      { title: "Scoped Offer", kind: "PERCENTAGE", value: 10, academicUnitId: unit.id },
+      actor,
+    );
+    expect(created.classOrCourse).toBe("Grade 10");
+
+    const cleared = await OfferService.update(
+      "INS0001",
+      created.id,
+      { academicUnitId: null },
+      actor,
+    );
+
+    expect(cleared.academicUnitId).toBeUndefined();
+    expect(cleared.classOrCourse).toBeUndefined();
+  });
+
+  it("leaves an existing scope intact when a patch omits academicUnitId entirely — null clears, absent preserves", async () => {
+    const created = await OfferService.create(
+      "INS0001",
+      { title: "Scoped Offer", kind: "PERCENTAGE", value: 10, academicUnitId: unit.id },
+      actor,
+    );
+
+    const patched = await OfferService.update("INS0001", created.id, { value: 20 }, actor);
+
+    expect(patched.value).toBe(20);
+    expect(patched.academicUnitId).toBe(unit.id);
+    expect(patched.classOrCourse).toBe("Grade 10");
+  });
+
   it("refuses another institution's academic unit as NOT_FOUND", async () => {
     await expect(
       OfferService.create(
