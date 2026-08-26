@@ -63,15 +63,16 @@ export function ScholarshipForm({
       name: initialScholarship?.name ?? "",
       criteria: initialScholarship?.criteria ?? "",
       amount: initialScholarship?.amount ?? "",
-      academicUnitId: initialScholarship?.academicUnitId ?? ALL_UNITS,
+      academicUnitId: initialScholarship?.academicUnitId,
     },
   });
 
   async function onSubmit(values: Values) {
-    // The picker's sentinel must never reach the API — `academicUnitId` is
-    // validated as an ObjectId string when present, so `"__all__"` would fail
-    // `objectIdString` server-side. Map it back to `undefined` (institution-wide)
-    // before sending, which is why `values` cannot be handed to `fetch` directly.
+    // Belt-and-braces, not the primary defence: the Select's onValueChange
+    // above already keeps the sentinel out of form state, so `values`
+    // should never carry `ALL_UNITS` here. This guards against a future
+    // regression re-introducing it without ever failing to strip it before
+    // the request goes out.
     const body = {
       ...values,
       academicUnitId: values.academicUnitId === ALL_UNITS ? undefined : values.academicUnitId,
@@ -140,15 +141,22 @@ export function ScholarshipForm({
             wired up with register(). Unlike `fee-structure-form.tsx`'s class
             picker, nothing here ever needs to change the selection on this
             form's behalf (there is no dependent field to invalidate it), so
-            it stays uncontrolled — `defaultValue` seeds it from
-            `initialScholarship`, and `onValueChange` just syncs the pick
-            into react-hook-form via `setValue`. That sidesteps a `watch()`
-            call this component would otherwise need only to keep the
-            control's displayed value in sync with itself.
+            it stays uncontrolled — `defaultValue` only seeds what the
+            control *displays*. `ALL_UNITS` is display-only and must never
+            reach form state: `zodResolver` validates raw values before
+            `onSubmit` ever runs, and `academicUnitId` is `objectIdString`,
+            so a sentinel sitting in form state would fail validation and
+            silently block every submit with no institution-wide unit
+            selected. `onValueChange` maps it to `undefined` right here,
+            before `setValue` ever writes it into react-hook-form.
           */}
           <Select
             defaultValue={initialScholarship?.academicUnitId ?? ALL_UNITS}
-            onValueChange={(value) => setValue("academicUnitId", value, { shouldDirty: true })}
+            onValueChange={(value) =>
+              setValue("academicUnitId", value === ALL_UNITS ? undefined : value, {
+                shouldDirty: true,
+              })
+            }
           >
             <SelectTrigger id="academicUnitId" aria-invalid={Boolean(errors.academicUnitId)}>
               <SelectValue placeholder="Pick a class or course" />
