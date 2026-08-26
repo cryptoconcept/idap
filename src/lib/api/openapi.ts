@@ -1469,7 +1469,7 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
             criteria: { type: "string", example: "Above 90% in the previous board exam" },
             amount: { type: "string", example: "₹10,000" },
             classOrCourse: { type: "string", example: "Grade 10" },
-            publishedAt: { type: "string" },
+            publishedAt: { type: "string", format: "date-time" },
           },
         },
 
@@ -1493,9 +1493,9 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
             value: { type: "number", example: 10 },
             code: { type: "string", example: "EARLYBIRD10" },
             classOrCourse: { type: "string", example: "Grade 10" },
-            validFrom: { type: "string" },
-            validUntil: { type: "string" },
-            publishedAt: { type: "string" },
+            validFrom: { type: "string", format: "date-time" },
+            validUntil: { type: "string", format: "date-time" },
+            publishedAt: { type: "string", format: "date-time" },
           },
         },
 
