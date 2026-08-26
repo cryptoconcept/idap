@@ -14,3 +14,4 @@ export { Result, type ResultDoc } from "./Result";
 export { FeeStructure, type FeeStructureDoc } from "./FeeStructure";
 export { AcademicUnit, type AcademicUnitDoc } from "./AcademicUnit";
 export { Scholarship, type ScholarshipDoc } from "./Scholarship";
+export { Offer, type OfferDoc } from "./Offer";
