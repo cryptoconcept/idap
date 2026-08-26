@@ -239,6 +239,17 @@ describe("combination invariants", () => {
     ).toThrow(/boys and girls together exceed the number who appeared/);
   });
 
+  it("accepts a combination's boys/girls appeared with no combination.appeared reported", () => {
+    expect(() =>
+      assertResultInvariants({
+        ...base,
+        combinations: [
+          { label: "PCMB", boys: { appeared: 6 }, girls: { appeared: 6 } },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
   it("refuses a combination's boys.passed exceeding boys.appeared", () => {
     expect(() =>
       assertResultInvariants({
@@ -257,6 +268,15 @@ describe("combination invariants", () => {
         ],
       }),
     ).toThrow(/the grade bands account for more students than appeared/);
+  });
+
+  it("accepts grade bucket counts with no combination.appeared reported", () => {
+    expect(() =>
+      assertResultInvariants({
+        ...base,
+        combinations: [{ label: "PCMB", grades: { "90+": 6, "80-90": 6 } }],
+      }),
+    ).not.toThrow();
   });
 });
 

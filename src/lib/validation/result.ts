@@ -306,7 +306,7 @@ export function assertResultInvariants(input: ResultInvariantInput): void {
       );
     }
 
-    assertCohortSplit(combination.boys, combination.girls, cAppeared, "");
+    assertCohortSplit(combination.boys, combination.girls, combination.appeared, "");
 
     // The explicit `<number>` sidesteps a TS inference quirk: with the
     // fixed-key, all-optional `grades` object type, plain inference leaves
@@ -316,7 +316,10 @@ export function assertResultInvariants(input: ResultInvariantInput): void {
       (total, count) => total + (count ?? 0),
       0,
     );
-    if (gradeTotal > cAppeared) {
+    // Guarded on `appeared` being given for this combination, same rule as
+    // every other bound comparison in this function (found during my own
+    // audit — see task-3-report.md).
+    if (combination.appeared != null && gradeTotal > cAppeared) {
       throw validationError("grades: the grade bands account for more students than appeared");
     }
   }
@@ -398,7 +401,7 @@ export function assertResultInvariants(input: ResultInvariantInput): void {
 function assertCohortSplit(
   boys: { appeared?: number | null; passed?: number | null } | null | undefined,
   girls: { appeared?: number | null; passed?: number | null } | null | undefined,
-  appeared: number,
+  appeared: number | null | undefined,
   context: string,
 ): void {
   // Each half's own consistency is checked before their sum: a row whose
@@ -415,10 +418,17 @@ function assertCohortSplit(
     throw validationError(`${context}girls: more passed than appeared`);
   }
 
-  const boysAppeared = boys?.appeared ?? 0;
-  const girlsAppeared = girls?.appeared ?? 0;
-  if (boysAppeared + girlsAppeared > appeared) {
-    throw validationError(`${context}boys and girls together exceed the number who appeared`);
+  // Guarded on the caller's own `appeared` being given: the top-level call
+  // always has one (a required field), but a combination's is optional —
+  // an absent one means there is nothing to check boys+girls against
+  // (found during my own audit for this same bug class — see
+  // task-3-report.md).
+  if (appeared != null) {
+    const boysAppeared = boys?.appeared ?? 0;
+    const girlsAppeared = girls?.appeared ?? 0;
+    if (boysAppeared + girlsAppeared > appeared) {
+      throw validationError(`${context}boys and girls together exceed the number who appeared`);
+    }
   }
 }
 
