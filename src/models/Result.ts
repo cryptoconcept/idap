@@ -1,5 +1,12 @@
 import { type InferSchemaType, type Model, Schema, type Types, model, models } from "mongoose";
-import { RESULT_BOARDS, RESULT_LEVELS, RESULT_STATUSES, RESULT_STREAMS } from "@/lib/constants";
+import {
+  EXAM_CODES,
+  RECRUITER_CATEGORIES,
+  RESULT_BOARDS,
+  RESULT_LEVELS,
+  RESULT_STATUSES,
+  RESULT_STREAMS,
+} from "@/lib/constants";
 
 /** No _id: bands are replaced wholesale, never addressed individually. */
 const BandSchema = new Schema(
@@ -27,6 +34,92 @@ const TopperSchema = new Schema({
   consentAcknowledged: { type: Boolean, default: false },
 });
 
+/** PassPercent's own fixed bucket scheme, unlike the flexible `bands` above. */
+const GradeCountsSchema = new Schema(
+  {
+    "90+": { type: Number, min: 0, default: 0 },
+    "80-90": { type: Number, min: 0, default: 0 },
+    "70-80": { type: Number, min: 0, default: 0 },
+    "60-70": { type: Number, min: 0, default: 0 },
+    "50-60": { type: Number, min: 0, default: 0 },
+    below50: { type: Number, min: 0, default: 0 },
+  },
+  { _id: false },
+);
+
+const CohortSplitSchema = new Schema(
+  {
+    appeared: { type: Number, min: 0 },
+    passed: { type: Number, min: 0 },
+  },
+  { _id: false },
+);
+
+/**
+ * A branch or combination inside one exam cycle — PUC Science versus Commerce,
+ * engineering CSE versus ECE. Keeps its _id (unlike BandSchema): it nests
+ * toppers, and an update that cannot tell one combination from another on the
+ * next save would mint fresh topper subdocuments and drop every photograph —
+ * the same failure TopperSchema.photoUrl's own comment above already names.
+ */
+const CombinationSchema = new Schema({
+  academicUnitId: { type: Schema.Types.ObjectId },
+  label: { type: String, required: true, trim: true },
+  appeared: { type: Number, min: 0 },
+  passed: { type: Number, min: 0 },
+  distinction: { type: Number, min: 0, default: 0 },
+  firstClass: { type: Number, min: 0, default: 0 },
+  highestScore: { type: Number, min: 0, max: 100 },
+  averageScore: { type: Number, min: 0, max: 100 },
+  grades: GradeCountsSchema,
+  boys: CohortSplitSchema,
+  girls: CohortSplitSchema,
+  toppers: { type: [TopperSchema], default: undefined },
+});
+
+/** No photo in this phase — nothing here is server-written, so replacing the
+ *  array wholesale on every patch loses nothing, exactly like BandSchema. */
+const RecruiterSchema = new Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    category: { type: String, enum: RECRUITER_CATEGORIES },
+    selected: { type: Number, min: 0 },
+    averagePackage: { type: Number, min: 0 },
+    tieUp: { type: Boolean, default: false },
+    roles: { type: [String], default: undefined },
+  },
+  { _id: false },
+);
+
+/** Attaches to the whole cycle, not a combination — a college recruits across
+ *  branches from one drive. */
+const PlacementSchema = new Schema(
+  {
+    eligible: { type: Number, min: 0 },
+    placed: { type: Number, min: 0 },
+    highestPackage: { type: Number, min: 0 },
+    averagePackage: { type: Number, min: 0 },
+    recruiters: { type: [RecruiterSchema], default: undefined },
+  },
+  { _id: false },
+);
+
+/**
+ * One competitive-exam outcome for this cycle. No _id: unlike a combination, a
+ * selection is matched on update by its `examCode` — a stable enum that can
+ * never be edited into a typo the way a free-text label can.
+ */
+const SelectionSchema = new Schema(
+  {
+    examCode: { type: String, enum: EXAM_CODES, required: true },
+    appeared: { type: Number, min: 0 },
+    qualified: { type: Number, min: 0 },
+    bestRank: { type: Number, min: 1 },
+    toppers: { type: [TopperSchema], default: undefined },
+  },
+  { _id: false },
+);
+
 const ResultSchema = new Schema(
   {
     institutionId: { type: String, required: true, index: true },
@@ -49,6 +142,14 @@ const ResultSchema = new Schema(
 
     bands: { type: [BandSchema], default: undefined },
     toppers: { type: [TopperSchema], default: undefined },
+
+    distinction: { type: Number, min: 0, default: 0 },
+    firstClass: { type: Number, min: 0, default: 0 },
+    boys: CohortSplitSchema,
+    girls: CohortSplitSchema,
+    combinations: { type: [CombinationSchema], default: undefined },
+    placement: { type: PlacementSchema, default: undefined },
+    selections: { type: [SelectionSchema], default: undefined },
 
     status: { type: String, enum: RESULT_STATUSES, default: "DRAFT" },
     publishedAt: { type: Date },

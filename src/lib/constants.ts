@@ -238,6 +238,38 @@ export const RESULT_STATUS_LABELS: Record<ResultStatus, string> = {
 
 export const RESULT_MAX_BANDS = 8;
 export const RESULT_MAX_TOPPERS = 25;
+export const RESULT_MAX_COMBINATIONS = 12;
+export const RESULT_MAX_RECRUITERS = 30;
+
+export const EXAM_CODES = ["NEET", "JEE_MAIN", "JEE_ADVANCED", "KCET", "COMEDK"] as const;
+export type ExamCode = (typeof EXAM_CODES)[number];
+
+export const EXAM_CODE_LABELS: Record<ExamCode, string> = {
+  NEET: "NEET",
+  JEE_MAIN: "JEE Main",
+  JEE_ADVANCED: "JEE Advanced",
+  KCET: "KCET",
+  COMEDK: "COMEDK",
+};
+
+/** One row per exam, at most — never hand-copied, so a sixth exam here needs no second edit. */
+export const RESULT_MAX_SELECTIONS = EXAM_CODES.length;
+
+export const RECRUITER_CATEGORIES = ["IT", "PRODUCT", "CORE", "CONSULTING", "STARTUP", "OTHER"] as const;
+export type RecruiterCategory = (typeof RECRUITER_CATEGORIES)[number];
+
+export const RECRUITER_CATEGORY_LABELS: Record<RecruiterCategory, string> = {
+  IT: "IT",
+  PRODUCT: "Product",
+  CORE: "Core engineering",
+  CONSULTING: "Consulting",
+  STARTUP: "Startup",
+  OTHER: "Other",
+};
+
+/** PassPercent's own fixed bucket scheme — see the design spec's Decision 4. */
+export const GRADE_BUCKETS = ["90+", "80-90", "70-80", "60-70", "50-60", "below50"] as const;
+export type GradeBucket = (typeof GRADE_BUCKETS)[number];
 
 export const PERMISSIONS = [
   "LEADS_VIEW_ALL",
