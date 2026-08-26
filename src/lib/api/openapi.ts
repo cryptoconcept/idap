@@ -534,6 +534,74 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
         },
       },
 
+      [`${publicBase}/scholarships`]: {
+      ...(scoped
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "institutionId",
+                in: "path",
+                required: true,
+                schema: { type: "string" },
+                description: "Institution id, e.g. INS0001",
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published scholarships",
+          description: "Published scholarships, newest first. No credentials required.",
+          operationId: "listPublicScholarshipsById",
+          security: [],
+          responses: {
+            "200": {
+              description: "Published scholarships for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicScholarshipsResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${publicBase}/offers`]: {
+      ...(scoped
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "institutionId",
+                in: "path",
+                required: true,
+                schema: { type: "string" },
+                description: "Institution id, e.g. INS0001",
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published, unexpired offers",
+          description: "Published offers that have not expired, newest first. No credentials required.",
+          operationId: "listPublicOffersById",
+          security: [],
+          responses: {
+            "200": {
+              description: "Published offers for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicOffersResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
       [slugPath]: {
       ...(options.slug
         ? {}
@@ -643,6 +711,74 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               },
             },
             ...errorResponses(["VALIDATION_ERROR", "NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${slugPath}/scholarships`]: {
+      ...(options.slug
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "slug",
+                in: "path",
+                required: true,
+                description: "The institution's public slug, from its profile URL.",
+                schema: { type: "string", example: "infinity-school-mysore" },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published scholarships, by slug",
+          description: "Published scholarships, newest first. No credentials required.",
+          operationId: "listPublicScholarshipsBySlug",
+          security: [],
+          responses: {
+            "200": {
+              description: "Published scholarships for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicScholarshipsResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${slugPath}/offers`]: {
+      ...(options.slug
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "slug",
+                in: "path",
+                required: true,
+                description: "The institution's public slug, from its profile URL.",
+                schema: { type: "string", example: "infinity-school-mysore" },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's published, unexpired offers, by slug",
+          description: "Published offers that have not expired, newest first. No credentials required.",
+          operationId: "listPublicOffersBySlug",
+          security: [],
+          responses: {
+            "200": {
+              description: "Published offers for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicOffersResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
           },
         },
       },
@@ -1312,6 +1448,54 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
               },
             },
             publishedAt: { type: "string", format: "date-time" },
+          },
+        },
+
+        PublicScholarshipsResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            scholarships: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PublicScholarship" },
+            },
+          },
+        },
+
+        PublicScholarship: {
+          type: "object",
+          properties: {
+            name: { type: "string", example: "Merit Scholarship" },
+            criteria: { type: "string", example: "Above 90% in the previous board exam" },
+            amount: { type: "string", example: "₹10,000" },
+            classOrCourse: { type: "string", example: "Grade 10" },
+            publishedAt: { type: "string" },
+          },
+        },
+
+        PublicOffersResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            offers: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PublicOffer" },
+            },
+          },
+        },
+
+        PublicOffer: {
+          type: "object",
+          properties: {
+            title: { type: "string", example: "Early Bird Discount" },
+            description: { type: "string", example: "10% off tuition for applications submitted before March 31" },
+            kind: { type: "string", enum: ["PERCENTAGE", "FLAT"], example: "PERCENTAGE" },
+            value: { type: "number", example: 10 },
+            code: { type: "string", example: "EARLYBIRD10" },
+            classOrCourse: { type: "string", example: "Grade 10" },
+            validFrom: { type: "string" },
+            validUntil: { type: "string" },
+            publishedAt: { type: "string" },
           },
         },
 

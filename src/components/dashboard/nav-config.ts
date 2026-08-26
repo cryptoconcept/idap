@@ -1,4 +1,5 @@
 import {
+  Award,
   Building2,
   FileText,
   GraduationCap,
@@ -9,6 +10,7 @@ import {
   Plug,
   Receipt,
   Settings,
+  Ticket,
   Users,
 } from "lucide-react";
 
@@ -51,6 +53,8 @@ const INSTITUTION_NAV: NavGroup[] = [
       { href: "/settings", label: "Settings", icon: Settings, adminOnly: true },
       { href: "/academic-structure", label: "Academic Structure", icon: ListTree, adminOnly: true },
       { href: "/fees", label: "Fees", icon: Receipt, adminOnly: true },
+      { href: "/scholarships", label: "Scholarships", icon: Award, prefix: true, adminOnly: true },
+      { href: "/offers", label: "Offers", icon: Ticket, prefix: true, adminOnly: true },
     ],
   },
 ];
