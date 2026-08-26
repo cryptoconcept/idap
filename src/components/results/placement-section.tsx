@@ -134,8 +134,10 @@ export function PlacementSection({ result, onSave, onDirtyChange }: ResultSectio
               <li key={index} className="space-y-2 rounded-lg border border-border p-3">
                 <div className="flex items-start justify-between gap-2">
                   <p className="eyebrow">Recruiter {index + 1}</p>
-                  <button
+                  <Button
                     type="button"
+                    variant="ghost"
+                    size="icon-sm"
                     aria-label={`Remove recruiter ${index + 1}`}
                     onClick={() =>
                       setValue(
@@ -146,9 +148,9 @@ export function PlacementSection({ result, onSave, onDirtyChange }: ResultSectio
                     }
                   >
                     <X className="size-3.5" />
-                  </button>
+                  </Button>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_140px_90px]">
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_140px_90px_90px]">
                   <TextField
                     id={`recruiter-${index}-name`}
                     label="Name"
@@ -161,9 +163,11 @@ export function PlacementSection({ result, onSave, onDirtyChange }: ResultSectio
                     label="Category"
                     value={watch(`placement.recruiters.${index}.category`) ?? ""}
                     onChange={(value) =>
-                      setValue(`placement.recruiters.${index}.category`, value as never, {
-                        shouldDirty: true,
-                      })
+                      setValue(
+                        `placement.recruiters.${index}.category`,
+                        value as RecruiterCategory | undefined,
+                        { shouldDirty: true },
+                      )
                     }
                     options={RECRUITER_CATEGORIES.map((code) => ({
                       value: code,
@@ -178,6 +182,17 @@ export function PlacementSection({ result, onSave, onDirtyChange }: ResultSectio
                     inputMode="numeric"
                     error={errors.placement?.recruiters?.[index]?.selected?.message}
                     {...register(`placement.recruiters.${index}.selected`, { setValueAs: asNumber })}
+                  />
+                  <TextField
+                    id={`recruiter-${index}-averagePackage`}
+                    label="Package (₹ LPA)"
+                    type="number"
+                    step="any"
+                    inputMode="decimal"
+                    error={errors.placement?.recruiters?.[index]?.averagePackage?.message}
+                    {...register(`placement.recruiters.${index}.averagePackage`, {
+                      setValueAs: asNumber,
+                    })}
                   />
                 </div>
                 <label className="flex items-center gap-2 text-xs">
