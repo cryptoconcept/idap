@@ -669,6 +669,12 @@ function mergeSelections(
 
   return incoming.map((selection) => {
     const match = byCode.get(selection.examCode);
+    // Claimed once, same as mergeToppers/mergeCombinations: two incoming rows
+    // must not both inherit one stored selection's toppers. Inert today only
+    // because assertResultInvariants already rejects a patch with a duplicate
+    // examCode before this merge result is ever written — kept for the same
+    // reason its siblings have it, not because it is currently reachable.
+    if (match) byCode.delete(selection.examCode);
     return {
       ...selection,
       toppers: selection.toppers

@@ -409,6 +409,40 @@ describe("combinations, placement and selections", () => {
     expect(updated.selections?.[0]?.qualified).toBe(25);
   });
 
+  it("a selection's toppers survive a patch that edits an unrelated field on that same selection", async () => {
+    const created = await ResultService.create(
+      "INS0001",
+      {
+        ...cycle,
+        selections: [
+          { examCode: "KCET", qualified: 20, toppers: [{ name: "Priya S", percentage: 98.6 }] },
+        ],
+      },
+      actor,
+    );
+
+    const topperId = created.selections?.[0]?.toppers?.[0]?.id;
+    expect(topperId).toBeDefined();
+
+    const updated = await ResultService.update(
+      "INS0001",
+      created.id,
+      {
+        selections: [
+          {
+            examCode: "KCET",
+            qualified: 25,
+            toppers: [{ id: topperId, name: "Priya S", percentage: 98.6 }],
+          },
+        ],
+      },
+      actor,
+    );
+
+    expect(updated.selections?.[0]?.qualified).toBe(25);
+    expect(updated.selections?.[0]?.toppers?.[0]?.id).toBe(topperId);
+  });
+
   it("a combination named by an id matching nothing on this result is created fresh", async () => {
     const created = await ResultService.create(
       "INS0001",
