@@ -32,6 +32,10 @@ export type ResultDTO = {
   passPercentage: number | null;
   averageScore?: number;
   highestScore?: number;
+  distinction?: number;
+  firstClass?: number;
+  boys?: { appeared?: number; passed?: number };
+  girls?: { appeared?: number; passed?: number };
   bands?: { label: string; minPercentage: number; maxPercentage: number; count: number }[];
   toppers?: {
     id: string;
@@ -41,6 +45,42 @@ export type ResultDTO = {
     note?: string;
     photoUrl?: string;
     consentAcknowledged: boolean;
+  }[];
+  combinations?: {
+    id: string;
+    academicUnitId?: string;
+    label: string;
+    appeared?: number;
+    passed?: number;
+    distinction?: number;
+    firstClass?: number;
+    highestScore?: number;
+    averageScore?: number;
+    grades?: Record<string, number>;
+    boys?: { appeared?: number; passed?: number };
+    girls?: { appeared?: number; passed?: number };
+    toppers?: ResultDTO["toppers"];
+  }[];
+  placement?: {
+    eligible?: number;
+    placed?: number;
+    highestPackage?: number;
+    averagePackage?: number;
+    recruiters?: {
+      name: string;
+      category?: string;
+      selected?: number;
+      averagePackage?: number;
+      tieUp: boolean;
+      roles?: string[];
+    }[];
+  };
+  selections?: {
+    examCode: string;
+    appeared?: number;
+    qualified?: number;
+    bestRank?: number;
+    toppers?: ResultDTO["toppers"];
   }[];
   status: string;
   publishedAt?: string;
@@ -54,6 +94,22 @@ export type ResultDTO = {
 function toObjectId(resultId: string): Types.ObjectId {
   if (!Types.ObjectId.isValid(resultId)) throw notFound("Result not found");
   return new Types.ObjectId(resultId);
+}
+
+type ExistingTopperDoc = NonNullable<ResultDoc["toppers"]>[number];
+
+function serializeToppers(toppers: ExistingTopperDoc[] | null | undefined): ResultDTO["toppers"] {
+  return toppers?.length
+    ? toppers.map((topper) => ({
+        id: String(topper._id),
+        name: topper.name,
+        percentage: topper.percentage,
+        rank: topper.rank ?? undefined,
+        note: topper.note ?? undefined,
+        photoUrl: topper.photoUrl ?? undefined,
+        consentAcknowledged: topper.consentAcknowledged === true,
+      }))
+    : undefined;
 }
 
 function serialize(row: ResultDoc): ResultDTO {
@@ -73,6 +129,14 @@ function serialize(row: ResultDoc): ResultDTO {
     passPercentage: appeared > 0 ? Math.round((passed / appeared) * 1000) / 10 : null,
     averageScore: row.averageScore ?? undefined,
     highestScore: row.highestScore ?? undefined,
+    distinction: row.distinction ?? undefined,
+    firstClass: row.firstClass ?? undefined,
+    boys: row.boys
+      ? { appeared: row.boys.appeared ?? undefined, passed: row.boys.passed ?? undefined }
+      : undefined,
+    girls: row.girls
+      ? { appeared: row.girls.appeared ?? undefined, passed: row.girls.passed ?? undefined }
+      : undefined,
     bands: row.bands?.length
       ? row.bands.map((band) => ({
           label: band.label,
@@ -81,15 +145,57 @@ function serialize(row: ResultDoc): ResultDTO {
           count: band.count,
         }))
       : undefined,
-    toppers: row.toppers?.length
-      ? row.toppers.map((topper) => ({
-          id: String(topper._id),
-          name: topper.name,
-          percentage: topper.percentage,
-          rank: topper.rank ?? undefined,
-          note: topper.note ?? undefined,
-          photoUrl: topper.photoUrl ?? undefined,
-          consentAcknowledged: topper.consentAcknowledged === true,
+    toppers: serializeToppers(row.toppers),
+    combinations: row.combinations?.length
+      ? row.combinations.map((combination) => ({
+          id: String(combination._id),
+          academicUnitId: combination.academicUnitId
+            ? String(combination.academicUnitId)
+            : undefined,
+          label: combination.label,
+          appeared: combination.appeared ?? undefined,
+          passed: combination.passed ?? undefined,
+          distinction: combination.distinction ?? undefined,
+          firstClass: combination.firstClass ?? undefined,
+          highestScore: combination.highestScore ?? undefined,
+          averageScore: combination.averageScore ?? undefined,
+          grades: combination.grades
+            ? (combination.grades as unknown as Record<string, number>)
+            : undefined,
+          boys: combination.boys
+            ? { appeared: combination.boys.appeared ?? undefined, passed: combination.boys.passed ?? undefined }
+            : undefined,
+          girls: combination.girls
+            ? { appeared: combination.girls.appeared ?? undefined, passed: combination.girls.passed ?? undefined }
+            : undefined,
+          toppers: serializeToppers(combination.toppers),
+        }))
+      : undefined,
+    placement: row.placement
+      ? {
+          eligible: row.placement.eligible ?? undefined,
+          placed: row.placement.placed ?? undefined,
+          highestPackage: row.placement.highestPackage ?? undefined,
+          averagePackage: row.placement.averagePackage ?? undefined,
+          recruiters: row.placement.recruiters?.length
+            ? row.placement.recruiters.map((recruiter) => ({
+                name: recruiter.name,
+                category: recruiter.category ?? undefined,
+                selected: recruiter.selected ?? undefined,
+                averagePackage: recruiter.averagePackage ?? undefined,
+                tieUp: recruiter.tieUp === true,
+                roles: recruiter.roles?.length ? recruiter.roles : undefined,
+              }))
+            : undefined,
+        }
+      : undefined,
+    selections: row.selections?.length
+      ? row.selections.map((selection) => ({
+          examCode: selection.examCode,
+          appeared: selection.appeared ?? undefined,
+          qualified: selection.qualified ?? undefined,
+          bestRank: selection.bestRank ?? undefined,
+          toppers: serializeToppers(selection.toppers),
         }))
       : undefined,
     status: row.status,
@@ -200,8 +306,15 @@ export const ResultService = {
       boardName: input.boardName,
       appeared: input.appeared,
       passed: input.passed,
+      distinction: input.distinction,
+      firstClass: input.firstClass,
+      boys: input.boys,
+      girls: input.girls,
       bands: input.bands,
       toppers: input.toppers,
+      combinations: input.combinations,
+      placement: input.placement,
+      selections: input.selections,
     });
 
     // Duplicate cycles are refused by the unique index rather than a pre-read:
@@ -237,6 +350,12 @@ export const ResultService = {
     // addresses it by, and the `photoUrl` that endpoint wrote. Rows naming an
     // existing topper carry both across; everything else comes from the patch.
     const toppers = patch.toppers ? mergeToppers(patch.toppers, before.toppers) : undefined;
+    const combinations = patch.combinations
+      ? mergeCombinations(patch.combinations, before.combinations)
+      : undefined;
+    const selections = patch.selections
+      ? mergeSelections(patch.selections, before.selections)
+      : undefined;
 
     // Invariants hold against the MERGED record: a patch carrying only `passed`
     // must still be checked against the stored `appeared`. Toppers are checked
@@ -247,13 +366,25 @@ export const ResultService = {
       boardName: merged.boardName,
       appeared: merged.appeared ?? 0,
       passed: merged.passed ?? 0,
+      distinction: merged.distinction,
+      firstClass: merged.firstClass,
+      boys: merged.boys,
+      girls: merged.girls,
       bands: merged.bands,
       toppers: toppers ?? merged.toppers,
+      combinations: combinations ?? merged.combinations,
+      placement: merged.placement,
+      selections: selections ?? merged.selections,
     });
+
+    const setPatch: Record<string, unknown> = { ...set };
+    if (toppers) setPatch.toppers = toppers;
+    if (combinations) setPatch.combinations = combinations;
+    if (selections) setPatch.selections = selections;
 
     const updated = await Result.findOneAndUpdate(
       { _id: before._id, institutionId },
-      { $set: toppers ? { ...set, toppers } : set },
+      { $set: setPatch },
       { new: true },
     ).lean<ResultDoc>();
     if (!updated) throw notFound("Result not found");
@@ -477,6 +608,73 @@ function mergeToppers(
     return match.photoUrl
       ? { ...fields, _id: match._id, photoUrl: match.photoUrl }
       : { ...fields, _id: match._id };
+  });
+}
+
+type ExistingCombination = NonNullable<ResultDoc["combinations"]>[number];
+type IncomingCombination = NonNullable<UpdateInput["combinations"]>[number];
+// Omits BOTH "id" (replaced by "_id") and "toppers" (replaced by the MERGED
+// toppers below) — unlike the original MergedTopper, which never needed a
+// second omission because a topper does not itself nest another toppers
+// array. Omitting only "id" here would leave the UN-merged toppers type still
+// present via the Omit, intersected against the merged one below — an
+// ambiguous type, not the type this function actually returns.
+type MergedCombination = Omit<IncomingCombination, "id" | "toppers"> & {
+  _id?: ExistingCombination["_id"];
+  toppers?: MergedTopper[];
+};
+
+/**
+ * The same identity problem `mergeToppers` solves, one level up: a combination
+ * nests toppers, so replacing the array wholesale on an edit as small as a
+ * corrected label would mint a fresh combination subdocument and, with it,
+ * fresh toppers — dropping every photograph underneath. A row naming an
+ * existing combination by `id` keeps that combination's `_id`; its own
+ * `toppers` field is then merged again, by the SAME `mergeToppers` used at the
+ * top level, against whatever that specific combination already had.
+ */
+function mergeCombinations(
+  incoming: IncomingCombination[],
+  existing: ResultDoc["combinations"],
+): MergedCombination[] {
+  const byId = new Map((existing ?? []).map((row) => [String(row._id), row]));
+
+  return incoming.map(({ id, toppers, ...fields }) => {
+    const match = id ? byId.get(id) : undefined;
+    if (!match) return { ...fields, toppers: toppers ? mergeToppers(toppers, undefined) : undefined };
+    byId.delete(id as string);
+    return {
+      ...fields,
+      _id: match._id,
+      toppers: toppers ? mergeToppers(toppers, match.toppers) : undefined,
+    };
+  });
+}
+
+type IncomingSelection = NonNullable<UpdateInput["selections"]>[number];
+// Same reasoning as MergedCombination above: "toppers" is omitted from the
+// source type before being replaced, not merely added alongside it.
+type MergedSelection = Omit<IncomingSelection, "toppers"> & { toppers?: MergedTopper[] };
+
+/**
+ * Matched by `examCode`, not a synthetic id — an exam code is a stable enum
+ * value, never edited into a typo the way a combination's free-text label can
+ * be, so no separate handle is needed for it to serve as identity.
+ */
+function mergeSelections(
+  incoming: IncomingSelection[],
+  existing: ResultDoc["selections"],
+): MergedSelection[] {
+  const byCode = new Map((existing ?? []).map((row) => [row.examCode, row]));
+
+  return incoming.map((selection) => {
+    const match = byCode.get(selection.examCode);
+    return {
+      ...selection,
+      toppers: selection.toppers
+        ? mergeToppers(selection.toppers, match?.toppers)
+        : undefined,
+    };
   });
 }
 
