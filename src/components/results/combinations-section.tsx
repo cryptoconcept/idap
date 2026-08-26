@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { z } from "zod";
@@ -89,6 +89,52 @@ export function CombinationsSection({
     keyName: "_key",
   });
 
+  /**
+   * A combination's toppers are a hand-managed array (via `watch`/`setValue`
+   * below), not a nested `useFieldArray` — calling `useFieldArray` again
+   * inside `fields.map()` below would be a conditional hook call, varying
+   * with `fields.length`, which the Rules of Hooks forbid. That leaves this
+   * array's rows with no identity of their own to key React's reconciliation
+   * on, unlike the outer `combinations` array (which gets one for free via
+   * `useFieldArray`'s own `_key`).
+   *
+   * Without a stable key, React reuses a row's DOM/state by POSITION: remove
+   * combination-topper #1 while #2's `TopperPhoto` upload is in flight, and
+   * the in-flight state silently reattaches to whatever now sits at index 1
+   * — the wrong topper. This map holds one generated key per topper row,
+   * scoped per combination by that combination's own stable `_key`, spliced
+   * in lockstep with every add/remove this section performs. It is read only
+   * for React's `key` prop — never sent to the server, never part of
+   * react-hook-form's own state.
+   */
+  const topperKeysByCombination = useRef<Map<string, string[]>>(new Map());
+  const nextTopperKeySeq = useRef(0);
+
+  /** Lazily seeds (or re-seeds, e.g. after a post-save `reset`) a combination's key list to match its current topper count. */
+  function ensureTopperKeys(combinationKey: string, count: number): string[] {
+    const existing = topperKeysByCombination.current.get(combinationKey);
+    if (existing && existing.length === count) return existing;
+    const seeded = Array.from({ length: count }, () => `t${nextTopperKeySeq.current++}`);
+    topperKeysByCombination.current.set(combinationKey, seeded);
+    return seeded;
+  }
+
+  function addTopperKey(combinationKey: string) {
+    const keys = topperKeysByCombination.current.get(combinationKey) ?? [];
+    topperKeysByCombination.current.set(combinationKey, [
+      ...keys,
+      `t${nextTopperKeySeq.current++}`,
+    ]);
+  }
+
+  function removeTopperKey(combinationKey: string, topperIndex: number) {
+    const keys = topperKeysByCombination.current.get(combinationKey) ?? [];
+    topperKeysByCombination.current.set(
+      combinationKey,
+      keys.filter((_, i) => i !== topperIndex),
+    );
+  }
+
   useEffect(() => {
     onDirtyChange(isDirty);
   }, [isDirty, onDirtyChange]);
@@ -128,7 +174,10 @@ export function CombinationsSection({
                       variant="ghost"
                       size="icon-sm"
                       aria-label={`Remove combination ${index + 1}`}
-                      onClick={() => remove(index)}
+                      onClick={() => {
+                        topperKeysByCombination.current.delete(entry._key);
+                        remove(index);
+                      }}
                     >
                       <X className="size-3.5" />
                     </Button>
@@ -289,85 +338,117 @@ export function CombinationsSection({
                     <p className="text-xs font-medium text-muted-foreground">
                       Toppers within {watch(`combinations.${index}.label`) || "this combination"}
                     </p>
-                    {(watch(`combinations.${index}.toppers`) ?? []).map((_topperRow, topperIndex) => {
-                      const savedTopper = saved?.toppers?.[topperIndex];
-                      return (
-                        <div
-                          key={topperIndex}
-                          className="space-y-2 rounded-md border border-border/70 p-2.5"
-                        >
-                          <input
-                            type="hidden"
-                            {...register(`combinations.${index}.toppers.${topperIndex}.id`)}
-                          />
-                          <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_90px_auto]">
-                            <TextField
-                              id={`combinations-${index}-topper-${topperIndex}-name`}
-                              label="Name"
-                              maxLength={120}
-                              error={
-                                errors.combinations?.[index]?.toppers?.[topperIndex]?.name?.message
-                              }
-                              {...register(`combinations.${index}.toppers.${topperIndex}.name`)}
+                    {(() => {
+                      const toppersField = watch(`combinations.${index}.toppers`) ?? [];
+                      const rowKeys = ensureTopperKeys(entry._key, toppersField.length);
+                      return toppersField.map((_topperRow, topperIndex) => {
+                        const savedTopper = saved?.toppers?.[topperIndex];
+                        return (
+                          <div
+                            key={rowKeys[topperIndex] ?? `${entry._key}-${topperIndex}`}
+                            className="space-y-2 rounded-md border border-border/70 p-2.5"
+                          >
+                            <input
+                              type="hidden"
+                              {...register(`combinations.${index}.toppers.${topperIndex}.id`)}
                             />
+                            <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_90px_70px_auto]">
+                              <TextField
+                                id={`combinations-${index}-topper-${topperIndex}-name`}
+                                label="Name"
+                                maxLength={120}
+                                error={
+                                  errors.combinations?.[index]?.toppers?.[topperIndex]?.name
+                                    ?.message
+                                }
+                                {...register(`combinations.${index}.toppers.${topperIndex}.name`)}
+                              />
+                              <TextField
+                                id={`combinations-${index}-topper-${topperIndex}-percentage`}
+                                label="Score %"
+                                type="number"
+                                step="any"
+                                inputMode="decimal"
+                                error={
+                                  errors.combinations?.[index]?.toppers?.[topperIndex]?.percentage
+                                    ?.message
+                                }
+                                {...register(
+                                  `combinations.${index}.toppers.${topperIndex}.percentage`,
+                                  { setValueAs: asNumber },
+                                )}
+                              />
+                              <TextField
+                                id={`combinations-${index}-topper-${topperIndex}-rank`}
+                                label="Rank"
+                                type="number"
+                                inputMode="numeric"
+                                error={
+                                  errors.combinations?.[index]?.toppers?.[topperIndex]?.rank
+                                    ?.message
+                                }
+                                {...register(`combinations.${index}.toppers.${topperIndex}.rank`, {
+                                  setValueAs: asNumber,
+                                })}
+                              />
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                className="mt-5"
+                                aria-label="Remove this topper"
+                                onClick={() => {
+                                  const current = watch(`combinations.${index}.toppers`) ?? [];
+                                  setValue(
+                                    `combinations.${index}.toppers`,
+                                    current.filter((_, i) => i !== topperIndex),
+                                    { shouldDirty: true },
+                                  );
+                                  removeTopperKey(entry._key, topperIndex);
+                                }}
+                              >
+                                <X className="size-3.5" />
+                              </Button>
+                            </div>
                             <TextField
-                              id={`combinations-${index}-topper-${topperIndex}-percentage`}
-                              label="Score %"
-                              type="number"
-                              step="any"
-                              inputMode="decimal"
+                              id={`combinations-${index}-topper-${topperIndex}-note`}
+                              label="Note"
+                              placeholder="School topper, district rank 3"
+                              maxLength={200}
                               error={
-                                errors.combinations?.[index]?.toppers?.[topperIndex]?.percentage
+                                errors.combinations?.[index]?.toppers?.[topperIndex]?.note
                                   ?.message
                               }
-                              {...register(
-                                `combinations.${index}.toppers.${topperIndex}.percentage`,
-                                { setValueAs: asNumber },
-                              )}
+                              {...register(`combinations.${index}.toppers.${topperIndex}.note`)}
                             />
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon-sm"
-                              className="mt-5"
-                              aria-label="Remove this topper"
-                              onClick={() => {
-                                const current = watch(`combinations.${index}.toppers`) ?? [];
-                                setValue(
-                                  `combinations.${index}.toppers`,
-                                  current.filter((_, i) => i !== topperIndex),
-                                  { shouldDirty: true },
-                                );
-                              }}
-                            >
-                              <X className="size-3.5" />
-                            </Button>
+                            <label className="flex items-start gap-2 text-xs">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5"
+                                {...register(
+                                  `combinations.${index}.toppers.${topperIndex}.consentAcknowledged`,
+                                )}
+                              />
+                              <span>
+                                We hold consent to publish this student&apos;s photograph.
+                              </span>
+                            </label>
+                            {savedTopper ? (
+                              <TopperPhoto
+                                resultId={result.id}
+                                topper={savedTopper}
+                                onResult={() => {}}
+                                position={topperIndex + 1}
+                              />
+                            ) : (
+                              <p className="text-xs text-muted-foreground">
+                                Save this section to add a photo.
+                              </p>
+                            )}
                           </div>
-                          <label className="flex items-start gap-2 text-xs">
-                            <input
-                              type="checkbox"
-                              className="mt-0.5"
-                              {...register(
-                                `combinations.${index}.toppers.${topperIndex}.consentAcknowledged`,
-                              )}
-                            />
-                            <span>We hold consent to publish this student&apos;s photograph.</span>
-                          </label>
-                          {savedTopper ? (
-                            <TopperPhoto
-                              resultId={result.id}
-                              topper={savedTopper}
-                              onResult={() => {}}
-                              position={topperIndex + 1}
-                            />
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              Save this section to add a photo.
-                            </p>
-                          )}
-                        </div>
-                      );
-                    })}
+                        );
+                      });
+                    })()}
                     <Button
                       type="button"
                       variant="outline"
@@ -379,10 +460,17 @@ export function CombinationsSection({
                           `combinations.${index}.toppers`,
                           [
                             ...current,
-                            { name: "", percentage: undefined as unknown as number, note: "", consentAcknowledged: false },
+                            {
+                              name: "",
+                              percentage: undefined as unknown as number,
+                              rank: undefined,
+                              note: "",
+                              consentAcknowledged: false,
+                            },
                           ],
                           { shouldDirty: true },
                         );
+                        addTopperKey(entry._key);
                       }}
                     >
                       <Plus className="size-3.5" />
