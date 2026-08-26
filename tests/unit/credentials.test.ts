@@ -28,9 +28,19 @@ describe("credential vault", () => {
 
   it("refuses a tampered ciphertext rather than returning garbage", () => {
     const blob = encryptCredential("secret");
-    const parts = blob.split(".");
-    parts[1] = Buffer.from("tampered-ciphertext!").toString("base64");
-    expect(() => decryptCredential(parts.join("."))).toThrow();
+    const [iv, ciphertext, tag] = blob.split(".");
+
+    // Flip one bit in the ciphertext, preserving its LENGTH and leaving the
+    // IV and auth tag untouched and well-formed. That matters: replacing the
+    // ciphertext wholesale — or dropping the tag — makes GCM's final() throw
+    // for a structural reason, so the test would pass even if setAuthTag()
+    // were never called and nothing were authenticated at all. With the tag
+    // still valid-shaped and set, a tag MISMATCH is the only thing left that
+    // can reject this.
+    const bytes = Buffer.from(ciphertext, "base64");
+    bytes[0] ^= 0x01;
+
+    expect(() => decryptCredential([iv, bytes.toString("base64"), tag].join("."))).toThrow();
   });
 
   it("reports not-ready (and never throws) when the env key is absent", () => {
