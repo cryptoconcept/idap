@@ -25,7 +25,11 @@ import { toPublicProfile, type PublicProfile } from "@/lib/profile/public-projec
 import type { DerivedOfferings } from "@/lib/academic/offerings";
 import { AcademicStructureService } from "./academic-structure.service";
 import type { z } from "zod";
-import { mediaUploadSchema, videoLinkSchema } from "@/lib/validation/institution";
+import {
+  mediaDocumentKindSchema,
+  mediaUploadSchema,
+  videoLinkSchema,
+} from "@/lib/validation/institution";
 import type {
   createInstitutionSchema,
   mediaItemPatchSchema,
@@ -581,9 +585,13 @@ export const InstitutionService = {
     },
     actor: { id: string; name: string },
   ): Promise<ProfileDTO> {
+    // Re-validated against the document-only enum, not `mediaUploadSchema`'s
+    // wider one (which also allows `IMAGE`) — this is the runtime check that
+    // holds this method to its declared `"BROCHURE" | "PROSPECTUS"` contract
+    // for every caller, not only the ones TypeScript happens to check.
+    const kind = mediaDocumentKindSchema.parse(input.kind);
     const parsed = mediaUploadSchema.parse({
       target: "MEDIA",
-      kind: input.kind,
       title: input.title,
       caption: input.caption,
     });
@@ -603,8 +611,6 @@ export const InstitutionService = {
     await connectToDatabase();
     const before = await Institution.findOne({ institutionId }).select("_id media").lean();
     if (!before) throw notFound("Institution not found");
-
-    const kind = input.kind;
 
     // Never derived from the client-supplied filename.
     const objectId = new Types.ObjectId();

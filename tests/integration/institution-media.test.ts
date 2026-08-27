@@ -71,6 +71,41 @@ describe("institution media service — documents and video links", () => {
       expect(row!.media ?? []).toHaveLength(0);
     });
 
+    // Task 5's review flagged that this method's own runtime check —
+    // `mediaUploadSchema.parse({ kind: input.kind, ... })` — validated
+    // against a `kind` enum that also allows `IMAGE`, wider than this
+    // method's declared `"BROCHURE" | "PROSPECTUS"` type. Nothing called it
+    // at the time, so TypeScript alone kept bad values out; Task 6 wires an
+    // HTTP route in front of it, where form data arrives as untyped strings
+    // and a route-level guard is the only thing standing between an
+    // out-of-contract `kind` and the `kind === "BROCHURE" ? "brochures" :
+    // "prospectuses"` ternary silently mislabeling the storage key and
+    // activity log. The route now narrows `kind` before ever calling this
+    // method — but this test proves the fix is in the method's own contract
+    // check (`mediaDocumentKindSchema`, narrower than `mediaUploadSchema`),
+    // not merely in that one call site, so any future caller is held to it
+    // too. `as never` simulates a caller that bypasses TypeScript's own
+    // narrowing, exactly as untyped form data would.
+    it("refuses an out-of-contract kind rather than misfiling it, and stores nothing", async () => {
+      await makeInstitution("INS0001");
+
+      await expect(
+        InstitutionService.addMediaDocument(
+          "INS0001",
+          {
+            kind: "IMAGE" as never,
+            fileName: "brochure.pdf",
+            contentType: "application/pdf",
+            bytes: PDF,
+          },
+          ACTOR,
+        ),
+      ).rejects.toThrow();
+
+      const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
+      expect(row!.media ?? []).toHaveLength(0);
+    });
+
     it("refuses a PDF over MEDIA_MAX_PDF_BYTES and stores nothing", async () => {
       await makeInstitution("INS0001");
 

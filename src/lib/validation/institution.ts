@@ -166,6 +166,18 @@ export const mediaUploadSchema = z.object({
   caption: optionalText(MEDIA_CAPTION_MAX),
 });
 
+/**
+ * `addMediaDocument`'s actual contract — strictly narrower than
+ * `mediaUploadSchema.kind` above, which also allows `IMAGE` because it does
+ * double duty as the multipart route's routing discriminator (image vs.
+ * document). Validating against this schema, not the wider one, is what
+ * stops an out-of-contract `kind` (including the in-enum-but-wrong `IMAGE`)
+ * from reaching the PDF path, where `kind === "BROCHURE" ? "brochures" :
+ * "prospectuses"` would otherwise silently mislabel the storage key and the
+ * activity log instead of failing loudly.
+ */
+export const mediaDocumentKindSchema = z.enum(["BROCHURE", "PROSPECTUS"]);
+
 export const mediaItemPatchSchema = z.object({
   title: optionalText(120),
   caption: optionalText(MEDIA_CAPTION_MAX),

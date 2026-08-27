@@ -11,7 +11,17 @@ export const dynamic = "force-dynamic";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Multipart image upload (logo, cover, or a media item) for the institution admin's own profile. */
+/**
+ * Multipart upload for the institution admin's own profile: an image (logo,
+ * cover, or a MEDIA gallery image) by default, or — when `target=MEDIA` and
+ * `kind` is `BROCHURE`/`PROSPECTUS` — a PDF document.
+ *
+ * `kind` is parsed against `mediaUploadSchema`'s three-value enum (the fourth,
+ * out-of-enum case is a plain 400 from that parse), then the branch below
+ * only forwards to `addMediaDocument` once `kind` has been narrowed to
+ * exactly `"BROCHURE" | "PROSPECTUS"` — `IMAGE` and the `undefined` default
+ * both fall through to the image path, never a cast into the document one.
+ */
 export async function POST(request: NextRequest) {
   try {
     assertSameOrigin(request);
@@ -21,13 +31,32 @@ export async function POST(request: NextRequest) {
     const file = form.get("file");
     if (!(file instanceof File)) throw validationError("file: choose a file to upload");
     if (file.size <= 0) throw validationError("file: the file is empty");
-    if (file.size > MAX_IMAGE_BYTES) throw validationError("file: files must be 5 MB or smaller");
 
     const parsed = mediaUploadSchema.parse({
       target: form.get("target"),
+      kind: form.get("kind") ?? undefined,
       title: form.get("title") ?? undefined,
       caption: form.get("caption") ?? undefined,
     });
+
+    if (parsed.target === "MEDIA" && parsed.kind && parsed.kind !== "IMAGE") {
+      const profile = await InstitutionService.addMediaDocument(
+        institution.institutionId,
+        {
+          kind: parsed.kind,
+          fileName: file.name,
+          contentType: file.type,
+          bytes: Buffer.from(await file.arrayBuffer()),
+          title: parsed.title,
+          caption: parsed.caption,
+        },
+        { id: user.id, name: user.name },
+      );
+
+      return jsonSuccess({ profile });
+    }
+
+    if (file.size > MAX_IMAGE_BYTES) throw validationError("file: files must be 5 MB or smaller");
 
     const profile = await InstitutionService.addMediaImage(
       institution.institutionId,
