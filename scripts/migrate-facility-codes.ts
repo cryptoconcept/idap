@@ -20,8 +20,15 @@
  * The write is scoped by `institutionId` and preconditioned on the exact
  * `facilities` array read from the same document, so a concurrent edit
  * between read and write causes `matchedCount === 0` rather than clobbering
- * whatever the concurrent writer produced — that institution is simply left
- * for a re-run to pick up.
+ * whatever the concurrent writer produced. That race is never silent: it is
+ * reported under `skipped`, forces a non-zero exit alongside `unmapped`, and
+ * — deliberately — the `unmapped` rows already collected for that document
+ * are NOT retracted. They describe what the migration read, which remains
+ * true regardless of whether its own write later lost a race; a re-run
+ * overwrites the whole report anyway, so nothing here needs to be provisional.
+ * That is also why the unmappable-only branch just below (`if (!changed)
+ * continue`) needs no special-casing of its own: both paths already agree —
+ * `unmapped` reports the read, `skipped`/`converted` report the write.
  *
  *   npm run migrate:facility-codes                 # report only
  *   npm run migrate:facility-codes -- --apply      # write
@@ -36,6 +43,7 @@ export type FacilityMigrationReport = {
   scanned: number;
   converted: number;
   unmapped: Array<{ institutionId: string; code: string; label: string }>;
+  skipped: Array<{ institutionId: string; reason: string }>;
 };
 
 interface FacilityRow {
@@ -58,7 +66,7 @@ export async function migrateFacilityCodes({
 }: {
   apply: boolean;
 }): Promise<FacilityMigrationReport> {
-  const report: FacilityMigrationReport = { scanned: 0, converted: 0, unmapped: [] };
+  const report: FacilityMigrationReport = { scanned: 0, converted: 0, unmapped: [], skipped: [] };
 
   // Selects exactly the institutions with at least one facility whose code
   // appears in LEGACY_FACILITY_CODE_MAP or UNMAPPABLE_LEGACY_CODES — an
@@ -75,7 +83,15 @@ export async function migrateFacilityCodes({
 
     let changed = false;
     const nextFacilities = facilities.map((facility) => {
-      const mapped = LEGACY_FACILITY_CODE_MAP[facility.code];
+      // `LEGACY_FACILITY_CODE_MAP` is a plain object literal, so a bare
+      // `MAP[facility.code]` lookup walks the prototype chain: a facility
+      // code of "constructor", "toString", "hasOwnProperty", etc. would
+      // return a truthy *inherited* value and get written into `code`
+      // through the raw driver, which does no casting to catch it.
+      // `Object.hasOwn` restricts the lookup to the map's own keys.
+      const mapped = Object.hasOwn(LEGACY_FACILITY_CODE_MAP, facility.code)
+        ? LEGACY_FACILITY_CODE_MAP[facility.code]
+        : undefined;
       if (mapped) {
         changed = true;
         return { ...facility, code: mapped };
@@ -102,10 +118,14 @@ export async function migrateFacilityCodes({
 
     if (result.matchedCount === 0) {
       report.converted--;
-      // Remove the unmapped entries we just pushed for this institution —
-      // its rows weren't actually left in the reported state we claimed;
-      // a re-run against the current document will report them correctly.
-      report.unmapped = report.unmapped.filter((row) => row.institutionId !== institutionId);
+      // The `unmapped` rows pushed above for this institution are NOT
+      // retracted — see the header comment. The race itself is reported
+      // here, visibly, so a raced run can never look identical to a clean
+      // one: `skipped` forces a non-zero exit alongside `unmapped`.
+      report.skipped.push({
+        institutionId,
+        reason: "facilities changed concurrently — re-run",
+      });
     }
   }
 
@@ -138,13 +158,20 @@ if (isMainModule) {
       }
     }
 
+    if (report.skipped.length > 0) {
+      console.log(`\n${report.skipped.length} institution(s) skipped — needs manual review:`);
+      for (const row of report.skipped) {
+        console.log(`  ${row.institutionId}: ${row.reason}`);
+      }
+    }
+
     if (!APPLY) {
       console.log("\nDry run. Re-run with --apply to write.");
     }
 
     await mongoose.disconnect();
 
-    if (report.unmapped.length > 0) {
+    if (report.unmapped.length > 0 || report.skipped.length > 0) {
       process.exitCode = 1;
     }
   };

@@ -272,9 +272,9 @@ async function main() {
       headDesignation: "Principal",
     },
     facilities: [
-      { code: "LIBRARY", label: "Library", available: true, note: "12,000 titles" },
-      { code: "SCIENCE_LAB", label: "Science Lab", available: true },
-      { code: "TRANSPORT", label: "Transport", available: true, note: "12 routes across Mysore" },
+      { code: "library", label: "Library", available: true, note: "12,000 titles" },
+      { code: "science_lab", label: "Science Lab", available: true },
+      { code: "transport", label: "Transport", available: true, note: "12 routes across Mysore" },
     ],
   });
   await ensureInstitution({
@@ -304,8 +304,8 @@ async function main() {
       headDesignation: "Principal",
     },
     facilities: [
-      { code: "LIBRARY", label: "Library", available: true },
-      { code: "PLAYGROUND", label: "Playground", available: true },
+      { code: "library", label: "Library", available: true },
+      { code: "playground", label: "Playground", available: true },
     ],
   });
 
