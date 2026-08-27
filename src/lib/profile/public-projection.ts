@@ -7,6 +7,8 @@
  * added — a test exists specifically to catch that.
  */
 
+import { toPublicUrl } from "@/lib/media/public-url";
+
 type Doc = Record<string, unknown>;
 
 const text = (value: unknown): string | undefined => {
@@ -147,19 +149,37 @@ export function toPublicProfile(
     social,
 
     // Parity with the pre-rename `gallery` projection: same filter (hidden
-    // items excluded), same sort (by `sortOrder`), same three fields per item
-    // — just under their new names (`imageUrl`→`url`, `description`→`caption`).
-    // Absolute URL resolution, `id`/`kind`/`provider`/`videoId`, and non-image
-    // kinds are Task 7's addition, deliberately not here.
+    // items excluded — MUST stay first, before anything below reads the
+    // array), same sort (by `sortOrder`, then `uploadedAt` to break ties).
+    // Task 7 adds absolute URL resolution and `id`/`kind`/`provider`/`videoId`
+    // so a consuming website can address, categorise and, for videos, embed
+    // each item without a second lookup.
     media: Array.isArray(doc.media)
       ? (doc.media as unknown[])
           .filter((item: unknown) => (item as Record<string, unknown> | undefined)?.status !== "HIDDEN")
-          .sort((a: unknown, b: unknown) => ((a as Record<string, unknown> | undefined)?.sortOrder as number ?? 0) - ((b as Record<string, unknown> | undefined)?.sortOrder as number ?? 0))
-          .map((item: unknown) => ({
-            url: String((item as Record<string, unknown> | undefined)?.url ?? ""),
-            title: text((item as Record<string, unknown> | undefined)?.title),
-            caption: text((item as Record<string, unknown> | undefined)?.caption),
-          }))
+          .sort((a: unknown, b: unknown) => {
+            const left = a as Record<string, unknown> | undefined;
+            const right = b as Record<string, unknown> | undefined;
+            const bySortOrder = (num(left?.sortOrder) ?? 0) - (num(right?.sortOrder) ?? 0);
+            if (bySortOrder !== 0) return bySortOrder;
+            const leftUploaded = left?.uploadedAt ? new Date(left.uploadedAt as string | Date).getTime() : 0;
+            const rightUploaded = right?.uploadedAt ? new Date(right.uploadedAt as string | Date).getTime() : 0;
+            return leftUploaded - rightUploaded;
+          })
+          .map((item: unknown) => {
+            const rec = item as Record<string, unknown> | undefined;
+            const rawUrl = text(rec?.url);
+            return {
+              id: String(rec?._id ?? ""),
+              kind: String(rec?.kind ?? ""),
+              url: rawUrl ? toPublicUrl(rawUrl) : "",
+              title: text(rec?.title),
+              caption: text(rec?.caption),
+              provider: text(rec?.provider),
+              videoId: text(rec?.videoId),
+              sortOrder: num(rec?.sortOrder) ?? 0,
+            };
+          })
       : [],
   };
 }

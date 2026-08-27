@@ -28,9 +28,9 @@ const GOES_PUBLIC: { label: string; detail: string }[] = [
       "Institution ID and slug, name, legal name, short name, type, region code, tagline, description, year established",
   },
   {
-    label: "Images",
+    label: "Media",
     detail:
-      "Logo, cover image, and every media image that is not hidden — with its title and caption",
+      "Logo, cover image, and every photo, video link, brochure and prospectus that is not hidden — with its title, caption and, for videos, its provider",
   },
   {
     label: "Address",

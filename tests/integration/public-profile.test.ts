@@ -162,5 +162,87 @@ describe("public profile API", () => {
     const body = await response.json();
     expect(body.profile.media).toHaveLength(1);
     expect(body.profile.media[0].url).toBe("https://cdn.test/visible.jpg");
+    expect(body.profile.media[0].kind).toBe("IMAGE");
+    expect(typeof body.profile.media[0].id).toBe("string");
+    expect(body.profile.media[0].id.length).toBeGreaterThan(0);
+  });
+
+  // Mutation check (see task-7-report.md): deleting the `status !== "HIDDEN"`
+  // filter in public-projection.ts makes exactly this test fail — the hidden
+  // item's id reappears in the response body.
+  it("MUTATION-DISTINGUISHING: hidden media never leaves the building", async () => {
+    await makeInstitution("INS0001", {
+      slug: "sunrise-academy",
+      profileStatus: "PUBLISHED",
+      media: [
+        { kind: "IMAGE", url: "https://cdn.test/visible.jpg", status: "ACTIVE" },
+        { kind: "IMAGE", url: "https://cdn.test/hidden.jpg", status: "HIDDEN" },
+      ],
+    });
+
+    const response = await callById("INS0001");
+    const body = await response.json();
+    const urls = (body.profile.media as { url: string }[]).map((item) => item.url);
+    expect(urls).not.toContain("https://cdn.test/hidden.jpg");
+  });
+
+  it("resolves a relative stored media key to an absolute URL", async () => {
+    await makeInstitution("INS0001", {
+      slug: "sunrise-academy",
+      profileStatus: "PUBLISHED",
+      media: [
+        { kind: "BROCHURE", url: "/api/media/INS0001/brochure.pdf", status: "ACTIVE" },
+      ],
+    });
+
+    const response = await callById("INS0001");
+    const body = await response.json();
+    expect(body.profile.media[0].url).toBe(
+      "https://admissions.test/api/media/INS0001/brochure.pdf",
+    );
+  });
+
+  it("returns media: [] for a published institution with no media", async () => {
+    await makeInstitution("INS0001", {
+      slug: "sunrise-academy",
+      profileStatus: "PUBLISHED",
+    });
+
+    const response = await callById("INS0001");
+    const body = await response.json();
+    expect(body.profile.media).toEqual([]);
+  });
+
+  it("sorts media by sortOrder, then uploadedAt to break ties, and exposes provider/videoId", async () => {
+    await makeInstitution("INS0001", {
+      slug: "sunrise-academy",
+      profileStatus: "PUBLISHED",
+      media: [
+        {
+          kind: "IMAGE",
+          url: "https://cdn.test/second.jpg",
+          status: "ACTIVE",
+          sortOrder: 1,
+          uploadedAt: new Date("2026-01-02"),
+        },
+        {
+          kind: "VIDEO",
+          url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+          provider: "YOUTUBE",
+          videoId: "dQw4w9WgXcQ",
+          status: "ACTIVE",
+          sortOrder: 1,
+          uploadedAt: new Date("2026-01-01"),
+        },
+      ],
+    });
+
+    const response = await callById("INS0001");
+    const body = await response.json();
+    expect(body.profile.media).toHaveLength(2);
+    expect(body.profile.media[0].kind).toBe("VIDEO");
+    expect(body.profile.media[0].provider).toBe("YOUTUBE");
+    expect(body.profile.media[0].videoId).toBe("dQw4w9WgXcQ");
+    expect(body.profile.media[1].kind).toBe("IMAGE");
   });
 });

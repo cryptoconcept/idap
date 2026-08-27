@@ -1350,12 +1350,27 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                 },
                 media: {
                   type: "array",
+                  description:
+                    "Photos, video links, brochures and prospectuses, in display order. Items with status HIDDEN are never included.",
                   items: {
                     type: "object",
                     properties: {
-                      url: { type: "string", format: "uri" },
+                      id: { type: "string", example: "6a8880f3446c577c470cd06c" },
+                      kind: { type: "string", enum: ["IMAGE", "VIDEO", "BROCHURE", "PROSPECTUS"] },
+                      url: {
+                        type: "string",
+                        format: "uri",
+                        description: "Always absolute, regardless of storage backend.",
+                      },
                       title: { type: "string" },
                       caption: { type: "string" },
+                      provider: {
+                        type: "string",
+                        enum: ["YOUTUBE", "VIMEO"],
+                        description: "Present only when kind is VIDEO.",
+                      },
+                      videoId: { type: "string", description: "Present only when kind is VIDEO." },
+                      sortOrder: { type: "integer" },
                     },
                   },
                 },
