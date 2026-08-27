@@ -54,7 +54,7 @@ export type FeesBasketMedia = {
   externalId: string;
   kind: string;
   url: string;
-  caption?: string;
+  caption: string | null;
 };
 
 /** IDAP's `MediaKind` -> FeesBasket's wire vocabulary is a plain lowercase of
@@ -108,9 +108,17 @@ export function buildMediaPayload(
     // does, so the caller must fix the underlying media before retrying.
     assertExternallyReachable(url);
 
-    const entry: FeesBasketMedia = { externalId, kind: mappedKind, url };
-    if (item.caption) entry.caption = item.caption;
-    out.push(entry);
+    // `caption` is ALWAYS present on the wire object, never omitted, even
+    // when IDAP has no caption for this item. The map's merge rule (§4) is
+    // explicit: "Absent field/section = untouched. Explicit `null` = clear
+    // (nullable fields only)." `caption?: string|null` is nullable, so
+    // omitting the key when an admin clears a previously-set caption would
+    // read as "leave it alone" to FeesBasket — the stale caption would stay
+    // on a public listing forever, with no way for IDAP to retract it.
+    // Always emitting `null` for an item that never had one is harmless (it
+    // clears an already-empty field); the asymmetric alternative — sending
+    // the key only when a caption exists — is the one that loses data.
+    out.push({ externalId, kind: mappedKind, url, caption: item.caption ?? null });
   }
 
   return out;

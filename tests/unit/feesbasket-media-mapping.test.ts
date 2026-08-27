@@ -111,9 +111,18 @@ describe("buildMediaPayload", () => {
     expect(result[0].caption).toBe("The main auditorium, seats 800");
   });
 
-  it("omits caption entirely when the item has none", () => {
+  it("emits caption: null (explicitly present, not an omitted key) when the item has none", () => {
+    // MUTATION-DISTINGUISHING: this is the only thing standing between an
+    // admin clearing a caption and that caption staying stuck on a public
+    // FeesBasket listing forever. The map's merge rule treats an absent key
+    // as "leave it alone" and only an explicit `null` as "clear it" — so
+    // `toEqual`, which treats `{caption: undefined}` and `{}` as equivalent,
+    // would let a regression back to "omit when absent" pass silently. The
+    // `in` check is what actually distinguishes "key present with value
+    // null" from "key missing".
     const item = makeItem({ caption: undefined });
     const result = buildMediaPayload([item], ctx());
-    expect(result[0]).not.toHaveProperty("caption");
+    expect("caption" in result[0]).toBe(true);
+    expect(result[0].caption).toBeNull();
   });
 });
