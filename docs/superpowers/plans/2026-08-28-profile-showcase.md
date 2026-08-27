@@ -740,23 +740,15 @@ git commit -m "feat: expose achievements and alumni on the public profile API"
 
 **Files:**
 - Create: `src/components/profile/sections/achievements-section.tsx`
-- Modify: `src/components/profile/profile-editor.tsx`, `src/components/profile/sections/facilities-section.tsx`, `src/components/profile/section-form.tsx`
+- Modify: `src/components/profile/profile-editor.tsx`, `src/components/profile/sections/facilities-section.tsx`
 - Test: browser verification (Task 13); no new unit tests — the logic lives in Tasks 5, 7 and 8
 
 **Follow `media-section.tsx`** for structure: list, create/edit dialog, asset upload, hide/show, delete behind the confirm-dialog pattern, and add-controls **disabled with a visible reason** when a cap is reached rather than refusing after a file picker.
 
 This task also adds the facilities **unmapped-code notice**: a facility whose code is in `UNMAPPABLE_LEGACY_CODES` renders with a "needs re-picking" marker explaining that the code has no equivalent in the new vocabulary and asking the admin to choose specific ones. Do not auto-convert it in the UI either.
 
-It also carries a second facilities fix. `toFacilityCode` in
-`src/components/profile/section-form.tsx:311` upper-snake-cases a free-text
-label (`"Robotics Lab"` → `"ROBOTICS_LAB"`). That matched the old codes; against
-Task 1's lowercase vocabulary it now mints a custom code in a case no other code
-uses. Change it to lower-snake (`"robotics_lab"`), and update the placeholder at
-`facilities-section.tsx:180` to match. This only affects newly entered custom
-facilities — it is not a data migration, and Task 2's migration deliberately
-does not touch custom codes. The `uppercase: true` setter that used to mask this
-is removed in Task 2, so after that task the value written is whatever this
-function returns.
+`toFacilityCode`'s casing was fixed in Task 1's review round, not here — see the
+ledger's superseding note on Ruling 7.
 
 - [ ] **Step 1: Implement. Step 2: `tsc`/eslint at baseline. Step 3: Commit**
 
