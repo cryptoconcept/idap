@@ -28,7 +28,19 @@ export function NavLinks({
   return (
     <nav className="flex flex-col gap-5">
       {groups.map((group, index) => (
-        <ul key={index} className="flex flex-col gap-0.5">
+        <div key={index} className="flex flex-col gap-1.5">
+          {group.title ? (
+            <h2
+              id={`nav-group-${index}`}
+              className="px-2.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70"
+            >
+              {group.title}
+            </h2>
+          ) : null}
+          <ul
+            className="flex flex-col gap-0.5"
+            aria-labelledby={group.title ? `nav-group-${index}` : undefined}
+          >
           {group.items.map((item) => {
             const active = isActive(item.href, item.prefix);
             return (
@@ -50,7 +62,8 @@ export function NavLinks({
               </li>
             );
           })}
-        </ul>
+          </ul>
+        </div>
       ))}
     </nav>
   );
