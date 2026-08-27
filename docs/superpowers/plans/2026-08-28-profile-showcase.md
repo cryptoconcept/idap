@@ -694,8 +694,8 @@ git commit -m "feat: add alumni routes"
 - Test: `tests/unit/public-projection.test.ts`, `tests/integration/public-profile.test.ts` (extend both)
 
 **Interfaces:**
-- Consumes: `toPublicUrl` from `@/lib/media/public-url`; `AchievementService.list` and `AlumniService.list` (Tasks 5-6).
-- Produces: `achievements` and `alumni` on the public profile payload.
+- Consumes: `toPublicUrl` from `@/lib/media/public-url`; **new** `AchievementService.listPublic` and `AlumniService.listPublic` (see below).
+- Produces: `achievements` and `alumni` on the public profile payload, plus the two `listPublic` methods.
 
 **A structural point the other tasks do not face.** `toPublicProfile(row, offerings)`
 is a projection over the **institution document**, and it is called from
@@ -708,6 +708,22 @@ institution — and pass them into `toPublicProfile` as a third argument, alongs
 the `offerings` argument that already works this way. Widen `toPublicProfile`'s
 signature to match; do not reach into the database from inside the projection,
 which is a pure function over what it is handed and must stay that way.
+
+**Do not reuse the existing `list` methods — they are wrong for this surface on
+two counts, both verified against the shipped code.** Neither
+`AchievementService.list` (`achievement.service.ts:254-260`) nor
+`AlumniService.list` (`alumni.service.ts:117-123`) filters by `status`: both
+return `HIDDEN` records, because the dashboard needs them. And
+`AchievementService.list` sorts `{createdAt: -1}`, not the `eventDate`-first
+order this payload requires; only the alumni sort happens to match.
+
+Add `listPublic(institutionId)` to each service instead, querying
+`{ institutionId, status: "ACTIVE" }` with the public sort — achievements
+`{eventDate: -1, createdAt: -1}`, alumni `{batch: -1, name: 1}`. Filtering at
+the database rather than in memory is deliberate: a projection bug cannot leak
+a record that was never fetched. Keeping the query in the service also matches
+this repo's layering, where services own database access and projections stay
+pure.
 
 Shapes are in spec §10. **Extend the existing tests, do not replace them** — that file already guards the media projection.
 
