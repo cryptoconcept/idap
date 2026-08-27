@@ -352,6 +352,47 @@ Over the limit returns `429 RATE_LIMITED` with `Retry-After`, `X-RateLimit-*` an
 Successful responses deliberately carry no `X-RateLimit-*` headers: they are publicly
 cacheable, and a cached counter would describe the wrong client.
 
+### ⚠ BREAKING CHANGE in this release — `gallery` → `media`
+
+Both public profile routes below (`GET /api/public/:institutionId/profile` and
+`GET /api/public/institutions/:slug`) have **removed** `profile.gallery[]` and
+replaced it with `profile.media[]`. This is a hard breaking change with **no
+transition period and no dual-write** — a consumer that keeps reading the old
+field gets `undefined` back and silently renders nothing. There is no error, no
+warning header, nothing to notice except an empty gallery on a live website.
+
+| Before | After |
+| --- | --- |
+| `profile.gallery[]` | `profile.media[]` |
+| `gallery[].imageUrl` | `media[].url` |
+| `gallery[].description` | `media[].caption` |
+| `gallery[].title` | `media[].title` (unchanged) |
+| — (did not exist) | `media[].id`, `media[].kind` — `"IMAGE"` for every item migrated from `gallery` |
+| — (did not exist) | `media[].sortOrder` |
+| — (did not exist) | `media[].provider`, `media[].videoId` — present only on `kind: "VIDEO"` items, which `gallery` never had |
+
+**What a consumer must change:** read `profile.media[].url` and
+`profile.media[].caption` instead of `profile.gallery[].imageUrl` and
+`profile.gallery[].description`. `title` did not change. If the consumer only
+ever wanted photos, it should now filter on `media[].kind === "IMAGE"` — the
+array also carries videos, brochures and prospectuses, none of which `gallery`
+ever returned.
+
+### Deploy sequence (required) — media is empty until this runs
+
+`npm run migrate:media -- --apply` **must be run immediately after this
+release deploys, before the deployment takes production traffic.** It is a
+manual, one-time step: no build hook, cron job, or startup check runs it for
+you.
+
+Between the deploy landing and that command completing, the public projection
+reads only `doc.media` — it does not fall back to `doc.gallery` — so **any
+institution whose photos are still in the legacy `gallery` field publishes
+`media: []` on both routes below.** Their photos disappear from their own
+website, with no error and no indication anywhere that it is temporary. This
+is expected only if the migration is run right after deploy; there is no
+code-level safeguard that stops someone from skipping or delaying it.
+
 ### `GET /api/public/:institutionId/profile`
 
 ```bash
@@ -427,8 +468,8 @@ Same response shape, same error behaviour, as `GET /api/public/:institutionId/pr
 Pre-dates this phase; kept exactly as it was so no existing integration breaks. Returns a
 much smaller set of fields (name, type, address, phone, email, website, logo, slug) for
 the hosted apply pages and `widget.js`. Prefer the `/profile` endpoint above for anything
-building a richer presentation — it is the one this phase adds and the one the allow-list
-projection is documented against.
+building a richer presentation — it is the one the allow-list projection is documented
+against.
 
 ```bash
 curl https://your-domain.com/api/public/INS0001

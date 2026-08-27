@@ -120,10 +120,31 @@ export async function migrateGalleryToMedia({
       return mediaItem;
     });
 
-    await Institution.collection.updateOne(
-      { _id: doc._id },
+    // The read-time guard above (`existingMedia.length > 0`) only proves
+    // `media` was empty at the moment the cursor read this document — not at
+    // the moment this write executes. A cursor batch's worth of institutions
+    // (driver default 101) can be processed, sequentially, between that read
+    // and this write, and the new upload UI ships to production before this
+    // migration ever runs, so an admin populating `media` in that window is
+    // a real scenario, not a theoretical one. Pushing the same precondition
+    // into the filter makes the database — not a stale in-memory read — the
+    // thing that enforces it: if something raced us, `matchedCount` is 0 and
+    // nothing is overwritten.
+    const result = await Institution.collection.updateOne(
+      {
+        _id: doc._id,
+        $or: [{ media: { $exists: false } }, { media: { $size: 0 } }],
+      },
       { $set: { media }, $unset: { gallery: "" } },
     );
+
+    if (result.matchedCount === 0) {
+      report.migrated--;
+      report.skipped.push({
+        institutionId,
+        reason: "media was written concurrently — re-run",
+      });
+    }
   }
 
   return report;

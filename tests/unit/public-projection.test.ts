@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { toPublicProfile, PublicProfile } from "@/lib/profile/public-projection";
 
 const DOC = {
@@ -174,5 +174,39 @@ describe("public profile projection", () => {
     expect(out.facilities).toEqual([]);
     expect(out.media).toEqual([]);
     expect(out.academic).toBeUndefined();
+  });
+
+  // MUTATION-DISTINGUISHING: pins the deliberate half of the two-guard
+  // asymmetry (I5). `assertExternallyReachable` is called on the FeesBasket
+  // path (`feesbasket-mapping.ts`) but MUST NOT be called here — a localhost
+  // `NEXT_PUBLIC_APP_URL` is IDAP's own default dev configuration
+  // (`src/lib/env.ts`), and this endpoint is IDAP serving its own API to
+  // itself. Every other test in this file resolves against
+  // `tests/helpers/setup.ts`'s fixed `https://admissions.test`, so none of
+  // them would notice if someone "fixed the inconsistency" by adding the
+  // guard here too — this is the one that would fail: it would start
+  // throwing a 400 instead of returning the resolved localhost URL.
+  it("MUTATION-DISTINGUISHING: resolves a relative media url against a localhost APP_URL without throwing", () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "http://localhost:3000");
+    try {
+      const out = toPublicProfile({
+        ...DOC,
+        media: [
+          {
+            _id: "5",
+            kind: "IMAGE",
+            url: "/api/media/INS0001/local.jpg",
+            status: "ACTIVE",
+            sortOrder: 0,
+            uploadedAt: new Date("2026-01-01"),
+          },
+        ],
+      }) as PublicProfile;
+
+      expect(out.media).toHaveLength(1);
+      expect(out.media[0].url).toBe("http://localhost:3000/api/media/INS0001/local.jpg");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

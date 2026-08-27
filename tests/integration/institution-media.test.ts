@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Types } from "mongoose";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { Institution } from "@/models";
@@ -280,6 +281,108 @@ describe("institution media service — documents and video links", () => {
 
       const victim = await Institution.findOne({ institutionId: "INS0002" }).lean();
       expect(victim!.media ?? []).toHaveLength(0);
+    });
+  });
+
+  // I6: `updateMediaItem` and `removeMediaItem` predate the gallery -> media
+  // rename (`patchGalleryItem`/`removeGalleryItem`), and Task 5's tenant
+  // mutation-check sweep (§10) covered `addMediaDocument`/`addMediaVideo`
+  // above but not these two — a rename doesn't read as a "new" method, even
+  // though `updateMediaItem` gained the `$unset` branch in the same branch.
+  describe("updateMediaItem and removeMediaItem — tenant scoping", () => {
+    it("MUTATION-DISTINGUISHING: updateMediaItem never lets one institution's caller alter another institution's media item", async () => {
+      // The realistic attack: media `_id`s are published on the public API
+      // (`public-projection.ts`), so any institution admin can read another
+      // published institution's media id and try it against their own
+      // session. The attacker's own institution genuinely has no media with
+      // this id — only the victim's does.
+      await makeInstitution("INS0001"); // attacker, no media of its own
+      const victimItemId = new Types.ObjectId();
+      await makeInstitution("INS0002", {
+        media: [
+          {
+            _id: victimItemId,
+            kind: "IMAGE",
+            url: "https://cdn.test/victim.jpg",
+            title: "Victim Original",
+            caption: "Do not touch",
+            status: "ACTIVE",
+            sortOrder: 0,
+          },
+        ],
+      });
+
+      await expect(
+        InstitutionService.updateMediaItem(
+          "INS0001",
+          String(victimItemId),
+          { title: "Hacked" },
+          ACTOR,
+        ),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+      // The assertion that actually matters: not just that the call was
+      // refused, but that the victim's item is byte-for-byte unchanged. A
+      // filter missing `institutionId` (`{ "media._id": objectId }` alone)
+      // would still uniquely match INS0002's document — the only one with
+      // that subdocument id — and the update would succeed there instead of
+      // rejecting, silently mutating the wrong institution's data.
+      const victim = await Institution.findOne({ institutionId: "INS0002" }).lean();
+      expect(victim!.media).toHaveLength(1);
+      expect(victim!.media![0]).toMatchObject({
+        title: "Victim Original",
+        caption: "Do not touch",
+      });
+    });
+
+    it("MUTATION-DISTINGUISHING: removeMediaItem's own delete is institution-scoped, not just its pre-read", async () => {
+      // The pre-read at institution.service.ts:840 is itself scoped by
+      // `institutionId`, so it already refuses a cross-tenant mediaId before
+      // the `$pull` below is ever reached — that pre-read is not what this
+      // test is protecting. What has no guard of its own is the `$pull`
+      // call's own filter. Because the pre-read already blocks any attempt
+      // to reach that line with an id belonging to a genuinely different
+      // institution, the only way to inspect what filter the `$pull` itself
+      // uses is to look at the actual call — an empty `{}` filter would
+      // still "succeed" against whatever document MongoDB's unspecified
+      // natural ordering happens to return, which would make a behavioural
+      // reproduction of the bug flaky by construction rather than a real
+      // regression guard.
+      await makeInstitution("INS0001", {
+        media: [
+          {
+            _id: new Types.ObjectId(),
+            kind: "IMAGE",
+            url: "https://cdn.test/own.jpg",
+            status: "ACTIVE",
+            sortOrder: 0,
+          },
+        ],
+      });
+      const ownItemId = String(
+        (await Institution.findOne({ institutionId: "INS0001" }).lean())!.media![0]._id,
+      );
+
+      const spy = vi.spyOn(Institution, "findOneAndUpdate");
+      try {
+        const after = await InstitutionService.removeMediaItem("INS0001", ownItemId, ACTOR);
+
+        // The item was actually removed for the caller's own institution...
+        expect(after.media ?? []).toHaveLength(0);
+        // ...and the exact filter passed to the database — not just the
+        // pre-read above it — carries `institutionId`. This is the assertion
+        // that fails if `institutionId` is stripped from the `$pull`'s own
+        // filter: the mocked call would have been made with `{}` instead.
+        // Checked BEFORE `mockRestore()` below, which clears the recorded
+        // call history as part of restoring the original implementation.
+        expect(spy).toHaveBeenCalledWith(
+          expect.objectContaining({ institutionId: "INS0001" }),
+          expect.anything(),
+          expect.anything(),
+        );
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

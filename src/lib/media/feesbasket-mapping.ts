@@ -1,5 +1,4 @@
 import { assertExternallyReachable, toPublicUrl } from "@/lib/media/public-url";
-import type { MediaKind, MediaStatus } from "@/lib/constants";
 
 /**
  * FeesBasket media mapping — the pure core.
@@ -31,24 +30,23 @@ import type { MediaKind, MediaStatus } from "@/lib/constants";
  * item in the same payload.
  */
 
-/** The shape of one institution media item as stored by IDAP (the Mongoose
- * subdocument fields relevant to this mapping — see `MediaItemSchema` in
- * `src/models/Institution.ts`). `_id` is kept exactly as-is: it becomes
- * `externalId`, the handle FeesBasket uses to address updates and deletes, so
- * a regenerated or synthesised value here would silently orphan remote
- * records. */
-export type MediaItem = {
-  _id: unknown;
-  kind: MediaKind;
-  url: string;
-  title?: string;
-  caption?: string;
-  sortOrder: number;
-  status: MediaStatus;
-  provider?: string;
-  videoId?: string;
-  uploadedAt: unknown;
-};
+/** Permissive by design — see `passpercent-mapping.ts`'s `Rec`, the precedent
+ * spec §8 names for this exact situation. IDAP has no single concrete type
+ * for "one media item": the Mongoose subdocument, a `.lean()` read,
+ * `ProfileDTO["media"]` and `PublicProfile["media"]` all disagree on
+ * nullability (Mongoose types every optional string path
+ * `string | null | undefined`) and even on the id field's name (`_id` vs.
+ * `id`). A strict field-typed alternative is assignable from none of them —
+ * every real caller would need `as unknown as MediaItem` — which makes the
+ * type documentation that lies rather than a constraint it enforces. This
+ * function narrows what it actually reads instead (`str()` below), the same
+ * discipline `passpercent-mapping.ts` applies with its own local helpers. */
+type Rec = Record<string, unknown>;
+export type MediaItem = Rec;
+
+function str(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
 
 export type FeesBasketMedia = {
   externalId: string;
@@ -61,8 +59,11 @@ export type FeesBasketMedia = {
  * IDAP's own enum (map §4: `MEDIA_KINDS = image | brochure | video |
  * prospectus`) — no renaming, only a case difference — but it is spelled out
  * as an explicit lookup rather than a bare `.toLowerCase()` so a future,
- * non-uppercase IDAP kind can never slip through unchecked. */
-const KIND_TO_FEESBASKET: Record<MediaKind, string> = {
+ * non-uppercase IDAP kind can never slip through unchecked. Keyed by plain
+ * `string` (not `MediaKind`) because `item.kind` arrives as `unknown` — see
+ * `MediaItem` above — and is narrowed with `str()` before it ever reaches
+ * this lookup. */
+const KIND_TO_FEESBASKET: Record<string, string> = {
   IMAGE: "image",
   VIDEO: "video",
   BROCHURE: "brochure",
@@ -83,26 +84,40 @@ export function buildMediaPayload(
   const out: FeesBasketMedia[] = [];
 
   for (const item of media) {
-    // Same guarantee as the public profile API (Task 7): an admin who hides
-    // an item expects it gone everywhere, including third-party listings.
-    if (item.status === "HIDDEN") continue;
+    // Excludes a HIDDEN item from THIS payload — it is simply absent from
+    // `media[]`. That is NOT the same as retracting it from a listing
+    // FeesBasket already has: the map's merge rule (§4, "Merge semantics")
+    // treats an absent field/item as "untouched", and deletion is only ever
+    // explicit via the top-level `deletes: { …, media[] }` block (map §4,
+    // point 3). So hiding an item that was previously pushed removes it from
+    // IDAP's own surfaces but leaves it live on the remote listing
+    // indefinitely, until something emits `deletes.media[]` for it.
+    // `buildMediaPayload` does not do that here — it needs the adapter's
+    // push/reconcile context (the id of what FeesBasket currently has, to
+    // diff against), which belongs to the FeesBasket adapter plan (9b), not
+    // this pure mapping function. The next implementer of that adapter must
+    // add it; this comment is the pointer so the obligation is inherited
+    // rather than rediscovered.
+    if (str(item.status) === "HIDDEN") continue;
 
     const externalId = String(item._id);
-    const mappedKind = KIND_TO_FEESBASKET[item.kind];
+    const kind = str(item.kind);
+    const mappedKind = kind ? KIND_TO_FEESBASKET[kind] : undefined;
 
     // Validated against the LIVE vocabulary passed in via ctx — never a
     // hardcoded list. An unmapped kind is a hard 422 that fails the whole
     // ingestion call (map §3), so this item is skipped and warned about
     // rather than sent and risking every other item in the payload.
     if (!mappedKind || !ctx.mediaKinds.includes(mappedKind)) {
-      const label = item.title ? ` ("${item.title}")` : "";
+      const title = str(item.title);
+      const label = title ? ` ("${title}")` : "";
       ctx.warnings.push(
-        `Media item "${externalId}"${label} has kind "${item.kind}", which is not in FeesBasket's current mediaKinds vocabulary — skipped rather than sent, since one unmapped item would fail the entire ingestion call`,
+        `Media item "${externalId}"${label} has kind "${String(item.kind)}", which is not in FeesBasket's current mediaKinds vocabulary — skipped rather than sent, since one unmapped item would fail the entire ingestion call`,
       );
       continue;
     }
 
-    const url = toPublicUrl(item.url);
+    const url = toPublicUrl(str(item.url) ?? "");
     // Throws (aborting this whole call) rather than returning — an
     // unreachable URL has no per-item recovery the way an unmapped kind
     // does, so the caller must fix the underlying media before retrying.
@@ -118,7 +133,7 @@ export function buildMediaPayload(
     // Always emitting `null` for an item that never had one is harmless (it
     // clears an already-empty field); the asymmetric alternative — sending
     // the key only when a caption exists — is the one that loses data.
-    out.push({ externalId, kind: mappedKind, url, caption: item.caption ?? null });
+    out.push({ externalId, kind: mappedKind, url, caption: str(item.caption) ?? null });
   }
 
   return out;

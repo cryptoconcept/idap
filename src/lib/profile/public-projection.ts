@@ -172,6 +172,13 @@ export function toPublicProfile(
             return {
               id: String(rec?._id ?? ""),
               kind: String(rec?.kind ?? ""),
+              // Deliberately NOT `assertExternallyReachable`-guarded, unlike
+              // `feesbasket-mapping.ts`: a localhost URL here is harmless
+              // (IDAP serves its own API to itself in dev), but the mirror
+              // guard on the FeesBasket path exists because that URL is
+              // handed to a third party that only ever links to it, never
+              // fetches it. See I5 / `public-projection.test.ts` for the
+              // test pinning this asymmetry as deliberate.
               url: rawUrl ? toPublicUrl(rawUrl) : "",
               title: text(rec?.title),
               caption: text(rec?.caption),
