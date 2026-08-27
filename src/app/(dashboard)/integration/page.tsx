@@ -11,6 +11,8 @@ import { CopyButton } from "@/components/shared/copy-button";
 import { CodeBlock } from "@/components/integration/code-block";
 import { ApiKeysPanel } from "@/components/integration/api-keys-panel";
 import { ApiDocs } from "@/components/integration/api-docs";
+import { ConnectionsPanel } from "@/components/integration/connections-panel";
+import { ConnectionService } from "@/services/connection.service";
 
 export const metadata: Metadata = { title: "Integration" };
 export const dynamic = "force-dynamic";
@@ -19,6 +21,7 @@ const TABS = [
   { value: "credentials", label: "API credentials" },
   { value: "website", label: "Website integration" },
   { value: "api", label: "API documentation" },
+  { value: "connections", label: "Connected platforms" },
 ];
 
 export default async function IntegrationPage(props: PageProps<"/integration">) {
@@ -32,9 +35,10 @@ export default async function IntegrationPage(props: PageProps<"/integration">) 
   const tabParam = typeof searchParams.tab === "string" ? searchParams.tab : "credentials";
   const tab = TABS.some((entry) => entry.value === tabParam) ? tabParam : "credentials";
 
-  const [clients, origin] = await Promise.all([
+  const [clients, origin, connections] = await Promise.all([
     ApiClientService.list(tenantFilter(user)),
     getAppOrigin(),
+    ConnectionService.list(institution.institutionId),
   ]);
 
   const activeKeys = clients.filter((client) => client.active).length;
@@ -200,6 +204,12 @@ Admission enquiry     ${enquiryUrl}`}
 
         {tab === "api" ? (
           <ApiDocs origin={origin} institutionId={institution.institutionId} />
+        ) : null}
+
+        {tab === "connections" ? (
+          <Section title="Connected platforms">
+            <ConnectionsPanel connections={connections} />
+          </Section>
         ) : null}
       </div>
     </>
