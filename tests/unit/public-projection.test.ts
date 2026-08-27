@@ -36,9 +36,9 @@ const DOC = {
   },
   facilities: [{ code: "LIBRARY", label: "Library", available: true }],
   social: { instagram: "https://instagram.com/svshanur" },
-  gallery: [
-    { _id: "1", imageUrl: "https://cdn.test/1.jpg", title: "Campus", status: "ACTIVE", sortOrder: 1 },
-    { _id: "2", imageUrl: "https://cdn.test/2.jpg", title: "Hidden", status: "HIDDEN", sortOrder: 2 },
+  media: [
+    { _id: "1", kind: "IMAGE", url: "https://cdn.test/1.jpg", title: "Campus", status: "ACTIVE", sortOrder: 1 },
+    { _id: "2", kind: "IMAGE", url: "https://cdn.test/2.jpg", title: "Hidden", status: "HIDDEN", sortOrder: 2 },
   ],
 
   // --- none of the following may ever appear in the output ---
@@ -74,10 +74,12 @@ describe("public profile projection", () => {
     expect(out.management).not.toHaveProperty("headPhone");
   });
 
-  it("omits hidden gallery items", () => {
-    const out = toPublicProfile(DOC) as PublicProfile;
-    expect(out.gallery).toHaveLength(1);
-    expect(out.gallery[0].title).toBe("Campus");
+  it("does not yet expose media, even though the underlying doc has items", () => {
+    // `media` (renamed from `gallery`) is deliberately withheld from the
+    // public payload until a later task adds it back with its own tests.
+    const out = toPublicProfile(DOC) as Record<string, unknown>;
+    expect(out).not.toHaveProperty("media");
+    expect(out).not.toHaveProperty("gallery");
   });
 
   it("does not leak a field that was added to the schema but not to the allow-list", () => {
@@ -104,7 +106,6 @@ describe("public profile projection", () => {
 
     expect(out.institutionName).toBe("Bare");
     expect(out.facilities).toEqual([]);
-    expect(out.gallery).toEqual([]);
     expect(out.academic).toBeUndefined();
   });
 });

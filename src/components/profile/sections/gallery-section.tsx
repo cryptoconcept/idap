@@ -14,7 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/shared/empty-state";
-import { GALLERY_MAX_ITEMS } from "@/lib/constants";
+import { MEDIA_MAX_ITEMS } from "@/lib/constants";
 import type { ProfileDTO } from "@/lib/types";
 import {
   ACCEPT_ATTRIBUTE,
@@ -23,7 +23,7 @@ import {
   uploadMedia,
 } from "@/components/profile/media-upload";
 
-type GalleryItem = NonNullable<ProfileDTO["gallery"]>[number];
+type GalleryItem = NonNullable<ProfileDTO["media"]>[number];
 
 /**
  * Not a form: every action here is its own request against the media
@@ -41,8 +41,8 @@ export function GallerySection({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<GalleryItem | null>(null);
 
-  const items = profile.gallery ?? [];
-  const remaining = GALLERY_MAX_ITEMS - items.length;
+  const items = profile.media ?? [];
+  const remaining = MEDIA_MAX_ITEMS.IMAGE - items.length;
 
   async function onFiles(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -50,7 +50,7 @@ export function GallerySection({
     const chosen = Array.from(files);
     if (chosen.length > remaining) {
       toast.error(
-        `A gallery holds at most ${GALLERY_MAX_ITEMS} images. There is room for ${remaining} more.`,
+        `A gallery holds at most ${MEDIA_MAX_ITEMS.IMAGE} images. There is room for ${remaining} more.`,
       );
       return;
     }
@@ -69,7 +69,7 @@ export function GallerySection({
     for (const file of chosen) {
       const next = await uploadMedia({
         file,
-        kind: "GALLERY",
+        target: "MEDIA",
         title: titleFromFileName(file.name) || undefined,
       });
       if (!next) break;
@@ -136,7 +136,7 @@ export function GallerySection({
         <div className="space-y-1">
           <h2 className="text-sm font-semibold tracking-tight">Gallery</h2>
           <p className="text-xs text-muted-foreground">
-            {items.length} of {GALLERY_MAX_ITEMS} images. Hidden images stay here but are left out
+            {items.length} of {MEDIA_MAX_ITEMS.IMAGE} images. Hidden images stay here but are left out
             of the public profile.
           </p>
         </div>
@@ -182,7 +182,7 @@ export function GallerySection({
               >
                 <div className="relative aspect-[4/3] w-full overflow-hidden rounded bg-muted/40">
                   <Image
-                    src={item.imageUrl}
+                    src={item.url}
                     alt={item.title ?? "Gallery image"}
                     fill
                     unoptimized

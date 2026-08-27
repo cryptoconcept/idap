@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { GALLERY_STATUSES, GENDER_TYPES, INSTITUTION_TYPES, MANAGEMENT_TYPES } from "@/lib/constants";
+import {
+  GENDER_TYPES,
+  INSTITUTION_TYPES,
+  MANAGEMENT_TYPES,
+  MEDIA_CAPTION_MAX,
+  MEDIA_STATUSES,
+} from "@/lib/constants";
 import {
   optionalEmailSchema,
   optionalPhoneSchema,
@@ -151,15 +157,18 @@ export const platformInstitutionPatchSchema = z.object({
   active: z.boolean().optional(),
 });
 
+/** `target` is the upload DESTINATION. `kind` is the media TYPE. Having one
+ *  word mean both in the same subsystem is what this rename avoids. */
 export const mediaUploadSchema = z.object({
-  kind: z.enum(["LOGO", "COVER", "GALLERY"]),
+  target: z.enum(["LOGO", "COVER", "MEDIA"]),
+  kind: z.enum(["IMAGE", "BROCHURE", "PROSPECTUS"]).optional(),
   title: optionalText(120),
-  description: optionalText(400),
+  caption: optionalText(MEDIA_CAPTION_MAX),
 });
 
-export const galleryItemPatchSchema = z.object({
+export const mediaItemPatchSchema = z.object({
   title: optionalText(120),
-  description: optionalText(400),
+  caption: optionalText(MEDIA_CAPTION_MAX),
   sortOrder: z.number().int().min(0).max(999).optional(),
-  status: z.enum(GALLERY_STATUSES).optional(),
+  status: z.enum(MEDIA_STATUSES).optional(),
 });

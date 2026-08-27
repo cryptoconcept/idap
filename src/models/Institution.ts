@@ -2,10 +2,13 @@ import { Schema, Types, model, models, type Model, type InferSchemaType } from "
 import {
   ACADEMIC_SEGMENTS,
   FEE_FREQUENCIES,
-  GALLERY_STATUSES,
   GENDER_TYPES,
   INSTITUTION_TYPES,
   MANAGEMENT_TYPES,
+  MEDIA_CAPTION_MAX,
+  MEDIA_KINDS,
+  MEDIA_PROVIDERS,
+  MEDIA_STATUSES,
   PROFILE_STATUSES,
 } from "@/lib/constants";
 
@@ -111,13 +114,17 @@ const FeeHeadSchema = new Schema(
   { _id: false },
 );
 
-/** Keeps its _id — the media delete endpoint addresses items by it. */
-const GalleryItemSchema = new Schema({
-  imageUrl: { type: String, required: true, trim: true },
+/** Keeps its _id — the media routes address items by it, and it becomes the
+ *  `externalId` FeesBasket uses to address updates and deletes. */
+const MediaItemSchema = new Schema({
+  kind: { type: String, enum: MEDIA_KINDS, required: true },
+  url: { type: String, required: true, trim: true },
   title: { type: String, trim: true },
-  description: { type: String, trim: true },
+  caption: { type: String, trim: true, maxlength: MEDIA_CAPTION_MAX },
   sortOrder: { type: Number, default: 0 },
-  status: { type: String, enum: GALLERY_STATUSES, default: "ACTIVE" },
+  status: { type: String, enum: MEDIA_STATUSES, default: "ACTIVE" },
+  provider: { type: String, enum: MEDIA_PROVIDERS },
+  videoId: { type: String, trim: true },
   uploadedAt: { type: Date, default: Date.now },
 });
 
@@ -167,7 +174,7 @@ const InstitutionSchema = new Schema(
     facilities: { type: [FacilitySchema], default: undefined },
     feeHeads: { type: [FeeHeadSchema], default: undefined },
     social: { type: SocialSchema, default: undefined },
-    gallery: { type: [GalleryItemSchema], default: undefined },
+    media: { type: [MediaItemSchema], default: undefined },
   },
   { timestamps: true, collection: "institutions" },
 );

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { Institution } from "@/models";
-import { GALLERY_MAX_ITEMS, INSTITUTION_TYPES } from "@/lib/constants";
+import { INSTITUTION_TYPES, MEDIA_MAX_ITEMS } from "@/lib/constants";
 
 describe("Institution profile schema", () => {
   beforeAll(async () => {
@@ -51,7 +51,7 @@ describe("Institution profile schema", () => {
       management: { managementType: "TRUST", principalName: "R. Shashidhar" },
       facilities: [{ code: "LIBRARY", label: "Library", note: "8,000 titles" }],
       social: { instagram: "https://instagram.com/svshanur" },
-      gallery: [{ imageUrl: "https://cdn.test/1.jpg", title: "Campus" }],
+      media: [{ kind: "IMAGE", url: "https://cdn.test/1.jpg", title: "Campus" }],
     });
 
     const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
@@ -60,8 +60,8 @@ describe("Institution profile schema", () => {
     expect(row!.regionCode).toBe("KA-MYS");
     expect(row!.academic!.medium).toEqual(["English", "Kannada"]);
     expect(row!.facilities![0]!.available).toBe(true); // defaults to available
-    expect(row!.gallery![0]!.status).toBe("ACTIVE");
-    expect(row!.gallery![0]!._id).toBeDefined(); // addressable for delete
+    expect(row!.media![0]!.status).toBe("ACTIVE");
+    expect(row!.media![0]!._id).toBeDefined(); // addressable for delete
   });
 
   it("accepts an institution with no slug, so un-backfilled records still save", async () => {
@@ -105,7 +105,7 @@ describe("Institution profile schema", () => {
     expect(INSTITUTION_TYPES).toContain("POLYTECHNIC");
     expect(INSTITUTION_TYPES).toContain("NURSING_COLLEGE");
     expect(INSTITUTION_TYPES).toHaveLength(12);
-    expect(GALLERY_MAX_ITEMS).toBe(60);
+    expect(MEDIA_MAX_ITEMS.IMAGE).toBe(60);
   });
 
   it("stores fee heads with optional defaults", async () => {

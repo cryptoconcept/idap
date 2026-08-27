@@ -194,7 +194,7 @@ describe("platform-admin institution routes", () => {
           management: { principalName: "Hijacked Principal" },
           facilities: [{ code: "POOL", label: "Pool", available: true }],
           social: { facebook: "https://facebook.test/hijacked" },
-          gallery: [{ imageUrl: "https://hijacked.example.test/g.png", status: "ACTIVE" }],
+          media: [{ kind: "IMAGE", url: "https://hijacked.example.test/g.png", status: "ACTIVE" }],
           slug: "hijacked-slug",
           profileStatus: "PUBLISHED",
         },

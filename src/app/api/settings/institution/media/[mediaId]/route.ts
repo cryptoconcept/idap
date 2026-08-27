@@ -1,13 +1,13 @@
 import type { NextRequest } from "next/server";
 import { requireInstitution } from "@/lib/tenant";
-import { galleryItemPatchSchema } from "@/lib/validation/institution";
+import { mediaItemPatchSchema } from "@/lib/validation/institution";
 import { InstitutionService } from "@/services/institution.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 
 export const dynamic = "force-dynamic";
 
-/** Removes one gallery image from the institution admin's own profile. */
+/** Removes one media image from the institution admin's own profile. */
 export async function DELETE(
   request: NextRequest,
   context: RouteContext<"/api/settings/institution/media/[mediaId]">,
@@ -17,7 +17,7 @@ export async function DELETE(
     const { user, institution } = await requireInstitution();
     const { mediaId } = await context.params;
 
-    const profile = await InstitutionService.removeGalleryItem(institution.institutionId, mediaId, {
+    const profile = await InstitutionService.removeMediaItem(institution.institutionId, mediaId, {
       id: user.id,
       name: user.name,
     });
@@ -29,9 +29,9 @@ export async function DELETE(
 }
 
 /**
- * Edits one gallery item — title, description, order, and the ACTIVE/HIDDEN
+ * Edits one media item — title, caption, order, and the ACTIVE/HIDDEN
  * flag the public projection filters on. Hiding is how an image leaves the
- * public profile without leaving the gallery.
+ * public profile without leaving the media library.
  */
 export async function PATCH(
   request: NextRequest,
@@ -41,9 +41,9 @@ export async function PATCH(
     assertSameOrigin(request);
     const { user, institution } = await requireInstitution();
     const { mediaId } = await context.params;
-    const patch = galleryItemPatchSchema.parse(await request.json().catch(() => ({})));
+    const patch = mediaItemPatchSchema.parse(await request.json().catch(() => ({})));
 
-    const profile = await InstitutionService.updateGalleryItem(
+    const profile = await InstitutionService.updateMediaItem(
       institution.institutionId,
       mediaId,
       patch,

@@ -149,7 +149,7 @@ export function BasicSection({
             description="Square works best. Shown beside your name."
             imageUrl={profile.logoUrl}
             alt={`${profile.institutionName} logo`}
-            kind="LOGO"
+            target="LOGO"
             onUploaded={onProfile}
           />
           <ImageSlot
@@ -157,7 +157,7 @@ export function BasicSection({
             description="A wide photograph of the campus."
             imageUrl={profile.coverImageUrl}
             alt={`${profile.institutionName} cover image`}
-            kind="COVER"
+            target="COVER"
             fit="cover"
             onUploaded={onProfile}
           />

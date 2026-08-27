@@ -152,12 +152,6 @@ export const GENDER_TYPE_LABELS: Record<GenderType, string> = {
   CO_ED: "Co-educational",
 };
 
-export const GALLERY_STATUSES = ["ACTIVE", "HIDDEN"] as const;
-export type GalleryStatus = (typeof GALLERY_STATUSES)[number];
-
-/** A gallery, not a media platform. Enforced in the service, not only the UI. */
-export const GALLERY_MAX_ITEMS = 60;
-
 export const MEDIA_KINDS = ["IMAGE", "VIDEO", "BROCHURE", "PROSPECTUS"] as const;
 export type MediaKind = (typeof MEDIA_KINDS)[number];
 
@@ -172,6 +166,7 @@ export const MEDIA_STATUSES = ["ACTIVE", "HIDDEN"] as const;
 export type MediaStatus = (typeof MEDIA_STATUSES)[number];
 
 export const MEDIA_PROVIDERS = ["YOUTUBE", "VIMEO"] as const;
+export type MediaProvider = (typeof MEDIA_PROVIDERS)[number];
 
 /** Per kind, not one shared total: sixty brochures is a data-entry error. */
 export const MEDIA_MAX_ITEMS: Record<MediaKind, number> = {

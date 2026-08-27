@@ -2,11 +2,13 @@ import type {
   ApplicationStatus,
   ApiPermission,
   DocumentType,
-  GalleryStatus,
   GenderType,
   InstitutionType,
   LeadStatus,
   ManagementType,
+  MediaKind,
+  MediaProvider,
+  MediaStatus,
   ProfileStatus,
   Source,
   UserRole,
@@ -185,13 +187,16 @@ export type ProfileDTO = InstitutionDTO & {
     x?: string;
     other?: { label: string; url?: string }[];
   };
-  gallery?: {
+  media?: {
     id: string;
-    imageUrl: string;
+    kind: MediaKind;
+    url: string;
     title?: string;
-    description?: string;
+    caption?: string;
     sortOrder: number;
-    status: GalleryStatus;
+    status: MediaStatus;
+    provider?: MediaProvider;
+    videoId?: string;
     uploadedAt: string;
   }[];
 };

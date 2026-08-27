@@ -68,16 +68,16 @@ describe("institution profile service", () => {
 
   it("stores a logo and replaces it on the next upload", async () => {
     await makeInstitution("INS0001");
-    const first = await InstitutionService.addMedia(
+    const first = await InstitutionService.addMediaImage(
       "INS0001",
-      { kind: "LOGO", fileName: "logo.png", contentType: "image/png", bytes: PNG },
+      { target: "LOGO", fileName: "logo.png", contentType: "image/png", bytes: PNG },
       ACTOR,
     );
     expect(first.logoUrl).toBeTruthy();
 
-    const second = await InstitutionService.addMedia(
+    const second = await InstitutionService.addMediaImage(
       "INS0001",
-      { kind: "LOGO", fileName: "logo2.png", contentType: "image/png", bytes: PNG },
+      { target: "LOGO", fileName: "logo2.png", contentType: "image/png", bytes: PNG },
       ACTOR,
     );
     expect(second.logoUrl).toBeTruthy();
@@ -87,10 +87,10 @@ describe("institution profile service", () => {
   it("rejects a fake image regardless of its declared content type", async () => {
     await makeInstitution("INS0001");
     await expect(
-      InstitutionService.addMedia(
+      InstitutionService.addMediaImage(
         "INS0001",
         {
-          kind: "GALLERY",
+          target: "MEDIA",
           fileName: "evil.png",
           contentType: "image/png",
           bytes: Buffer.from("#!/bin/sh\nrm -rf /\n"),
@@ -100,35 +100,36 @@ describe("institution profile service", () => {
     ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
-  it("enforces the gallery cap atomically", async () => {
+  it("enforces the per-kind media cap atomically", async () => {
     await makeInstitution("INS0001", {
-      gallery: Array.from({ length: 60 }, (_, i) => ({
-        imageUrl: `https://cdn.test/${i}.jpg`,
+      media: Array.from({ length: 60 }, (_, i) => ({
+        kind: "IMAGE",
+        url: `https://cdn.test/${i}.jpg`,
         status: "ACTIVE",
       })),
     });
 
     await expect(
-      InstitutionService.addMedia(
+      InstitutionService.addMediaImage(
         "INS0001",
-        { kind: "GALLERY", fileName: "one-too-many.png", contentType: "image/png", bytes: PNG },
+        { target: "MEDIA", fileName: "one-too-many.png", contentType: "image/png", bytes: PNG },
         ACTOR,
       ),
     ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
-  it("removes a gallery item by id", async () => {
+  it("removes a media item by id", async () => {
     await makeInstitution("INS0001");
-    await InstitutionService.addMedia(
+    await InstitutionService.addMediaImage(
       "INS0001",
-      { kind: "GALLERY", fileName: "a.png", contentType: "image/png", bytes: PNG, title: "A" },
+      { target: "MEDIA", fileName: "a.png", contentType: "image/png", bytes: PNG, title: "A" },
       ACTOR,
     );
     const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
-    const mediaId = String(row!.gallery![0]!._id);
+    const mediaId = String(row!.media![0]!._id);
 
-    const after = await InstitutionService.removeGalleryItem("INS0001", mediaId, ACTOR);
-    expect(after.gallery ?? []).toHaveLength(0);
+    const after = await InstitutionService.removeMediaItem("INS0001", mediaId, ACTOR);
+    expect(after.media ?? []).toHaveLength(0);
   });
 
   it("allocates a slug when an institution is created", async () => {
@@ -200,9 +201,9 @@ describe("institution profile service", () => {
 
     // INS0002 uploads a real logo. Its URL is public by design — every
     // published profile, hosted apply page and widget hands it out.
-    const victim = await InstitutionService.addMedia(
+    const victim = await InstitutionService.addMediaImage(
       "INS0002",
-      { kind: "LOGO", fileName: "logo.png", contentType: "image/png", bytes: PNG },
+      { target: "LOGO", fileName: "logo.png", contentType: "image/png", bytes: PNG },
       ACTOR,
     );
     const victimUrl = victim.logoUrl!;
@@ -224,9 +225,9 @@ describe("institution profile service", () => {
     try {
       // ...then uploads a logo of its own, which is what triggers the
       // replace-in-place cleanup of whatever `logoUrl` currently holds.
-      await InstitutionService.addMedia(
+      await InstitutionService.addMediaImage(
         "INS0001",
-        { kind: "LOGO", fileName: "new.png", contentType: "image/png", bytes: PNG },
+        { target: "LOGO", fileName: "new.png", contentType: "image/png", bytes: PNG },
         ACTOR,
       );
 
@@ -244,9 +245,9 @@ describe("institution profile service", () => {
   it("still cleans up its own previous logo when a new one replaces it", async () => {
     await makeInstitution("INS0001");
 
-    const first = await InstitutionService.addMedia(
+    const first = await InstitutionService.addMediaImage(
       "INS0001",
-      { kind: "LOGO", fileName: "one.png", contentType: "image/png", bytes: PNG },
+      { target: "LOGO", fileName: "one.png", contentType: "image/png", bytes: PNG },
       ACTOR,
     );
     const firstUrl = first.logoUrl!;
@@ -254,9 +255,9 @@ describe("institution profile service", () => {
 
     const deletePublic = vi.spyOn(storage, "deletePublic");
     try {
-      await InstitutionService.addMedia(
+      await InstitutionService.addMediaImage(
         "INS0001",
-        { kind: "LOGO", fileName: "two.png", contentType: "image/png", bytes: PNG },
+        { target: "LOGO", fileName: "two.png", contentType: "image/png", bytes: PNG },
         ACTOR,
       );
       // Not too tight: an object this institution genuinely owns is still
@@ -269,22 +270,23 @@ describe("institution profile service", () => {
     expect(existsSync(storedPath(firstUrl))).toBe(false);
   });
 
-  it("leaves a gallery object belonging to another institution alone on delete", async () => {
+  it("leaves a media object belonging to another institution alone on delete", async () => {
     await makeInstitution("INS0001", {
-      gallery: [
+      media: [
         {
-          imageUrl: "https://store.public.blob.vercel-storage.com/media/INS0002/foreign.png",
+          kind: "IMAGE",
+          url: "https://store.public.blob.vercel-storage.com/media/INS0002/foreign.png",
           status: "ACTIVE",
         },
       ],
     });
     const row = await Institution.findOne({ institutionId: "INS0001" }).lean();
-    const mediaId = String(row!.gallery![0]!._id);
+    const mediaId = String(row!.media![0]!._id);
 
     const deletePublic = vi.spyOn(storage, "deletePublic");
     try {
-      const after = await InstitutionService.removeGalleryItem("INS0001", mediaId, ACTOR);
-      expect(after.gallery ?? []).toHaveLength(0);
+      const after = await InstitutionService.removeMediaItem("INS0001", mediaId, ACTOR);
+      expect(after.media ?? []).toHaveLength(0);
       expect(deletePublic).not.toHaveBeenCalled();
     } finally {
       deletePublic.mockRestore();

@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
-/** Multipart image upload (logo, cover, or a gallery item) for the institution admin's own profile. */
+/** Multipart image upload (logo, cover, or a media item) for the institution admin's own profile. */
 export async function POST(request: NextRequest) {
   try {
     assertSameOrigin(request);
@@ -24,20 +24,20 @@ export async function POST(request: NextRequest) {
     if (file.size > MAX_IMAGE_BYTES) throw validationError("file: files must be 5 MB or smaller");
 
     const parsed = mediaUploadSchema.parse({
-      kind: form.get("kind"),
+      target: form.get("target"),
       title: form.get("title") ?? undefined,
-      description: form.get("description") ?? undefined,
+      caption: form.get("caption") ?? undefined,
     });
 
-    const profile = await InstitutionService.addMedia(
+    const profile = await InstitutionService.addMediaImage(
       institution.institutionId,
       {
-        kind: parsed.kind,
+        target: parsed.target,
         fileName: file.name,
         contentType: file.type,
         bytes: Buffer.from(await file.arrayBuffer()),
         title: parsed.title,
-        description: parsed.description,
+        caption: parsed.caption,
       },
       { id: user.id, name: user.name },
     );

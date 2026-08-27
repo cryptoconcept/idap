@@ -35,7 +35,7 @@ describe("profile validation", () => {
       description: "trying to edit the profile",
       academic: { board: "CBSE" },
       logoUrl: "https://cdn.test/other.png",
-      gallery: [{ imageUrl: "https://cdn.test/x.jpg" }],
+      media: [{ kind: "IMAGE", url: "https://cdn.test/x.jpg" }],
     }) as Record<string, unknown>;
 
     expect(parsed.institutionName).toBe("Renamed");
@@ -44,7 +44,7 @@ describe("profile validation", () => {
     expect(parsed).not.toHaveProperty("description");
     expect(parsed).not.toHaveProperty("academic");
     expect(parsed).not.toHaveProperty("logoUrl");
-    expect(parsed).not.toHaveProperty("gallery");
+    expect(parsed).not.toHaveProperty("media");
   });
 
   it("rejects a malformed social URL", () => {

@@ -34,15 +34,15 @@ export function titleFromFileName(fileName: string): string {
  */
 export async function uploadMedia(input: {
   file: File;
-  kind: "LOGO" | "COVER" | "GALLERY";
+  target: "LOGO" | "COVER" | "MEDIA";
   title?: string;
-  description?: string;
+  caption?: string;
 }): Promise<ProfileDTO | null> {
   const body = new FormData();
   body.append("file", input.file);
-  body.append("kind", input.kind);
+  body.append("target", input.target);
   if (input.title) body.append("title", input.title);
-  if (input.description) body.append("description", input.description);
+  if (input.caption) body.append("caption", input.caption);
 
   try {
     const response = await fetch("/api/settings/institution/media", { method: "POST", body });
@@ -68,7 +68,7 @@ export function ImageSlot({
   description,
   imageUrl,
   alt,
-  kind,
+  target,
   fit = "contain",
   onUploaded,
 }: {
@@ -76,7 +76,7 @@ export function ImageSlot({
   description: string;
   imageUrl?: string;
   alt: string;
-  kind: "LOGO" | "COVER";
+  target: "LOGO" | "COVER";
   fit?: "contain" | "cover";
   onUploaded: (profile: ProfileDTO) => void;
 }) {
@@ -92,7 +92,7 @@ export function ImageSlot({
     }
 
     setBusy(true);
-    const profile = await uploadMedia({ file, kind });
+    const profile = await uploadMedia({ file, target });
     setBusy(false);
     if (profile) {
       toast.success(`${label} updated`);

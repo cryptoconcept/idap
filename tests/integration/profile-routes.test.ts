@@ -14,15 +14,15 @@ import { InstitutionService } from "@/services/institution.service";
 import { Institution } from "@/models";
 import type { NextRequest } from "next/server";
 
-/** Seeds a gallery item directly through the service, bypassing the route
+/** Seeds a media item directly through the service, bypassing the route
  * under test, so DELETE tests exercise only the route's own guards. */
-async function seedGalleryItem(institutionId: string): Promise<string> {
-  const profile = await InstitutionService.addMedia(
+async function seedMediaItem(institutionId: string): Promise<string> {
+  const profile = await InstitutionService.addMediaImage(
     institutionId,
-    { kind: "GALLERY", fileName: "seed.png", contentType: "image/png", bytes: PNG, title: "Seed" },
+    { target: "MEDIA", fileName: "seed.png", contentType: "image/png", bytes: PNG, title: "Seed" },
     { id: "6a8880f3446c577c470cd06c", name: "Seed Actor" },
   );
-  return profile.gallery![0]!.id;
+  return profile.media![0]!.id;
 }
 
 /** A request carrying only a session cookie, shaped for a dynamic-route handler
@@ -187,12 +187,12 @@ describe("institution profile self-service routes", () => {
     expect(payload.profile.profileStatus).toBe("PUBLISHED");
   });
 
-  it("uploads a gallery image through a multipart form", async () => {
+  it("uploads a media image through a multipart form", async () => {
     await signInWithCookie("INS0001");
 
     const form = new FormData();
     form.set("file", new File([PNG], "photo.png", { type: "image/png" }));
-    form.set("kind", "GALLERY");
+    form.set("target", "MEDIA");
     form.set("title", "Campus");
 
     const request = {
@@ -206,8 +206,8 @@ describe("institution profile self-service routes", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.profile.gallery).toHaveLength(1);
-    expect(payload.profile.gallery[0].title).toBe("Campus");
+    expect(payload.profile.media).toHaveLength(1);
+    expect(payload.profile.media[0].title).toBe("Campus");
   });
 
   it("rejects a cross-origin PATCH even with a valid session — CSRF still enforced", async () => {
@@ -259,7 +259,7 @@ describe("institution profile self-service routes", () => {
 
     const form = new FormData();
     form.set("file", new File([PNG], "photo.png", { type: "image/png" }));
-    form.set("kind", "GALLERY");
+    form.set("target", "MEDIA");
 
     const response = await uploadMedia(mediaFormRequest(form, { origin: "http://localhost" }));
 
@@ -272,7 +272,7 @@ describe("institution profile self-service routes", () => {
 
     const form = new FormData();
     form.set("file", new File([PNG], "photo.png", { type: "image/png" }));
-    form.set("kind", "GALLERY");
+    form.set("target", "MEDIA");
 
     const response = await uploadMedia(
       mediaFormRequest(form, { origin: "https://not-the-app.test" }),
@@ -282,8 +282,8 @@ describe("institution profile self-service routes", () => {
     expect((await response.json()).error.message).toMatch(/cross-origin/i);
   });
 
-  it("deletes a gallery item the institution admin owns", async () => {
-    const mediaId = await seedGalleryItem("INS0001");
+  it("deletes a media item the institution admin owns", async () => {
+    const mediaId = await seedMediaItem("INS0001");
     await signInWithCookie("INS0001");
 
     const response = await deleteMedia(
@@ -293,11 +293,11 @@ describe("institution profile self-service routes", () => {
     const payload = await response.json();
 
     expect(response.status).toBe(200);
-    expect(payload.profile.gallery ?? []).toHaveLength(0);
+    expect(payload.profile.media ?? []).toHaveLength(0);
   });
 
   it("refuses a platform admin session on media delete", async () => {
-    const mediaId = await seedGalleryItem("INS0001");
+    const mediaId = await seedMediaItem("INS0001");
     await signInPlatformAdmin();
 
     const response = await deleteMedia(
@@ -313,7 +313,7 @@ describe("institution profile self-service routes", () => {
     // Same rule as every other mutating route here: a browser attaches the
     // session cookie to a DELETE fetch() automatically too, so the CSRF check
     // has to apply to it exactly like PATCH and the two POSTs.
-    const mediaId = await seedGalleryItem("INS0001");
+    const mediaId = await seedMediaItem("INS0001");
     await signInWithCookie("INS0001");
 
     const response = await deleteMedia(

@@ -146,15 +146,8 @@ export function toPublicProfile(
 
     social,
 
-    gallery: Array.isArray(doc.gallery)
-      ? (doc.gallery as unknown[])
-          .filter((item: unknown) => (item as Record<string, unknown> | undefined)?.status !== "HIDDEN")
-          .sort((a: unknown, b: unknown) => ((a as Record<string, unknown> | undefined)?.sortOrder as number ?? 0) - ((b as Record<string, unknown> | undefined)?.sortOrder as number ?? 0))
-          .map((item: unknown) => ({
-            imageUrl: String((item as Record<string, unknown> | undefined)?.imageUrl ?? ""),
-            title: text((item as Record<string, unknown> | undefined)?.title),
-            description: text((item as Record<string, unknown> | undefined)?.description),
-          }))
-      : [],
+    // `media` (renamed from `gallery`) is deliberately withheld from the
+    // public payload for now. It is added in a later task with its own
+    // tests, once the shape covers every media kind rather than only images.
   };
 }
