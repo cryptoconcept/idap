@@ -525,3 +525,166 @@ against the actual `res.status(...).json(...)` call sites cited and matched.
 | `docs/PARTNER_INTEGRATION_SPEC.md` | The document to hand IDAP's engineers — accurate except §7.1 above |
 | `backend/src/docs/swagger.js` (~1548-1720, ~2210-2280+) | Admin + Partner tagged OpenAPI sections; hand-written |
 | `backend/src/scripts/verify-partner.js` | Live-server conformance suite (373 assertions as of HEAD) — the actual ground truth for "does the spec match behavior" |
+
+---
+
+## Addendum — 2026-08-27, Task 10 live E2E findings
+
+Everything below was observed against a genuinely running PassPercent backend
+(`localhost:5001`, local `mongodb://localhost:27017/passpercent`) during the
+first real end-to-end connection lifecycle IDAP ever ran against it — partner
+registration, connection-request/approve/redeem, two syncs. Existing sections
+above are left untouched; they document what was true at recon time. This
+section documents what the live server actually did.
+
+### A1. Confirmed: `GET /api/partner/schema` has no `photoEncoding` field —
+### the topper-photo wire format is documented in prose, not a structured field
+
+§5's data model section (and Task 6/9's implementation) carried an
+acknowledged guess: `schemaBody.results.photoEncoding` as `"base64"` or
+`"dataUri"`. The live response (full capture below) has **no such field
+anywhere**. The real answer is embedded in two prose strings:
+
+- `results.topperShape`: `"{ rank: number (required), name: string
+  (required), pct: number (required), photo?: string (a data:image/* URL or
+  an https URL — see inlineImages below) }"`
+- `results.inlineImages`: `"A data:image/* string anywhere in the body
+  (topper photos, recruiter/company logos) is uploaded to PassPercent's CDN
+  and replaced with a URL before storage. Where no CDN is configured,
+  anything over ~280 KB of base64 (~200 KB raw) is refused with a 400...
+  Prefer sending an https URL you already host."`
+
+So the only wire format PassPercent's live contract accepts for an inline
+photo is a `data:image/*;base64,...` data URI (or an externally-hosted https
+URL, which IDAP never has — it only ever has raw bytes from its own storage).
+A bare, unwrapped base64 string was never a real option; the `"base64"`
+`PhotoEncoding` variant in `passpercent.ts` was corrected in this task
+(`src/lib/connectors/passpercent.ts`'s `extractPhotoEncoding`/
+`resolveTopperPhoto` now check for `results.inlineImages` and always produce
+a `data:` URI). This adapter's toppers in the test fixture carried no
+`photoUrl`, so the photo path itself could not be exercised end-to-end live —
+the fix is verified by the existing unit suite (updated fixtures) plus direct
+reading of the schema response below, not by a live photo upload.
+
+Full captured response (`GET /api/partner/schema`, platform-key auth,
+2026-08-27T02:3x UTC — reformatted for readability, values unchanged):
+
+```json
+{
+  "fields": [ /* name/city/board/type/streams/phone/website/about/addressLine/
+    area/district/taluk/state/pincode/country/university/feesMin/feesMax/fees/
+    facilities/branches/admissions/classFrom/classTo/managementType/
+    genderType/principalName/affiliationNo/studentStrength/facultyStrength —
+    matches §3/§5's ALLOWED_FIELDS list with no additions or removals */ ],
+  "enums": { "board": ["CBSE","ICSE","State","State Board","IB","IGCSE"],
+    "type": ["School","College"],
+    "streams": ["sslc","puc","degree","engineering","medical","management"],
+    "managementType": ["","Government","Private","Aided"],
+    "genderType": ["","Co-ed","Boys","Girls"],
+    "facilities": [ /* 38 keys, matches §3 */ ] },
+  "rules": {
+    "requiredForCompleteness": ["name","city","board","type","phone","streams"],
+    "streamsBySegment": { "school": ["sslc","puc"],
+      "higher_ed": ["degree","engineering","medical","management"] },
+    "partialPatch": "... name/city/board/type reject empty with 400 rather than clearing; managementType/genderType are NOT exceptions.",
+    "typeReadWriteAsymmetry": "... matches §3's documented type read/write split exactly.",
+    "notWritableHere": { "results": "...", "toppers": "..." },
+    "excludedFromThisContract": { "notifyNewEnquiry": "...", "notifyNewReview": "...", "notifyBillingEvents": "...", "notifyMarketing": "..." },
+    "neverWritable": ["status","verified","plan","mrr","assignedTo","contact","passwordHash","tokenVersion","isUnclaimed","source","agentKeyId"]
+  },
+  "example": { "name": "Sample Public School", "city": "Mysuru", "board": "CBSE", "type": "School", "phone": "+91 98765 43210", "streams": ["sslc"], "...": "..." },
+  "results": {
+    "endpoint": "PUT /partner/institution/results/:year",
+    "scope": "results:write",
+    "urlParam": { "year": "Path parameter, NOT a body field — must match /^\\d{4}(-\\d{2,4})?$/" },
+    "body": "{ streams: { <streamKey>: {...} } } — streamKey must be in allowedStreams AND already in the institution's declared streams",
+    "allowedStreams": ["sslc","puc","degree","engineering","medical","management"],
+    "behavior": "Replaces the named year WHOLESALE ... every OTHER year is left untouched.",
+    "streamsMustBeOffered": "... 400 with allowed / offered+notOffered ...",
+    "topperShape": "{ rank: number (required), name: string (required), pct: number (required), photo?: string (a data:image/* URL or an https URL — see inlineImages below) }",
+    "historyLimit": "starter 1 year, standard 10, pro unlimited; 403 with {error,limit,current,hint}; re-publishing an existing year is never capped",
+    "inlineImages": "A data:image/* string anywhere in the body ... is uploaded to PassPercent's CDN and replaced with a URL before storage. Where no CDN is configured, anything over ~280 KB of base64 (~200 KB raw) is refused with a 400 ... Prefer sending an https URL you already host.",
+    "example": { "url": "/partner/institution/results/2025-26", "body": { "streams": { "sslc": { "passPct": 96.4, "appeared": 210, "passed": 202, "toppers": [ {"rank":1,"name":"A. Rao","pct":99.2} ] } } } }
+  }
+}
+```
+
+This matches §3/§5's documentation of `ALLOWED_FIELDS`, the board/type/streams
+enums, and the results contract with **no disagreements** beyond the
+photoEncoding non-field above — the map's structural description of the
+schema endpoint was accurate; only the never-pinned photo wire format needed
+resolving.
+
+### A2. New finding: PassPercent silently canonicalizes certain geo fields
+### through a Karnataka place-alias table on every write — not documented anywhere in this map
+
+`backend/src/utils/format.js`'s `titleCaseCity()` does more than title-case: it
+runs a fixed alias table first (`bangalore→Bengaluru`, `mysore→Mysuru`,
+`mangalore→Mangaluru`, `hubli→Hubballi`, `belgaum→Belagavi`,
+`gulbarga→Kalaburagi`, `bijapur→Vijayapura`, `bellary→Ballari`,
+`shimoga→Shivamogga`, `chikmagalur→Chikkamagaluru`,
+`davangere→Davanagere`). `partner.js:424` applies this to **`city`, `area`,
+`district`, `taluk`, `state`** on every `PATCH /partner/institution` write
+(the same admin.js draft-creation path applies it too). Free-text fields
+(`about`) are never touched.
+
+**Observed live, this exact task:** IDAP's own institution record for
+INS0001 stores `city: "Mysore"` and `area: "North Mysore"` (its actual,
+correct source-of-truth spelling). After `PATCH /partner/institution`
+(via `ConnectionService.syncNow` → `passpercentAdapter.sync`), PassPercent's
+stored document reads `city: "Mysuru"`, `area: "North Mysuru"` —
+silently rewritten, HTTP 200, no warning in the response body. IDAP's
+`about` text (`"...a CBSE school in Mysore..."`) was pushed and stored
+**verbatim**, "Mysore" intact, because free text isn't touched by this table.
+
+This is not a bug in IDAP's write (the value it sent was valid and correct
+per IDAP's own record) and nothing is corrupted — but it means **a
+byte-for-byte round-trip check of `city`/`area`/`district`/`taluk`/`state`
+against what IDAP sent will permanently fail for any institution in one of
+the eleven aliased cities**, indefinitely, on every sync. Worth knowing before
+anyone writes an automated post-sync verification step that diffs profile
+fields for exact equality — it should compare semantically (or pre-normalize
+through the same alias table) rather than for string identity.
+
+### A3. Completing the "not always immediately usable" gap from §2 (line 140-142):
+### the concrete unblock is `POST /admin/institutions/:id/approve` (`onboarding` role)
+
+§2 already flagged that a partner-drafted (`createNew:true`) institution lands
+`status:'pending'` even though its *connection* is immediately `approved` —
+and forward-referenced "see §4" without §4 actually naming the fix. Confirmed
+live: a grant against a `status:'pending'` institution gets a hard `403`
+from **every** grant-tier route (`requireGrant()`, `partnerAuth.js:483`):
+`{"error":"Institution is not approved yet.","status":"pending"}`. This is
+not a `needs_school_consent` case (§7's existing finding) — it's a wholly
+separate moderation gate on the *listing itself*, independent of the
+*connection*'s own approval.
+
+The unblock: `POST /admin/institutions/:id/approve` (`admin.js:529`,
+`requireSubRoles('onboarding')` — `super_admin` also passes, per
+`requireSubRoles`'s own always-allow rule). Flips `Institution.status` to
+`'approved'`, deletes any `OnboardingEntry` row, grants welcome lead credits.
+After this call, the identical grant call that 403'd immediately succeeds
+with no other change. A real operator matching a partner's drafted listing
+would need to do this as a completely separate action from
+`/admin/partner-requests/:id/approve` — worth naming explicitly in onboarding
+runbooks for any platform whose partner-drafted institutions aren't
+auto-approved.
+
+### A4. Observation, not drift: the candidate-match heuristic did not surface
+### a genuine near-duplicate
+
+PassPercent held a pre-existing `INFINITY SCHOOL` (Chamaraja) institution
+that is name-adjacent to IDAP's `Infinity School` (Mysore/Mysuru) but is a
+different school entirely. `findRequestCandidates()` (`admin.js:2226`)
+returned **zero candidates** for IDAP's connection request even though this
+near-duplicate existed, because its `name` regex only matches when the
+*target's* name is a substring/superset match of the *payload's* name (or the
+reverse, gated by an exact city match) — and IDAP's payload name
+(`"Infinity School of Excellence"`) is neither a substring of, nor
+substring-matched by, `"INFINITY SCHOOL"` under that specific regex
+construction, so the `$or` never fires. Not a bug — it just means an admin
+cannot rely on the candidates list alone to catch every near-duplicate; a
+manual name search remains necessary for judgment calls the regex doesn't
+cover. Documented here because it's exactly the scenario Task 10 was warned
+about avoiding, and the safety net that might have caught a wrong click
+(a suggested match) did not fire in this instance.

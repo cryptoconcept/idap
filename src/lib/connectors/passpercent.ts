@@ -254,29 +254,35 @@ function extractSchemaFields(schemaBody: Rec): SchemaField[] {
   return out;
 }
 
-type PhotoEncoding = "base64" | "dataUri";
+type PhotoEncoding = "dataUri";
 
 /**
- * The map is explicit that PassPercent's live schema documents a size cap
- * for inline photos (~200KB raw) but does NOT fix the wire format — no
- * base64-wrapper convention is pinned anywhere in the written contract.
- * Per this task's dispatch: check the schema route's own response for a
- * documented encoding at runtime, and never guess a format into a live
- * partner API.
+ * RESOLVED against a live `GET /api/partner/schema` response (Task 10,
+ * 2026-08-27) — see `docs/integrations/passpercent-api-map.md`'s dated
+ * addendum for the full captured payload. There is no `results.photoEncoding`
+ * field anywhere on the real response; that field name was an unverifiable
+ * placeholder guessed before any live schema could be read, and it does not
+ * exist.
  *
- * `results.photoEncoding` below is this adapter's placeholder for where
- * that documentation would live in a self-describing `results` block —
- * there was no live response available to read for this task, so this
- * exact field name is NOT confirmed against real PassPercent output.
- * Flagged in the task report: whoever first inspects a real
- * `GET /partner/schema` payload should confirm or correct this path.
- * Until then, an absent or unrecognized value intentionally degrades to
- * "send no photo, warn once" rather than shipping a guessed format.
+ * The actual wire format is documented in prose, not a structured field:
+ * `results.topperShape` says a topper's `photo` is "a data:image/* URL or an
+ * https URL", and `results.inlineImages` confirms a `data:image/*;base64,...`
+ * string is accepted and gets swapped for a CDN URL on save (with the same
+ * ~200KB raw cap this adapter already enforces before ever calling out).
+ * IDAP always reads raw bytes from its own storage, never an externally
+ * hosted URL, so `dataUri` is the only branch this adapter can ever use —
+ * there is no partner-negotiated "base64 vs dataUri" choice, and the old
+ * `"base64"` variant was never a real option.
+ *
+ * The one thing worth checking at runtime is that the endpoint still
+ * documents inline-image support at all (`results.inlineImages` present) —
+ * if a future PassPercent release drops that capability, this degrades to
+ * "no encoding" (send no photo, warn once) rather than assuming a contract
+ * that may no longer hold.
  */
 function extractPhotoEncoding(schemaBody: Rec): PhotoEncoding | null {
   const results = rec(schemaBody.results);
-  const encoding = results?.photoEncoding;
-  return encoding === "base64" || encoding === "dataUri" ? encoding : null;
+  return typeof results?.inlineImages === "string" && results.inlineImages.length > 0 ? "dataUri" : null;
 }
 
 /** Recursively finds every object anywhere in a results payload that carries
@@ -297,7 +303,6 @@ function collectPhotoBearingRecords(node: unknown, out: Rec[]): void {
 async function resolveTopperPhoto(
   topper: Rec,
   readPublicMedia: SyncSourceData["readPublicMedia"],
-  encoding: PhotoEncoding,
   warnings: string[],
 ): Promise<void> {
   const key = topper.photoKey as string;
@@ -318,7 +323,7 @@ async function resolveTopperPhoto(
   }
 
   const base64 = media.body.toString("base64");
-  topper.photo = encoding === "dataUri" ? `data:${media.contentType};base64,${base64}` : base64;
+  topper.photo = `data:${media.contentType};base64,${base64}`;
 }
 
 async function resolveYearPhotos(
@@ -344,7 +349,7 @@ async function resolveYearPhotos(
   }
 
   for (const topper of toppers) {
-    await resolveTopperPhoto(topper, readPublicMedia, encoding, warnings);
+    await resolveTopperPhoto(topper, readPublicMedia, warnings);
   }
 }
 

@@ -42,13 +42,16 @@ const SCHEMA_FIELDS = [
   { name: "name", type: "string" },
 ];
 
-function schemaBody(opts: { photoEncoding?: "base64" | "dataUri" } = {}): Record<string, unknown> {
+function schemaBody(opts: { supportsInlineImages?: boolean } = {}): Record<string, unknown> {
   return {
     fields: SCHEMA_FIELDS,
     enums: {},
     rules: {},
     example: {},
-    results: opts.photoEncoding ? { photoEncoding: opts.photoEncoding } : {},
+    // Mirrors the real `GET /api/partner/schema` response's `results.inlineImages`
+    // prose field (verified live, Task 10) — there is no structured
+    // `photoEncoding` field on the real API.
+    results: opts.supportsInlineImages ? { inlineImages: "A data:image/* string is uploaded to the CDN." } : {},
   };
 }
 
@@ -431,12 +434,12 @@ describe("passpercentAdapter", () => {
       ]);
     });
 
-    it("resolves a topper photo under the size cap when the schema documents an encoding", async () => {
+    it("resolves a topper photo under the size cap when the schema documents inline-image support", async () => {
       const bytes = Buffer.from("small-fake-jpeg-bytes");
       const readPublicMedia = vi.fn(async () => ({ body: bytes, contentType: "image/jpeg" }));
       const http = vi
         .fn()
-        .mockResolvedValueOnce({ status: 200, body: schemaBody({ photoEncoding: "base64" }) })
+        .mockResolvedValueOnce({ status: 200, body: schemaBody({ supportsInlineImages: true }) })
         .mockResolvedValueOnce({ status: 200, body: { updated: true } })
         .mockResolvedValueOnce({ status: 200, body: { updated: true } });
 
@@ -463,7 +466,7 @@ describe("passpercentAdapter", () => {
       const body = putCall[1].body as { streams: { sslc: { toppers: Record<string, unknown>[] } } };
       const topper = body.streams.sslc.toppers[0];
       expect(topper.photoKey).toBeUndefined();
-      expect(topper.photo).toBe(bytes.toString("base64"));
+      expect(topper.photo).toBe(`data:image/jpeg;base64,${bytes.toString("base64")}`);
       expect(outcome.warnings.some((w) => w.includes("does not document an inline encoding"))).toBe(false);
     });
 
@@ -472,7 +475,7 @@ describe("passpercentAdapter", () => {
       const readPublicMedia = vi.fn(async () => ({ body: oversized, contentType: "image/jpeg" }));
       const http = vi
         .fn()
-        .mockResolvedValueOnce({ status: 200, body: schemaBody({ photoEncoding: "base64" }) })
+        .mockResolvedValueOnce({ status: 200, body: schemaBody({ supportsInlineImages: true }) })
         .mockResolvedValueOnce({ status: 200, body: { updated: true } })
         .mockResolvedValueOnce({ status: 200, body: { updated: true } });
 
@@ -506,7 +509,7 @@ describe("passpercentAdapter", () => {
       const readPublicMedia = vi.fn(async () => ({ body: Buffer.from("x"), contentType: "image/jpeg" }));
       const http = vi
         .fn()
-        .mockResolvedValueOnce({ status: 200, body: schemaBody() }) // no photoEncoding
+        .mockResolvedValueOnce({ status: 200, body: schemaBody() }) // no inlineImages documented
         .mockResolvedValueOnce({ status: 200, body: { updated: true } })
         .mockResolvedValueOnce({ status: 200, body: { updated: true } })
         .mockResolvedValueOnce({ status: 200, body: { updated: true } });
