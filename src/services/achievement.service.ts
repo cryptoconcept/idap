@@ -47,6 +47,26 @@ function serialize(row: AchievementDoc): AchievementDTO {
 }
 
 /**
+ * The exact key set `achievementPatchSchema` can produce. `institutionId` is
+ * itself a schema path on `Achievement` (`Achievement.ts:20`), so Mongoose's
+ * update path does not strip it from `$set` the way `strict` blocks an
+ * unknown field — only Zod stripping unrecognised keys at the route layer
+ * stands between an unparsed patch and a cross-tenant `$set`. This allow-list
+ * makes that guarantee hold here too, in the service, rather than depending
+ * on every future caller remembering to `.parse()` first. Defence in depth:
+ * the route still parses, and still must.
+ */
+const PATCHABLE_FIELDS = new Set<keyof AchievementPatchInput>([
+  "category",
+  "title",
+  "description",
+  "eventDate",
+  "level",
+  "students",
+  "status",
+]);
+
+/**
  * Three states, not two — same convention as `buildProfileUpdate`
  * (`institution.service.ts`). A key absent from the patch arrives as
  * `undefined` and is left alone: `$set: { description: undefined }` would
@@ -64,6 +84,7 @@ function buildAchievementUpdate(patch: AchievementPatchInput): {
   const unset: Record<string, ""> = {};
 
   for (const [key, value] of Object.entries(patch)) {
+    if (!PATCHABLE_FIELDS.has(key as keyof AchievementPatchInput)) continue;
     if (value === undefined) continue;
     if (value === null) unset[key] = "";
     else set[key] = value;

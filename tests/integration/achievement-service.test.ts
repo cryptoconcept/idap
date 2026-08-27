@@ -1,9 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { Achievement } from "@/models";
+import { Achievement, Activity } from "@/models";
 import { AchievementService } from "@/services/achievement.service";
-import type { AchievementCreateInput } from "@/lib/validation/showcase";
+import type { AchievementCreateInput, AchievementPatchInput } from "@/lib/validation/showcase";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -59,6 +59,20 @@ describe("AchievementService round trip", () => {
     await AchievementService.remove("INS0001", created.id, actor);
     const afterRemoval = await AchievementService.list("INS0001");
     expect(afterRemoval).toHaveLength(0);
+
+    // `ActivityService.record` swallows every error (activity.service.ts —
+    // a bad institutionId, a wrong entityType, or a call that never happened
+    // is invisible at runtime), so this is the only check standing between a
+    // broken audit trail and nobody noticing.
+    const activityRows = await Activity.find({ institutionId: "INS0001", entityType: "ACHIEVEMENT" })
+      .sort({ createdAt: 1 })
+      .lean();
+    expect(activityRows.map((row) => row.action)).toEqual([
+      "Achievement created",
+      "Achievement updated",
+      "Achievement deleted",
+    ]);
+    expect(activityRows.every((row) => row.institutionId === "INS0001")).toBe(true);
   });
 
   it("defaults level to SCHOOL and status to ACTIVE when not supplied", async () => {
@@ -68,8 +82,14 @@ describe("AchievementService round trip", () => {
       actor,
     );
 
-    expect(created.level).toBe("SCHOOL");
-    expect(created.status).toBe("ACTIVE");
+    // Asserted against the raw stored document, not the DTO: `serialize`
+    // applies its own `row.level ?? "SCHOOL"` / `row.status ?? "ACTIVE"`
+    // fallback, so checking `created.level`/`created.status` would pass even
+    // if the model's own default were removed — this must exercise the
+    // model, not the serialiser.
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.level).toBe("SCHOOL");
+    expect(raw?.status).toBe("ACTIVE");
   });
 
   it("returns achievements newest first", async () => {
@@ -96,7 +116,12 @@ describe("AchievementService round trip", () => {
   it("rejects an unknown category before any write", async () => {
     const badInput = { category: "NOT_A_REAL_CATEGORY", title: "Bad" } as unknown as AchievementCreateInput;
 
-    await expect(AchievementService.create("INS0001", badInput, actor)).rejects.toThrow();
+    // Pinned to the model's own enum rejection, not any error: `create`
+    // deliberately does not re-parse (see the comment at achievement.service.ts),
+    // so if a route ever reached this without `.parse()` first, a change in
+    // *which* layer rejects (e.g. surfacing as some unrelated 500) should be
+    // visible here rather than silently absorbed by a bare `.toThrow()`.
+    await expect(AchievementService.create("INS0001", badInput, actor)).rejects.toThrow(/category/i);
 
     expect(await Achievement.countDocuments({})).toBe(0);
   });
@@ -295,6 +320,62 @@ describe("AchievementService tenant isolation (mutation-checked)", () => {
 
     const after = await Achievement.findById(foreign._id).lean();
     expect(after).toEqual(before);
+  });
+
+  it("update (empty patch): the read-only branch is still institution-scoped, and is a genuine no-op for the owning institution", async () => {
+    const foreign = await Achievement.create({
+      institutionId: "INS0002",
+      category: "SPORTS",
+      title: "INS0002 original",
+    });
+    const before = await Achievement.findById(foreign._id).lean();
+
+    // A patch with no settable keys (`{}`, or every key explicitly
+    // `undefined`) takes a SEPARATE code path — a plain `findOne` — that the
+    // primary `findOneAndUpdate` mutation check below never exercises. The
+    // load-bearing assertion: with `institutionId` removed from THAT
+    // filter, this call would silently read back INS0002's row in full
+    // instead of 404ing.
+    await expect(
+      AchievementService.update("INS0001", String(foreign._id), { eventDate: undefined }, actor),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    const after = await Achievement.findById(foreign._id).lean();
+    expect(after).toEqual(before);
+
+    // Same branch, correctly scoped: an empty patch against the caller's
+    // own record is a read-only no-op, not an error and not a write (the
+    // returned DTO matches what `create` returned, including `updatedAt`).
+    const own = await AchievementService.create(
+      "INS0001",
+      { category: "ACADEMIC", title: "Own achievement", eventDate: undefined },
+      actor,
+    );
+    const read = await AchievementService.update("INS0001", own.id, { eventDate: undefined }, actor);
+    expect(read).toEqual(own);
+  });
+
+  it("update: an allow-list keeps institutionId out of $set even if a caller-built patch smuggles it in", async () => {
+    const created = await AchievementService.create(
+      "INS0001",
+      { category: "ACADEMIC", title: "Own achievement", eventDate: undefined },
+      actor,
+    );
+
+    // Bypasses `AchievementPatchInput`'s type on purpose — this proves the
+    // service-level allow-list in `buildAchievementUpdate`, not the route's
+    // `achievementPatchSchema.parse()`, which would already strip an unknown
+    // key like `institutionId` before the service ever saw it.
+    const smuggledPatch = {
+      title: "Renamed",
+      institutionId: "INS0002",
+    } as unknown as AchievementPatchInput;
+
+    await AchievementService.update("INS0001", created.id, smuggledPatch, actor);
+
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.institutionId).toBe("INS0001");
+    expect(raw?.title).toBe("Renamed");
   });
 
   it("remove: an INS0001-scoped remove addressed by INS0002's id throws NOT_FOUND and leaves INS0002's row intact", async () => {
