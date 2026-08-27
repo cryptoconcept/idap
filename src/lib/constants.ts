@@ -484,3 +484,49 @@ export const SYNC_RUN_KEEP = 20;
  * calls stays well under a few minutes.
  */
 export const SYNC_LOCK_STALE_MINUTES = 10;
+
+export const ACHIEVEMENT_CATEGORIES = [
+  "ACADEMIC", "SPORTS", "CULTURAL", "OLYMPIAD", "SCIENCE_FAIR", "ROBOTICS", "COMMUNITY_SERVICE",
+] as const;
+export type AchievementCategory = (typeof ACHIEVEMENT_CATEGORIES)[number];
+
+export const ACHIEVEMENT_CATEGORY_LABELS: Record<AchievementCategory, string> = {
+  ACADEMIC: "Academic",
+  SPORTS: "Sports",
+  CULTURAL: "Cultural",
+  OLYMPIAD: "Olympiad",
+  SCIENCE_FAIR: "Science Fair",
+  ROBOTICS: "Robotics",
+  COMMUNITY_SERVICE: "Community Service",
+};
+
+export const ACHIEVEMENT_LEVELS = [
+  "SCHOOL", "TALUK", "DISTRICT", "STATE", "NATIONAL", "INTERNATIONAL",
+] as const;
+export type AchievementLevel = (typeof ACHIEVEMENT_LEVELS)[number];
+
+export const ALUMNI_CATEGORIES = [
+  "DOCTOR", "ENGINEER", "ENTREPRENEUR", "CIVIL_SERVICES", "SCIENTIST", "ARTIST", "SPORTS", "OTHER",
+] as const;
+export type AlumniCategory = (typeof ALUMNI_CATEGORIES)[number];
+
+export const ALUMNI_CATEGORY_LABELS: Record<AlumniCategory, string> = {
+  DOCTOR: "Doctor",
+  ENGINEER: "Engineer",
+  ENTREPRENEUR: "Entrepreneur",
+  CIVIL_SERVICES: "Civil Services",
+  SCIENTIST: "Scientist",
+  ARTIST: "Artist",
+  SPORTS: "Sports",
+  OTHER: "Other",
+};
+
+/** Same two-state visibility as media: manageable in the dashboard, HIDDEN never published. */
+export const SHOWCASE_STATUSES = ["ACTIVE", "HIDDEN"] as const;
+export type ShowcaseStatus = (typeof SHOWCASE_STATUSES)[number];
+
+export const ACHIEVEMENT_MAX_PHOTOS = 10;
+export const ACHIEVEMENT_MAX_CERTIFICATES = 5;
+export const ACHIEVEMENT_MAX_STUDENTS = 50;
+export const SHOWCASE_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+export const SHOWCASE_MAX_PDF_BYTES = 20 * 1024 * 1024;
