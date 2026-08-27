@@ -33,12 +33,12 @@ import { AcademicSection } from "@/components/profile/sections/academic-section"
 import { ManagementSection } from "@/components/profile/sections/management-section";
 import { FacilitiesSection } from "@/components/profile/sections/facilities-section";
 import { SocialSection } from "@/components/profile/sections/social-section";
-import { GallerySection } from "@/components/profile/sections/gallery-section";
+import { MediaSection } from "@/components/profile/sections/media-section";
 
 /**
  * `groups` names the completion groups a section owns, so the tick beside it is
  * the server's judgement of that section and never a second opinion computed
- * here. The gallery is not scored, so it names none.
+ * here. Media is not scored, so it names none.
  */
 const SECTIONS = [
   { key: "basic", label: "Basic information", groups: ["identity", "logo", "cover"] },
@@ -48,7 +48,7 @@ const SECTIONS = [
   { key: "management", label: "Management", groups: ["management"] },
   { key: "facilities", label: "Facilities", groups: ["facilities"] },
   { key: "social", label: "Social links", groups: ["social"] },
-  { key: "gallery", label: "Gallery", groups: [] },
+  { key: "media", label: "Media", groups: [] },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
@@ -260,8 +260,8 @@ export function ProfileEditor({
           {active === "management" ? <ManagementSection {...sectionProps} /> : null}
           {active === "facilities" ? <FacilitiesSection {...sectionProps} /> : null}
           {active === "social" ? <SocialSection {...sectionProps} /> : null}
-          {active === "gallery" ? (
-            <GallerySection profile={profile} onProfile={applyProfile} />
+          {active === "media" ? (
+            <MediaSection profile={profile} onProfile={applyProfile} />
           ) : null}
         </div>
       </div>
