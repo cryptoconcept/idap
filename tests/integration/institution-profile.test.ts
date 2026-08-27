@@ -4,6 +4,7 @@ import { makeInstitution } from "../helpers/factories";
 import { Institution } from "@/models";
 import { InstitutionService } from "@/services/institution.service";
 import { updateProfileSchema } from "@/lib/validation/institution";
+import { MEDIA_MAX_ITEMS } from "@/lib/constants";
 import { storage } from "@/lib/storage";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -116,6 +117,34 @@ describe("institution profile service", () => {
         ACTOR,
       ),
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  // A cap keyed on the wrong thing (all kinds pooled into one count) would
+  // pass the test above too, because every seeded item there is IMAGE —
+  // filtered by kind or not, the count comes out the same 60 either way. To
+  // actually distinguish "per kind" from "shared", the non-image count has to
+  // reach the IMAGE threshold on its own: below it, a shared cap would still
+  // let the image through by coincidence, same as the correct one. Seeded
+  // directly (bypassing the service, which can only ever push kind IMAGE,
+  // exactly like the test above) — this many brochures could never occur
+  // through the app itself, since nothing in this task enforces a brochure
+  // cap yet; the point is purely to prove the image budget is blind to them.
+  it("does not let another kind's items count against the image cap", async () => {
+    await makeInstitution("INS0001", {
+      media: Array.from({ length: MEDIA_MAX_ITEMS.IMAGE }, (_, i) => ({
+        kind: "BROCHURE",
+        url: `https://cdn.test/brochure-${i}.pdf`,
+        status: "ACTIVE",
+      })),
+    });
+
+    const after = await InstitutionService.addMediaImage(
+      "INS0001",
+      { target: "MEDIA", fileName: "photo.png", contentType: "image/png", bytes: PNG },
+      ACTOR,
+    );
+
+    expect(after.media).toHaveLength(MEDIA_MAX_ITEMS.IMAGE + 1);
   });
 
   it("removes a media item by id", async () => {

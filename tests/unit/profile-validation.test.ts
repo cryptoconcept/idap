@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  mediaItemPatchSchema,
   platformInstitutionPatchSchema,
   updateProfileSchema,
 } from "@/lib/validation/institution";
+import { MEDIA_CAPTION_MAX } from "@/lib/constants";
 
 describe("profile validation", () => {
   it("accepts a partial section update", () => {
@@ -66,5 +68,18 @@ describe("profile validation", () => {
     expect(
       updateProfileSchema.parse({ facilities: [{ code: "LIBRARY", label: "Library" }] }).facilities,
     ).toHaveLength(1);
+  });
+
+  // FeesBasket caps captions at 240 (feesbasket-api-map.md §4); this is
+  // deliberately narrower than the general 400-character text fields
+  // elsewhere in this schema. Enforced at input so the value IDAP holds is
+  // always the value it can push, rather than something a later mapping step
+  // has to silently truncate.
+  it("accepts a caption at the 240-character limit and rejects one over it", () => {
+    const atLimit = "a".repeat(MEDIA_CAPTION_MAX);
+    const overLimit = "a".repeat(MEDIA_CAPTION_MAX + 1);
+
+    expect(mediaItemPatchSchema.parse({ caption: atLimit }).caption).toHaveLength(MEDIA_CAPTION_MAX);
+    expect(() => mediaItemPatchSchema.parse({ caption: overLimit })).toThrow();
   });
 });

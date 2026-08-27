@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { Institution } from "@/models";
-import { INSTITUTION_TYPES, MEDIA_MAX_ITEMS } from "@/lib/constants";
+import { INSTITUTION_TYPES, MEDIA_CAPTION_MAX, MEDIA_MAX_ITEMS } from "@/lib/constants";
 
 describe("Institution profile schema", () => {
   beforeAll(async () => {
@@ -146,6 +146,28 @@ describe("Institution profile schema", () => {
     ).rejects.toBeDefined();
     await expect(
       Institution.create({ ...base, feeHeads: [{ label: "X", amount: -1 }] }),
+    ).rejects.toBeDefined();
+  });
+
+  // The validation schema enforces this on the way in, but a direct model
+  // write (a migration, a script, a different call site) only ever answers
+  // to `maxlength` here — this is the layer that actually can't be bypassed.
+  it("enforces the media caption's 240-character cap at the model layer", async () => {
+    const base = { institutionId: "INS0103", institutionName: "Test", institutionType: "SCHOOL" };
+
+    const atLimit = await Institution.create({
+      ...base,
+      media: [{ kind: "IMAGE", url: "https://cdn.test/1.jpg", caption: "a".repeat(MEDIA_CAPTION_MAX) }],
+    });
+    expect(atLimit.media?.[0]?.caption).toHaveLength(MEDIA_CAPTION_MAX);
+
+    await expect(
+      Institution.create({
+        institutionId: "INS0104",
+        institutionName: "Test",
+        institutionType: "SCHOOL",
+        media: [{ kind: "IMAGE", url: "https://cdn.test/1.jpg", caption: "a".repeat(MEDIA_CAPTION_MAX + 1) }],
+      }),
     ).rejects.toBeDefined();
   });
 });
