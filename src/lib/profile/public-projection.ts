@@ -29,6 +29,47 @@ function compact<T extends Record<string, unknown>>(block: T): T | undefined {
   return kept.length > 0 ? (Object.fromEntries(kept) as T) : undefined;
 }
 
+/**
+ * What this projection reads off one achievement and one alumnus.
+ *
+ * Declared structurally here rather than imported from the services: nothing
+ * under `src/lib/` depends on `src/services/` anywhere in this repo, and
+ * `AchievementDTO` / `AlumnusDTO` already satisfy these shapes, so no such
+ * dependency is needed. Naming only the readable fields has a second effect
+ * worth keeping: `status`, `createdAt` and `updatedAt` are not merely left out
+ * of the output, they are not visible to this function at all.
+ */
+export type ShowcaseAchievement = {
+  id: string;
+  category: string;
+  title: string;
+  description?: string;
+  /** Already an ISO string by the time it gets here — the services serialize it. */
+  eventDate?: string;
+  level: string;
+  students?: { name: string; grade?: string }[];
+  /** Storage keys, not URLs. Resolved by `toPublicUrl` on the way out. */
+  photos?: string[];
+  certificates?: string[];
+};
+
+export type ShowcaseAlumnus = {
+  id: string;
+  name: string;
+  batch?: string;
+  category: string;
+  currentRole?: string;
+  org?: string;
+  /** Storage key, not a URL. Resolved by `toPublicUrl` on the way out. */
+  photo?: string;
+  note?: string;
+};
+
+export type ShowcaseRecords = {
+  achievements: ShowcaseAchievement[];
+  alumni: ShowcaseAlumnus[];
+};
+
 export type PublicProfile = ReturnType<typeof toPublicProfile>;
 
 export function toPublicProfile(
@@ -39,6 +80,15 @@ export function toPublicProfile(
    * that has not built a tree keeps publishing.
    */
   offerings?: { classesOffered: string[]; coursesOffered: string[] },
+  /**
+   * Achievements and alumni live in their own collections, so — unlike
+   * `media`, which is embedded — they are not on `institution` and cannot be
+   * projected from it. `InstitutionService.getPublicProfile` fetches them and
+   * hands them in, exactly as it does `offerings`. Optional for the same
+   * reason `offerings` is: a caller with nothing to show passes nothing, and
+   * gets two empty arrays.
+   */
+  showcase?: ShowcaseRecords,
 ) {
   const doc = institution ?? {};
 
@@ -188,5 +238,51 @@ export function toPublicProfile(
             };
           })
       : [],
+
+    // Handed in, not read off the document — see the `showcase` parameter.
+    //
+    // Nothing is filtered or sorted here, deliberately. Both happen at the
+    // database, inside `AchievementService.listPublic` and
+    // `AlumniService.listPublic`: ACTIVE-only and institution-scoped, so a
+    // HIDDEN or foreign record is never fetched in the first place and a bug
+    // in this function cannot leak one. Adding a defensive `status` filter
+    // here would look like hardening and would in fact be a regression — it
+    // would silently cover for a broken database filter, and the mutation
+    // tests in `tests/integration/public-profile.test.ts` would stop
+    // distinguishing anything.
+    //
+    // Asset keys are resolved by `toPublicUrl` and, exactly as on the `media`
+    // path above, deliberately NOT passed through
+    // `assertExternallyReachable`: that guard belongs to the outbound
+    // FeesBasket push, where IDAP hands a partner a URL it will only ever link
+    // to. Here IDAP is serving its own payload, so a localhost URL in
+    // development is harmless — and refusing one would break local
+    // development for no benefit. Pinned by a MUTATION-DISTINGUISHING test in
+    // `tests/unit/public-projection.test.ts`.
+    achievements: (showcase?.achievements ?? []).map((row) => ({
+      id: row.id,
+      category: row.category,
+      title: row.title,
+      description: text(row.description),
+      eventDate: text(row.eventDate),
+      level: row.level,
+      students: (row.students ?? []).map((student) => ({
+        name: student.name,
+        grade: text(student.grade),
+      })),
+      photos: (row.photos ?? []).map((key) => toPublicUrl(key)),
+      certificates: (row.certificates ?? []).map((key) => toPublicUrl(key)),
+    })),
+
+    alumni: (showcase?.alumni ?? []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      batch: text(row.batch),
+      category: row.category,
+      currentRole: text(row.currentRole),
+      org: text(row.org),
+      photo: row.photo ? toPublicUrl(row.photo) : undefined,
+      note: text(row.note),
+    })),
   };
 }

@@ -259,6 +259,33 @@ export const AchievementService = {
     return rows.map(serialize);
   },
 
+  /**
+   * The achievements the public profile may show: ACTIVE only, in the order a
+   * public page wants them.
+   *
+   * Deliberately a second method rather than a filter bolted onto `list`.
+   * `list` serves the dashboard, which must see HIDDEN records in order to
+   * manage them, and sorts by `createdAt` alone. Two things follow from
+   * keeping them apart. The status filter runs at the DATABASE, so a
+   * projection bug downstream cannot leak a record that was never fetched —
+   * in-memory filtering after the fact would not have that property. And
+   * `eventDate` leads the sort, because a public page is ordered by when the
+   * achievement happened, not by when an admin typed it in; `createdAt` only
+   * breaks ties between two achievements on the same day.
+   *
+   * `eventDate` is optional, and MongoDB sorts a missing field before every
+   * value ascending — so descending puts undated achievements last, which is
+   * where a public page wants them. Same behaviour `AlumniService.listPublic`
+   * relies on for `batch`.
+   */
+  async listPublic(institutionId: string): Promise<AchievementDTO[]> {
+    await connectToDatabase();
+    const rows = await Achievement.find({ institutionId, status: "ACTIVE" })
+      .sort({ eventDate: -1, createdAt: -1 })
+      .lean<AchievementDoc[]>();
+    return rows.map(serialize);
+  },
+
   async create(
     institutionId: string,
     input: AchievementCreateInput,

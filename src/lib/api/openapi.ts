@@ -1,4 +1,7 @@
 import {
+  ACHIEVEMENT_CATEGORIES,
+  ACHIEVEMENT_LEVELS,
+  ALUMNI_CATEGORIES,
   API_RATE_LIMIT,
   APPLICATION_STATUSES,
   DOCUMENT_TYPES,
@@ -439,7 +442,7 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
           tags: ["Website"],
           summary: "Read the institution's full public profile",
           description:
-            "Everything a hosted profile page or a website integration needs to render the institution — contact details, academics, facilities, social links and a media library — sourced from the same profile the institution publishes once. Only a `PUBLISHED` and active institution's profile is returned; a draft, suspended or nonexistent one 404s, so a caller cannot tell them apart. No credentials required.",
+            "Everything a hosted profile page or a website integration needs to render the institution — contact details, academics, facilities, social links, a media library, published achievements and notable alumni — sourced from the same profile the institution publishes once. Only a `PUBLISHED` and active institution's profile is returned; a draft, suspended or nonexistent one 404s, so a caller cannot tell them apart. No credentials required.",
           operationId: "getPublicProfileById",
           security: [],
           responses: {
@@ -1371,6 +1374,73 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                       },
                       videoId: { type: "string", description: "Present only when kind is VIDEO." },
                       sortOrder: { type: "integer" },
+                    },
+                  },
+                },
+                achievements: {
+                  type: "array",
+                  description:
+                    "Awards and honours the institution has published, most recent event first; undated ones last. Records with status HIDDEN are never included.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", example: "6a8880f3446c577c470cd06c" },
+                      category: { type: "string", enum: [...ACHIEVEMENT_CATEGORIES] },
+                      title: { type: "string", example: "State Kabaddi Champions" },
+                      description: { type: "string" },
+                      eventDate: {
+                        type: "string",
+                        format: "date-time",
+                        description: "Omitted when the institution did not record one.",
+                      },
+                      level: { type: "string", enum: [...ACHIEVEMENT_LEVELS] },
+                      students: {
+                        type: "array",
+                        description: "Free text, not links to student records. Always present, possibly empty.",
+                        items: {
+                          type: "object",
+                          properties: {
+                            name: { type: "string" },
+                            grade: { type: "string" },
+                          },
+                        },
+                      },
+                      photos: {
+                        type: "array",
+                        description: "Always absolute URLs, regardless of storage backend. Always present, possibly empty.",
+                        items: { type: "string", format: "uri" },
+                      },
+                      certificates: {
+                        type: "array",
+                        description: "PDF URLs, always absolute. Always present, possibly empty.",
+                        items: { type: "string", format: "uri" },
+                      },
+                    },
+                  },
+                },
+                alumni: {
+                  type: "array",
+                  description:
+                    "Notable alumni, by batch descending — a raw text sort, not a chronological one — then name; alumni with no batch last. Records with status HIDDEN are never included.",
+                  items: {
+                    type: "object",
+                    properties: {
+                      id: { type: "string", example: "6a8880f3446c577c470cd06c" },
+                      name: { type: "string", example: "Dr. Meera Iyer" },
+                      batch: {
+                        type: "string",
+                        description: "Free text — a year or a range, e.g. \"2015\" or \"2012-2015\".",
+                        example: "2012-2015",
+                      },
+                      category: { type: "string", enum: [...ALUMNI_CATEGORIES] },
+                      currentRole: { type: "string" },
+                      org: { type: "string" },
+                      photo: {
+                        type: "string",
+                        format: "uri",
+                        description: "Always absolute. Omitted when no photo was uploaded.",
+                      },
+                      note: { type: "string" },
                     },
                   },
                 },

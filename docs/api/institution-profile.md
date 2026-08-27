@@ -424,6 +424,31 @@ curl https://your-domain.com/api/public/INS0001/profile
       { "id": "6a8b...", "kind": "IMAGE", "url": "https://...blob.vercel-storage.com/media/INS0001/....jpg", "title": "Campus Front Gate", "caption": "Main entrance on Hebbal Road", "sortOrder": 0 },
       { "id": "6a90...", "kind": "VIDEO", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Campus Tour", "provider": "YOUTUBE", "videoId": "dQw4w9WgXcQ", "sortOrder": 1 },
       { "id": "6a90...", "kind": "BROCHURE", "url": "https://...blob.vercel-storage.com/media/INS0001/documents/....pdf", "title": "Admissions Brochure 2026", "sortOrder": 2 }
+    ],
+    "achievements": [
+      {
+        "id": "6a9c...",
+        "category": "SPORTS",
+        "title": "State Kabaddi Champions",
+        "description": "Under-16 team, Karnataka State Championship",
+        "eventDate": "2026-02-01T00:00:00.000Z",
+        "level": "STATE",
+        "students": [{ "name": "Asha Rao", "grade": "10" }],
+        "photos": ["https://...blob.vercel-storage.com/showcase/INS0001/achievements/....jpg"],
+        "certificates": ["https://...blob.vercel-storage.com/showcase/INS0001/achievements/....pdf"]
+      }
+    ],
+    "alumni": [
+      {
+        "id": "6a9d...",
+        "name": "Dr. Meera Iyer",
+        "batch": "2012-2015",
+        "category": "DOCTOR",
+        "currentRole": "Cardiologist",
+        "org": "Apollo Hospitals",
+        "photo": "https://...blob.vercel-storage.com/showcase/INS0001/alumni/....jpg",
+        "note": "Heads the alumni association."
+      }
     ]
   }
 }
@@ -435,11 +460,54 @@ locally-stored file — see [§4](#4-the-public-projection)), `sortOrder`, and
 A field that is unset is omitted from the object entirely (never sent as `null`) — the
 brochure above has no `caption` because none was given.
 
+`achievements[]` and `alumni[]` are the institution's published showcase. Unlike `media`,
+which is embedded on the institution record, each lives in its own collection and is
+fetched per request; both are **always present**, as `[]` when the institution has none.
+Only records with `status: "ACTIVE"` are returned — the status itself never appears in the
+payload, and a hidden record is dropped rather than marked.
+
+| `achievements[]` field | Notes |
+| --- | --- |
+| `id` | The achievement's own id. |
+| `category` | Always present. See [§5](#enums). |
+| `title` | Always present. |
+| `description` | Omitted when unset. |
+| `eventDate` | ISO 8601 date-time. Omitted when the institution recorded none. |
+| `level` | Always present; `SCHOOL` when the institution set nothing else. See [§5](#enums). |
+| `students[]` | `{ "name", "grade"? }`. Free text, **not** links to student records. Always an array, `[]` when none; `grade` omitted when unset. |
+| `photos[]` | Absolute URLs. Always an array, `[]` when none. |
+| `certificates[]` | Absolute PDF URLs. Always an array, `[]` when none. |
+
+Ordered by `eventDate` **descending**, then `createdAt` descending to break ties between
+two achievements on the same day. `eventDate` is optional, and a record without one sorts
+**last** — the newest events lead, and undated ones trail the list rather than heading it.
+
+| `alumni[]` field | Notes |
+| --- | --- |
+| `id` | The alumnus's own id. |
+| `name` | Always present. |
+| `batch` | **Free text** — `"2015"` or `"2012-2015"`. Omitted when unset. |
+| `category` | Always present. See [§5](#enums). |
+| `currentRole`, `org`, `note` | Omitted when unset. |
+| `photo` | One per alumnus, absolute URL. Omitted when none was uploaded. |
+
+Ordered by `batch` **descending, then `name` ascending**. Because `batch` is free text,
+that descending sort is a **raw string comparison and not a chronological guarantee**:
+`"2015"` sorts above `"2012-2015"` because the two first differ at their fourth character.
+An alumnus with no `batch` sorts last. A consumer that needs true chronological order must
+parse `batch` itself.
+
+`photos[]`, `certificates[]` and `photo` are absolute URLs on the same terms as
+`media[].url` — resolved by `toPublicUrl`, so a consumer never has to know which storage
+backend a deployment uses.
+
 Note what is **absent** even though it exists in the database: `active`, `profileStatus`,
 `publishedAt`, `id`/`_id` on the institution itself, `createdAt`/`updatedAt`,
 `contact.alternateEmail`'s sibling `headEmail`/`headPhone` on `management` (names and
-designations only), each media item's `uploadedAt`, and any media item with
-`status: "HIDDEN"`. See [§4](#4-the-public-projection) for the full allow-list.
+designations only), each media item's `uploadedAt`, any media item with
+`status: "HIDDEN"`, each achievement's and alumnus's own `status`/`createdAt`/`updatedAt`,
+and any achievement or alumnus with `status: "HIDDEN"`. See
+[§4](#4-the-public-projection) for the full allow-list.
 
 `404` example — draft, suspended, unpublished, deactivated, or unknown, all identical:
 
@@ -499,10 +567,24 @@ through unchanged, while the local-disk backend's `/api/media/…` keys are reso
 `env.APP_URL` first, so a consumer never has to know which storage backend is behind a
 given deployment. `uploadedAt` is **not** exposed on a media item.
 
+Achievements and alumni join that output but do **not** come from the institution
+document — they are separate collections, so `InstitutionService.getPublicProfile` fetches
+them and hands them to the same projection, which stays a pure function over what it is
+given. The `ACTIVE`-only filter and the institution scope both live in the queries
+(`AchievementService.listPublic`, `AlumniService.listPublic`), **at the database** rather
+than in memory afterwards: a `HIDDEN` or another tenant's record is never fetched, so no
+downstream bug in the projection can leak one. Public per record: `id`, `category`,
+`title`, `description`, `eventDate`, `level`, `students[]`, `photos[]` and
+`certificates[]` on an achievement; `id`, `name`, `batch`, `category`, `currentRole`,
+`org`, `photo` and `note` on an alumnus.
+
 **Never public:** `active`, `profileStatus`, `publishedAt`, the institution's own
 `_id`/`id`, `createdAt`, `updatedAt`, `management.headEmail`, `management.headPhone`, each
 media item's `uploadedAt`, media items with `status: "HIDDEN"` (they are dropped, not
-marked hidden in the response), and anything not explicitly named above.
+marked hidden in the response), each achievement's and alumnus's `institutionId`,
+`status`, `createdAt` and `updatedAt`, achievements and alumni with `status: "HIDDEN"`
+(dropped the same way, before they are ever read), and anything not explicitly named
+above.
 
 ---
 
@@ -548,6 +630,10 @@ marked hidden in the response), and anything not explicitly named above.
 | `media[].provider` | `YOUTUBE`, `VIMEO` — `kind: "VIDEO"` items only |
 | media upload `target` | `LOGO`, `COVER`, `MEDIA` |
 | media upload `kind` | `IMAGE`, `BROCHURE`, `PROSPECTUS` — read only when `target` is `MEDIA` |
+| `achievements[].category` | `ACADEMIC`, `SPORTS`, `CULTURAL`, `OLYMPIAD`, `SCIENCE_FAIR`, `ROBOTICS`, `COMMUNITY_SERVICE` |
+| `achievements[].level` | `SCHOOL`, `TALUK`, `DISTRICT`, `STATE`, `NATIONAL`, `INTERNATIONAL` |
+| `alumni[].category` | `DOCTOR`, `ENGINEER`, `ENTREPRENEUR`, `CIVIL_SERVICES`, `SCIENTIST`, `ARTIST`, `SPORTS`, `OTHER` |
+| achievement / alumnus `status` | `ACTIVE`, `HIDDEN` — only `ACTIVE` is ever public, and the field itself is never in the payload |
 
 ### Error codes
 

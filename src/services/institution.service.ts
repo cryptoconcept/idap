@@ -24,6 +24,8 @@ import { calculateCompletion, type ProfileCompletion } from "@/lib/profile/compl
 import { toPublicProfile, type PublicProfile } from "@/lib/profile/public-projection";
 import type { DerivedOfferings } from "@/lib/academic/offerings";
 import { AcademicStructureService } from "./academic-structure.service";
+import { AchievementService } from "./achievement.service";
+import { AlumniService } from "./alumni.service";
 import type { z } from "zod";
 import {
   mediaDocumentKindSchema,
@@ -974,8 +976,23 @@ export const InstitutionService = {
     if (!row) return null;
     // Derived offerings replace the stored arrays only when a tree exists, so
     // nothing disappears from a live public profile on release day.
-    const offerings = await AcademicStructureService.offeringsFor(row.institutionId);
-    return toPublicProfile(row as Record<string, unknown>, offerings ?? undefined);
+    //
+    // Achievements and alumni are separate collections rather than embedded
+    // fields, so they cannot be projected off `row` — they are fetched here
+    // and handed to the projection alongside `offerings`. `listPublic` (not
+    // `list`) on both: it is the one that filters to ACTIVE and applies the
+    // public sort, at the database, so a HIDDEN record is never fetched and
+    // the projection downstream has no opportunity to leak one. All three
+    // reads are independent, so they go together.
+    const [offerings, achievements, alumni] = await Promise.all([
+      AcademicStructureService.offeringsFor(row.institutionId),
+      AchievementService.listPublic(row.institutionId),
+      AlumniService.listPublic(row.institutionId),
+    ]);
+    return toPublicProfile(row as Record<string, unknown>, offerings ?? undefined, {
+      achievements,
+      alumni,
+    });
   },
 
   async list(query: {

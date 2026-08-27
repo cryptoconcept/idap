@@ -122,6 +122,31 @@ export const AlumniService = {
     return rows.map(serialize);
   },
 
+  /**
+   * The alumni the public profile may show: ACTIVE only.
+   *
+   * Deliberately a second method rather than a filter bolted onto `list`.
+   * `list` serves the dashboard, which must see HIDDEN records in order to
+   * manage them; this surface must never see one. The filter runs at the
+   * DATABASE, so a projection bug downstream cannot leak a record that was
+   * never fetched — in-memory filtering after the fact would not have that
+   * property. The sort is the same as `list`'s, which is coincidence rather
+   * than shared intent, and not a reason to merge the two.
+   *
+   * `batch` is free text (`Alumnus.ts`) — "2015" or "2012-2015" — so
+   * `{ batch: -1 }` is a lexicographic string sort and only coincidentally a
+   * chronological one. `batch` is also optional, and MongoDB sorts a missing
+   * field before every value ascending, so descending puts alumni with no
+   * batch last, which is where a public page wants them.
+   */
+  async listPublic(institutionId: string): Promise<AlumnusDTO[]> {
+    await connectToDatabase();
+    const rows = await Alumnus.find({ institutionId, status: "ACTIVE" })
+      .sort({ batch: -1, name: 1 })
+      .lean<AlumnusDoc[]>();
+    return rows.map(serialize);
+  },
+
   async create(
     institutionId: string,
     input: AlumnusCreateInput,
