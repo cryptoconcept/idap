@@ -12,9 +12,19 @@
  * institution is skipped — no partial write — and reported under `overlong`,
  * so a human can shorten the field and let a re-run pick it up.
  *
- * Idempotent: only institutions with a non-empty `gallery` are scanned, and a
- * migrated institution no longer has one, so a second run finds nothing left
- * to migrate.
+ * The write is a full `$set: { media }`, which would silently destroy any
+ * content already sitting in `media` — reachable in production because the
+ * new upload flow (media routes) ships before this one-time migration runs,
+ * so an admin can genuinely populate `media` before a re-run touches their
+ * institution. An institution whose `media` is already non-empty is refused
+ * the same way an overlong caption is: skipped entirely, untouched, and
+ * reported under `skipped` (kept separate from `overlong` so an operator can
+ * tell the two situations apart).
+ *
+ * Re-running this script only looks idempotent because the first run
+ * `$unset`s the very `gallery` field the selector below keys on — that's an
+ * accident of the selector, not a guard against overwriting `media`, which is
+ * why the check above exists as an explicit, independent condition.
  *
  *   npm run migrate:media                 # report only
  *   npm run migrate:media -- --apply      # write
@@ -29,6 +39,7 @@ export type MigrationReport = {
   scanned: number;
   migrated: number;
   overlong: Array<{ institutionId: string; itemId: string; length: number }>;
+  skipped: Array<{ institutionId: string; reason: string }>;
 };
 
 /** Shape of a pre-migration gallery item, as it exists only in already-written
@@ -48,17 +59,29 @@ export async function migrateGalleryToMedia({
 }: {
   apply: boolean;
 }): Promise<MigrationReport> {
-  const report: MigrationReport = { scanned: 0, migrated: 0, overlong: [] };
+  const report: MigrationReport = { scanned: 0, migrated: 0, overlong: [], skipped: [] };
 
   // "gallery.0 exists" selects exactly the institutions with a non-empty
   // gallery array — an institution with no field, or an empty one, is skipped,
-  // which is what makes a second run report zero.
+  // which is what makes a second run report zero. This selector says nothing
+  // about the state of `media`, which is why it's checked separately below.
   const cursor = Institution.collection.find({ "gallery.0": { $exists: true } });
 
   for await (const doc of cursor) {
     report.scanned++;
     const institutionId = doc.institutionId as string;
     const gallery = (doc.gallery ?? []) as LegacyGalleryItem[];
+
+    // Refuse to touch an institution that already has real content in
+    // `media` — the write below is a full `$set: { media }`, which would
+    // silently erase it. Checked first, and independently of the overlong
+    // check, because "don't overwrite existing content" is a stricter
+    // precondition than "the content we'd write is valid."
+    const existingMedia = Array.isArray(doc.media) ? doc.media : [];
+    if (existingMedia.length > 0) {
+      report.skipped.push({ institutionId, reason: "media array already populated" });
+      continue;
+    }
 
     // Check every item's caption length BEFORE writing anything for this
     // institution — one overlong item disqualifies the whole document.
@@ -70,7 +93,10 @@ export async function migrateGalleryToMedia({
       for (const { item, index } of overlongItems) {
         report.overlong.push({
           institutionId,
-          itemId: item._id ? String(item._id) : String(index),
+          // No source `_id` on a legacy item means the index alone isn't
+          // locatable — the imageUrl is what an operator can actually find
+          // the row by.
+          itemId: item._id ? String(item._id) : `${item.imageUrl} (index ${index})`,
           length: item.description!.length,
         });
       }
@@ -131,13 +157,20 @@ if (isMainModule) {
       }
     }
 
+    if (report.skipped.length > 0) {
+      console.log(`\n${report.skipped.length} institution(s) skipped — needs manual review:`);
+      for (const item of report.skipped) {
+        console.log(`  ${item.institutionId}: ${item.reason}`);
+      }
+    }
+
     if (!APPLY) {
       console.log("\nDry run. Re-run with --apply to write.");
     }
 
     await mongoose.disconnect();
 
-    if (report.overlong.length > 0) {
+    if (report.overlong.length > 0 || report.skipped.length > 0) {
       process.exitCode = 1;
     }
   };

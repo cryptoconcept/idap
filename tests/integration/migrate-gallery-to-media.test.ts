@@ -98,4 +98,59 @@ describe("gallery → media migration", () => {
     const row = await Institution.collection.findOne({ institutionId: "INS0004" });
     expect(row?.media).toBeUndefined();
   });
+
+  // MUTATION-DISTINGUISHING: the migration writes `media` with a full
+  // `$set`, which would silently destroy an institution's real content if the
+  // migration ran after the new upload flow had already populated it. This is
+  // the test that fails if that guard is removed.
+  it("refuses to touch an institution whose media array is already populated", async () => {
+    await makeInstitution("INS0005");
+    await Institution.collection.updateOne(
+      { institutionId: "INS0005" },
+      {
+        $set: {
+          media: [
+            {
+              _id: new (await import("mongoose")).Types.ObjectId(),
+              kind: "VIDEO",
+              url: "https://youtube.com/watch?v=abc123",
+              status: "ACTIVE",
+            },
+          ],
+          gallery: [{ imageUrl: "/api/media/x.png", status: "ACTIVE" }],
+        },
+      },
+    );
+
+    const report = await migrateGalleryToMedia({ apply: true });
+
+    expect(report.migrated).toBe(0);
+    expect(report.skipped).toHaveLength(1);
+    expect(report.skipped[0]).toMatchObject({ institutionId: "INS0005" });
+
+    const row = await Institution.collection.findOne({ institutionId: "INS0005" });
+    expect(row?.media).toHaveLength(1);
+    expect(row?.media[0]).toMatchObject({
+      kind: "VIDEO",
+      url: "https://youtube.com/watch?v=abc123",
+      status: "ACTIVE",
+    });
+    expect(row?.gallery).toHaveLength(1);
+  });
+
+  it("still migrates normally when gallery has no media field alongside it", async () => {
+    await makeInstitution("INS0006");
+    await Institution.collection.updateOne(
+      { institutionId: "INS0006" },
+      { $set: { gallery: [{ imageUrl: "/api/media/x.png", status: "ACTIVE" }] } },
+    );
+
+    const report = await migrateGalleryToMedia({ apply: true });
+
+    expect(report.migrated).toBe(1);
+    expect(report.skipped).toHaveLength(0);
+    const row = await Institution.collection.findOne({ institutionId: "INS0006" });
+    expect(row?.gallery).toBeUndefined();
+    expect(row?.media).toHaveLength(1);
+  });
 });
