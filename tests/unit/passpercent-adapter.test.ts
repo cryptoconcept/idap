@@ -117,6 +117,27 @@ describe("passpercentAdapter", () => {
 
       await expect(passpercentAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow();
     });
+
+    it("adopts the FRESH id from a 201 on resubmission, even for an institution IDAP already had a (now-swept) requestId for", async () => {
+      // Map §2's actor:"system" wrinkle: a resubmission for the same
+      // (partner, externalRef) can legitimately come back 201 with a NEW
+      // requestId (the remote lazily swept an orphaned open request — e.g.
+      // its target institution deleted its account while awaiting_school).
+      // `initiate` takes no "existing id" parameter at all — by design, it
+      // must never special-case a resubmission to "keep what we already
+      // have" instead of adopting whatever the fresh response says, because
+      // "what we already have" may be exactly the id that was just swept
+      // away, and polling it forever would never resolve.
+      const http = vi
+        .fn()
+        .mockResolvedValue({ status: 201, body: { requestId: "req-fresh-after-sweep", status: "pending" } });
+      const ctx = makeCtx(http);
+
+      const result = await passpercentAdapter.initiate!(ctx, makeInstitution({ institutionId: "inst-resubmit" }));
+
+      expect(result.remoteRequestId).toBe("req-fresh-after-sweep");
+      expect(result.remoteRequestId).not.toBe("req-stale-swept-away");
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -346,7 +367,16 @@ describe("passpercentAdapter", () => {
       ]);
     });
 
-    it("throws ConnectorAuthError on a 401 from a grant call, instead of returning a FAILED outcome", async () => {
+    it("throws ConnectorAuthError on a 401 from the GET /partner/schema call itself, instead of returning a FAILED outcome", async () => {
+      const http = vi.fn().mockResolvedValueOnce({ status: 401, body: { error: "invalid token" } });
+
+      await expect(passpercentAdapter.sync(makeCtx(http), makeConnection(), makeSyncData())).rejects.toBeInstanceOf(
+        ConnectorAuthError,
+      );
+      expect(http).toHaveBeenCalledTimes(1);
+    });
+
+    it("throws ConnectorAuthError on a 401 from the profile PATCH call, instead of returning a FAILED outcome", async () => {
       const http = vi
         .fn()
         .mockResolvedValueOnce({ status: 200, body: schemaBody() })
@@ -355,6 +385,22 @@ describe("passpercentAdapter", () => {
       await expect(passpercentAdapter.sync(makeCtx(http), makeConnection(), makeSyncData())).rejects.toBeInstanceOf(
         ConnectorAuthError,
       );
+      expect(http).toHaveBeenCalledTimes(2);
+    });
+
+    it("throws ConnectorAuthError on a 401 from a per-year results PUT call, instead of recording a failed step", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValueOnce({ status: 200, body: schemaBody() })
+        .mockResolvedValueOnce({ status: 200, body: { updated: true } })
+        .mockResolvedValueOnce({ status: 401, body: { error: "invalid token" } });
+
+      // Default makeSyncData() has exactly one result / one year, so the
+      // 401 lands on that single PUT — the third and last mocked response.
+      await expect(passpercentAdapter.sync(makeCtx(http), makeConnection(), makeSyncData())).rejects.toBeInstanceOf(
+        ConnectorAuthError,
+      );
+      expect(http).toHaveBeenCalledTimes(3);
     });
 
     it("treats a 429 quota response as FAILED (not PARTIAL) and stops the run", async () => {
