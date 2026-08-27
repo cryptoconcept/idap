@@ -46,10 +46,20 @@ export type AchievementCreateInput = z.infer<typeof achievementCreateSchema>;
  * `category` and `title` stay non-nullable: a patch may change either but
  * never clear one to "no category"/"no title" — there is no such state, the
  * same reason `updateScholarshipSchema`'s `name` isn't nullable either.
- * `eventDate`, `level` and `students` are also not nullable: an achievement
- * with no date, the default level, or no roster is an ordinary valid state
- * reached by simply never setting the field, and `students` can already be
- * cleared unambiguously with an empty array — no three-state trick needed.
+ *
+ * The rule for every other field on this schema is not "is it free text" —
+ * it's whether an admin can legitimately want the field to hold no value
+ * *after having once given it one*. `eventDate` and `level` both pass that
+ * test the same way `description` does: an admin can enter an approximate
+ * event date and later learn the school doesn't actually know it (wrong is
+ * worse than absent, especially for a field this record sorts and displays
+ * by), or miscategorise an event's level and want no level at all rather
+ * than a wrong one. A `Date` and an enum have the exact same three states —
+ * absent, present, explicitly cleared — as a string; `optionalText` collapsing
+ * `""` to `undefined` was just the shape this bug took in the media phase,
+ * not the boundary of it. So both are `.nullable()` here, same convention as
+ * `description`. `students` fails the test and stays non-nullable: `[]`
+ * already means "none" unambiguously, so there is no third state to recover.
  * `status` is the dashboard hide/show toggle, always one of
  * `SHOWCASE_STATUSES`; there is no "unset" status to clear it to.
  */
@@ -57,8 +67,8 @@ export const achievementPatchSchema = z.object({
   category: z.enum(ACHIEVEMENT_CATEGORIES).optional(),
   title: requiredText("Achievement title", 120).optional(),
   description: optionalText(2000).nullable(),
-  eventDate: optionalDateSchema,
-  level: z.enum(ACHIEVEMENT_LEVELS).optional(),
+  eventDate: optionalDateSchema.nullable(),
+  level: z.enum(ACHIEVEMENT_LEVELS).optional().nullable(),
   students: z.array(achievementStudentSchema).max(ACHIEVEMENT_MAX_STUDENTS).optional(),
   status: z.enum(SHOWCASE_STATUSES).optional(),
 });

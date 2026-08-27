@@ -132,6 +132,24 @@ describe("achievementPatchSchema", () => {
     expect(untouched.description).toBeUndefined();
     expect("description" in untouched).toBe(false);
   });
+
+  it("distinguishes an explicit null eventDate (clear) from an absent one (leave alone)", () => {
+    const cleared = achievementPatchSchema.parse({ eventDate: null });
+    expect(cleared.eventDate).toBeNull();
+
+    const untouched = achievementPatchSchema.parse({ title: "Renamed only" });
+    expect(untouched.eventDate).toBeUndefined();
+    expect("eventDate" in untouched).toBe(false);
+  });
+
+  it("distinguishes an explicit null level (clear) from an absent one (leave alone)", () => {
+    const cleared = achievementPatchSchema.parse({ level: null });
+    expect(cleared.level).toBeNull();
+
+    const untouched = achievementPatchSchema.parse({ title: "Renamed only" });
+    expect(untouched.level).toBeUndefined();
+    expect("level" in untouched).toBe(false);
+  });
 });
 
 describe("alumnusCreateSchema", () => {
