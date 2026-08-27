@@ -528,5 +528,17 @@ export type ShowcaseStatus = (typeof SHOWCASE_STATUSES)[number];
 export const ACHIEVEMENT_MAX_PHOTOS = 10;
 export const ACHIEVEMENT_MAX_CERTIFICATES = 5;
 export const ACHIEVEMENT_MAX_STUDENTS = 50;
-export const SHOWCASE_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+/**
+ * There is deliberately no `SHOWCASE_MAX_IMAGE_BYTES` beside this. Showcase
+ * images are uploaded through `validateImage` (`src/lib/media/image.ts`), which
+ * enforces `MAX_IMAGE_BYTES` — so a showcase-named image constant would
+ * advertise a limit nothing imposes, and the next reader would believe it. One
+ * name for one limit; import `MAX_IMAGE_BYTES` if you need the number.
+ *
+ * This one earns its place: PDFs have no shared validator, so
+ * `AchievementService.addCertificate` checks this value directly. It happens to
+ * equal `MEDIA_MAX_PDF_BYTES` today, and that is a coincidence rather than a
+ * contract — a certificate cap and a brochure cap are free to move apart.
+ */
 export const SHOWCASE_MAX_PDF_BYTES = 20 * 1024 * 1024;

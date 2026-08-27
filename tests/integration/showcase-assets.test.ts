@@ -10,9 +10,12 @@ import { storage, type StoredObject } from "@/lib/storage";
 import {
   ACHIEVEMENT_MAX_CERTIFICATES,
   ACHIEVEMENT_MAX_PHOTOS,
-  SHOWCASE_MAX_IMAGE_BYTES,
   SHOWCASE_MAX_PDF_BYTES,
 } from "@/lib/constants";
+// The image cap has exactly one name. Showcase images are uploaded through
+// `validateImage`, so this is the limit these tests must exceed to be refused —
+// a showcase-specific alias would only be a second name for the same number.
+import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 // `storage.get()` reads the adapter's PRIVATE store, never where `putPublic`
 // writes — same helper as tests/integration/results-crud.test.ts, which this
@@ -110,7 +113,7 @@ describe("AchievementService.addPhoto", () => {
 
   it("refuses an image over the size cap with the storage adapter never invoked", async () => {
     const created = await makeAchievement("INS0001");
-    const oversized = Buffer.concat([PNG, Buffer.alloc(SHOWCASE_MAX_IMAGE_BYTES)]);
+    const oversized = Buffer.concat([PNG, Buffer.alloc(MAX_IMAGE_BYTES)]);
 
     const putPublic = vi.spyOn(storage, "putPublic");
     try {
@@ -138,11 +141,18 @@ describe("AchievementService.addPhoto", () => {
   it("caps photos per asset kind: a certificate on the record never counts against the photo cap", async () => {
     const created = await makeAchievement("INS0001");
 
-    // Seeded FIRST, deliberately. If the photo cap counted every asset rather
-    // than only photos, this one certificate would make the LAST of the
-    // ACHIEVEMENT_MAX_PHOTOS fills below fail — which is what makes this test
-    // distinguish a per-kind cap from a shared one. Filling photos first and
-    // adding the certificate afterwards would pass either way.
+    // Seeded FIRST, deliberately. DO NOT reorder this to the natural-reading
+    // shape (fill ten photos, refuse the eleventh, then add a certificate):
+    // that ordering passes whether the cap is per-kind or shared, because ten
+    // photos alone already trip a shared cap at the eleventh. It would look
+    // tidier and prove nothing.
+    //
+    // With the certificate seeded first, a cap that counted every asset rather
+    // than only photos reaches its limit one photo early, so the LAST of the
+    // ACHIEVEMENT_MAX_PHOTOS fills below fails — and that failure is the whole
+    // reason this test exists. Verified by mutation: making the `$expr` count
+    // `photos` + `certificates` fails this test on the tenth fill with "An
+    // achievement can hold at most 10 photos".
     await AchievementService.addCertificate(
       "INS0001",
       created.id,
@@ -574,7 +584,7 @@ describe("AlumniService.setPhoto", () => {
 
   it("refuses an image over the size cap with the storage adapter never invoked", async () => {
     const created = await makeAlumnus("INS0001");
-    const oversized = Buffer.concat([PNG, Buffer.alloc(SHOWCASE_MAX_IMAGE_BYTES)]);
+    const oversized = Buffer.concat([PNG, Buffer.alloc(MAX_IMAGE_BYTES)]);
 
     const putPublic = vi.spyOn(storage, "putPublic");
     try {

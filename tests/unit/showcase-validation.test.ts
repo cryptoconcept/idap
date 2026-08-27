@@ -9,11 +9,7 @@ import {
   ACHIEVEMENT_CATEGORIES,
   ACHIEVEMENT_LEVELS,
   ALUMNI_CATEGORIES,
-  MEDIA_MAX_PDF_BYTES,
-  SHOWCASE_MAX_IMAGE_BYTES,
-  SHOWCASE_MAX_PDF_BYTES,
 } from "@/lib/constants";
-import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 describe("enum parity with PassPercent", () => {
   // Transcribed (not read at runtime — passpercent is a sibling checkout
@@ -232,27 +228,3 @@ describe("alumnusPatchSchema", () => {
   });
 });
 
-/**
- * The showcase upload guards do not implement their own size checks — they
- * reuse the media phase's. `AchievementService.addPhoto` and
- * `AlumniService.setPhoto` call `validateImage`, which enforces
- * `MAX_IMAGE_BYTES`; `addCertificate` reuses `addMediaDocument`'s inline
- * `%PDF-` + size check. A second, showcase-owned size check would be
- * duplicated validation — worse than a duplicated constant, and exactly how
- * the two limits would drift apart in behaviour as well as in name.
- *
- * So the showcase constants are pinned to the media ones they actually
- * enforce. They agree today; nothing else keeps them in step. Without these
- * assertions, changing one would silently enforce a limit different from the
- * one the showcase constant advertises. With them, a divergence fails loudly
- * here instead of taking effect.
- */
-describe("showcase byte caps pin the media constants they actually enforce", () => {
-  it("SHOWCASE_MAX_IMAGE_BYTES is the limit validateImage enforces", () => {
-    expect(SHOWCASE_MAX_IMAGE_BYTES).toBe(MAX_IMAGE_BYTES);
-  });
-
-  it("SHOWCASE_MAX_PDF_BYTES is the limit the media document guard enforces", () => {
-    expect(SHOWCASE_MAX_PDF_BYTES).toBe(MEDIA_MAX_PDF_BYTES);
-  });
-});

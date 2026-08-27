@@ -176,6 +176,16 @@ async function storeAsset(
   const updated = await Achievement.findOneAndUpdate(
     {
       _id: objectId,
+      // `institutionId` here is deliberate defence in depth, NOT dead weight —
+      // and no external test can pin it, so do not delete it as untested. The
+      // institution-scoped pre-read above is what actually refuses a foreign id
+      // (verified by mutation: dropping `institutionId` from BOTH fails this
+      // method's isolation test; dropping it from this filter alone fails
+      // nothing, because the pre-read short-circuits first). There is no way to
+      // reach this write from outside the service without passing that read.
+      // What this clause buys is that the write is atomic with respect to its
+      // own tenancy, and that the guard survives if the pre-read is ever moved
+      // or removed.
       institutionId,
       $expr: { $lt: [{ $size: { $ifNull: [`$${field}`, []] } }, max] },
     },
@@ -378,7 +388,10 @@ export const AchievementService = {
 
     // Best-effort, and after the row is already updated: a storage failure
     // here must not resurrect the now-unreferenced object as the source of
-    // truth. Same ordering as `removeMediaItem`.
+    // truth. Same ordering as `removeMediaItem`. No `isOwnedMediaUrl` guard
+    // here either, and for the same two reasons `remove` sets out below —
+    // the second of which (it matches `/media/`, not `showcase/`) means
+    // adding one would silently turn this line into a no-op.
     await storage.deletePublic(input.key).catch(() => undefined);
 
     await ActivityService.record({
@@ -409,11 +422,25 @@ export const AchievementService = {
     if (!removed) throw notFound("Achievement not found");
 
     // The deleted record was the only thing referencing these objects, so
-    // they go with it — otherwise every deletion leaks its assets. The keys
-    // come from the institution-scoped document just deleted, and `photos` /
-    // `certificates` are written only by the upload methods above (they are
-    // absent from both `achievementCreateSchema` and `PATCHABLE_FIELDS`), so
-    // every key here is one this service minted for this institution.
+    // they go with it — otherwise every deletion leaks its assets.
+    //
+    // There is deliberately NO `isOwnedMediaUrl`-style provenance guard on
+    // this delete, and adding one would be a regression, not a hardening.
+    // Two reasons, and the second is the one that bites:
+    //
+    // 1. Nothing to guard against. The keys come from the institution-scoped
+    //    document just deleted, and `photos` / `certificates` appear in no
+    //    create or patch schema and in neither service's `PATCHABLE_FIELDS`,
+    //    so no parsed request body can write them. Only the upload methods
+    //    above can, and they mint the key under this institution's own
+    //    prefix. `addMediaImage` needs its guard because `logoUrl` IS free
+    //    text on the profile PATCH; that asymmetry is the whole difference.
+    // 2. `isOwnedMediaUrl` matches `/media/{institutionId}/`. Showcase keys
+    //    live under `showcase/{institutionId}/`, so it returns false for
+    //    every key here — dropping it in would silently disable this cleanup
+    //    entirely and leak every asset of every deleted record, with no test
+    //    failing to say so.
+    //
     // Best-effort, as everywhere else: a storage failure must not fail a
     // deletion that has already happened.
     for (const key of [...(removed.photos ?? []), ...(removed.certificates ?? [])]) {

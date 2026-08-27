@@ -214,6 +214,15 @@ export const AlumniService = {
       contentType: input.contentType,
     });
 
+    // `institutionId` in this filter is deliberate defence in depth, NOT dead
+    // weight — and no external test can pin it, so do not delete it as
+    // untested. The institution-scoped pre-read above is what actually refuses
+    // a foreign id (verified by mutation: dropping `institutionId` from BOTH
+    // fails this method's isolation test; dropping it from this filter alone
+    // fails nothing, because the pre-read short-circuits first). What it buys
+    // is that the write is atomic with respect to its own tenancy, and that the
+    // guard survives if the pre-read is ever moved or removed. Same note as
+    // `storeAsset` in achievement.service.ts.
     const updated = await Alumnus.findOneAndUpdate(
       { _id: objectId, institutionId },
       { $set: { photo: stored.key } },
@@ -226,14 +235,25 @@ export const AlumniService = {
       throw notFound("Alumnus not found");
     }
 
-    // The photo this replaced is now referenced by nothing. Unlike `logoUrl`
-    // — free text on the profile PATCH, which is why `addMediaImage` guards
-    // its equivalent with `isOwnedMediaUrl` — `photo` is never accepted from
-    // a request body: it is absent from `alumnusCreateSchema`, from
-    // `alumnusPatchSchema` and from `PATCHABLE_FIELDS`, so its stored value
-    // is always a key this service minted under this institution's own
-    // prefix. Best-effort: a cleanup failure must not fail the request that
-    // has already stored the new object.
+    // The photo this replaced is now referenced by nothing.
+    //
+    // There is deliberately NO `isOwnedMediaUrl`-style provenance guard here,
+    // and adding one would be a regression rather than a hardening:
+    //
+    // 1. Nothing to guard against. Unlike `logoUrl` — free text on the profile
+    //    PATCH, which is exactly why `addMediaImage` guards its equivalent —
+    //    `photo` is never accepted from a request body: it is absent from
+    //    `alumnusCreateSchema`, from `alumnusPatchSchema` and from
+    //    `PATCHABLE_FIELDS`, so its stored value is always a key this service
+    //    minted under this institution's own prefix.
+    // 2. `isOwnedMediaUrl` matches `/media/{institutionId}/`, and showcase
+    //    keys live under `showcase/{institutionId}/` — so it returns false
+    //    for every key here. Dropping it in would silently disable this
+    //    cleanup and orphan a stored object on every photo replacement, with
+    //    no test failing to say so.
+    //
+    // Best-effort: a cleanup failure must not fail the request that has
+    // already stored the new object.
     if (before.photo && before.photo !== stored.key) {
       await storage.deletePublic(before.photo).catch(() => undefined);
     }
@@ -267,10 +287,11 @@ export const AlumniService = {
 
     // The deleted record was the only thing referencing this object, so it
     // goes with it — otherwise every deletion leaks its photo. Same
-    // provenance argument as `setPhoto` above: `photo` is written only by
-    // that method, so this key is always one this service minted for this
-    // institution. Best-effort: a storage failure must not fail a deletion
-    // that has already happened.
+    // provenance argument as `setPhoto` above, including why there is no
+    // `isOwnedMediaUrl` guard: `photo` is written only by that method, and
+    // that helper matches `/media/` rather than `showcase/`, so adding it
+    // would silently turn this cleanup into a no-op. Best-effort: a storage
+    // failure must not fail a deletion that has already happened.
     if (removed.photo) {
       await storage.deletePublic(removed.photo).catch(() => undefined);
     }
