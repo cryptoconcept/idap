@@ -101,6 +101,26 @@ function buildAchievementUpdate(patch: AchievementPatchInput): {
 }
 
 /**
+ * Every showcase storage cleanup is best-effort: a failure must never fail a
+ * database write that has already been applied, or turn a refused upload into
+ * a 500. Best-effort is not the same as silent, though — an unlogged failure
+ * is a leaked object nobody can find, so the key and the institution go to the
+ * log where an operator can act on them.
+ *
+ * `AlumniService` carries its own copy rather than importing this one: a
+ * service reaching into a sibling service for a utility is a dependency this
+ * repo does not otherwise have, and the alternative — a shared module — is
+ * more surface than eight lines of cleanup deserve.
+ */
+async function deleteStoredObject(key: string, institutionId: string): Promise<void> {
+  try {
+    await storage.deletePublic(key);
+  } catch (error) {
+    console.error(`[showcase] failed to delete stored object ${key} for ${institutionId}`, error);
+  }
+}
+
+/**
  * The two asset kinds an achievement holds. Each owns its own array, its own
  * cap and its own storage rollback — a certificate never counts against the
  * photo limit and vice versa, which is why the cap below filters on one field
@@ -173,28 +193,40 @@ async function storeAsset(
     contentType: file.contentType,
   });
 
-  const updated = await Achievement.findOneAndUpdate(
-    {
-      _id: objectId,
-      // `institutionId` here is deliberate defence in depth, NOT dead weight —
-      // and no external test can pin it, so do not delete it as untested. The
-      // institution-scoped pre-read above is what actually refuses a foreign id
-      // (verified by mutation: dropping `institutionId` from BOTH fails this
-      // method's isolation test; dropping it from this filter alone fails
-      // nothing, because the pre-read short-circuits first). There is no way to
-      // reach this write from outside the service without passing that read.
-      // What this clause buys is that the write is atomic with respect to its
-      // own tenancy, and that the guard survives if the pre-read is ever moved
-      // or removed.
-      institutionId,
-      $expr: { $lt: [{ $size: { $ifNull: [`$${field}`, []] } }, max] },
-    },
-    { $push: { [field]: stored.key } } as UpdateQuery<AchievementDoc>,
-    { new: true },
-  ).lean<AchievementDoc>();
+  // The object is in storage before this write runs, so BOTH ways the write
+  // can fail have to take it back out — a null result (the cap rejected the
+  // push, or the record vanished) and a thrown error alike. Without the catch,
+  // a connection drop or a write conflict leaks the object with nothing left
+  // in the database pointing at it. `addMediaImage` has the same gap; it is
+  // being carried forward separately rather than fixed from here.
+  let updated: AchievementDoc | null;
+  try {
+    updated = await Achievement.findOneAndUpdate(
+      {
+        _id: objectId,
+        // `institutionId` here is deliberate defence in depth, NOT dead weight —
+        // and no external test can pin it, so do not delete it as untested. The
+        // institution-scoped pre-read above is what actually refuses a foreign id
+        // (verified by mutation: dropping `institutionId` from BOTH fails this
+        // method's isolation test; dropping it from this filter alone fails
+        // nothing, because the pre-read short-circuits first). There is no way to
+        // reach this write from outside the service without passing that read.
+        // What this clause buys is that the write is atomic with respect to its
+        // own tenancy, and that the guard survives if the pre-read is ever moved
+        // or removed.
+        institutionId,
+        $expr: { $lt: [{ $size: { $ifNull: [`$${field}`, []] } }, max] },
+      },
+      { $push: { [field]: stored.key } } as UpdateQuery<AchievementDoc>,
+      { new: true },
+    ).lean<AchievementDoc>();
+  } catch (error) {
+    await deleteStoredObject(stored.key, institutionId);
+    throw error;
+  }
 
   if (!updated) {
-    await storage.deletePublic(stored.key).catch(() => undefined);
+    await deleteStoredObject(stored.key, institutionId);
     // Two possible causes, and the admin deserves the accurate one: the cap,
     // or a concurrent delete of the record itself between the read above and
     // this write. Same disambiguating re-read as `addMediaVideo`.
@@ -392,7 +424,7 @@ export const AchievementService = {
     // here either, and for the same two reasons `remove` sets out below —
     // the second of which (it matches `/media/`, not `showcase/`) means
     // adding one would silently turn this line into a no-op.
-    await storage.deletePublic(input.key).catch(() => undefined);
+    await deleteStoredObject(input.key, institutionId);
 
     await ActivityService.record({
       institutionId,
@@ -444,7 +476,7 @@ export const AchievementService = {
     // Best-effort, as everywhere else: a storage failure must not fail a
     // deletion that has already happened.
     for (const key of [...(removed.photos ?? []), ...(removed.certificates ?? [])]) {
-      await storage.deletePublic(key).catch(() => undefined);
+      await deleteStoredObject(key, institutionId);
     }
 
     await ActivityService.record({

@@ -22,6 +22,25 @@ export type AlumnusDTO = {
   updatedAt?: string;
 };
 
+/**
+ * Every showcase storage cleanup is best-effort: a failure must never fail a
+ * database write that has already been applied. Best-effort is not the same as
+ * silent, though — an unlogged failure is a leaked object nobody can find, so
+ * the key and the institution go to the log where an operator can act on them.
+ *
+ * Deliberately a twin of `achievement.service.ts`'s, not an import from it: a
+ * service reaching into a sibling service for a utility is a dependency this
+ * repo does not otherwise have, and a shared module is more surface than eight
+ * lines of cleanup deserve.
+ */
+async function deleteStoredObject(key: string, institutionId: string): Promise<void> {
+  try {
+    await storage.deletePublic(key);
+  } catch (error) {
+    console.error(`[showcase] failed to delete stored object ${key} for ${institutionId}`, error);
+  }
+}
+
 /** A malformed id must read as "no such alumnus", not as a cast error. */
 function toObjectId(alumnusId: string): Types.ObjectId {
   if (!Types.ObjectId.isValid(alumnusId)) throw notFound("Alumnus not found");
@@ -200,8 +219,10 @@ export const AlumniService = {
 
     // An unknown or foreign id 404s before anything is stored, so a mistyped
     // id never burns a storage write this then has to take back out.
+    // Only existence matters here now: the key this write displaces is read
+    // out of the write itself below, not from this pre-image.
     const before = await Alumnus.findOne({ _id: objectId, institutionId })
-      .select("_id photo")
+      .select("_id")
       .lean<AlumnusDoc>();
     if (!before) throw notFound("Alumnus not found");
 
@@ -214,6 +235,15 @@ export const AlumniService = {
       contentType: input.contentType,
     });
 
+    // `{ new: false }`, deliberately: this returns the PRE-image, and
+    // `displaced.photo` is therefore the key this write actually replaced —
+    // not the key read before it. With `{ new: true }` the only key available
+    // is `before.photo`, and two concurrent uploads both read the same one:
+    // both would delete it and the loser's freshly stored object would be
+    // orphaned. Reading the displaced key out of the write itself makes the
+    // delete follow the write instead of racing it, so each caller cleans up
+    // exactly the object it displaced.
+    //
     // `institutionId` in this filter is deliberate defence in depth, NOT dead
     // weight — and no external test can pin it, so do not delete it as
     // untested. The institution-scoped pre-read above is what actually refuses
@@ -223,15 +253,26 @@ export const AlumniService = {
     // is that the write is atomic with respect to its own tenancy, and that the
     // guard survives if the pre-read is ever moved or removed. Same note as
     // `storeAsset` in achievement.service.ts.
-    const updated = await Alumnus.findOneAndUpdate(
-      { _id: objectId, institutionId },
-      { $set: { photo: stored.key } },
-      { new: true },
-    ).lean<AlumnusDoc>();
-    if (!updated) {
+    //
+    // The object is in storage before this write runs, so BOTH ways the write
+    // can fail have to take it back out — a null result (the record vanished)
+    // and a thrown error alike. Without the catch, a connection drop leaks the
+    // object with nothing left in the database pointing at it.
+    let displaced: AlumnusDoc | null;
+    try {
+      displaced = await Alumnus.findOneAndUpdate(
+        { _id: objectId, institutionId },
+        { $set: { photo: stored.key } },
+        { new: false },
+      ).lean<AlumnusDoc>();
+    } catch (error) {
+      await deleteStoredObject(stored.key, institutionId);
+      throw error;
+    }
+    if (!displaced) {
       // The record was deleted between the read above and this write. Take the
       // object back out rather than leaving it in storage referenced by nothing.
-      await storage.deletePublic(stored.key).catch(() => undefined);
+      await deleteStoredObject(stored.key, institutionId);
       throw notFound("Alumnus not found");
     }
 
@@ -254,21 +295,30 @@ export const AlumniService = {
     //
     // Best-effort: a cleanup failure must not fail the request that has
     // already stored the new object.
-    if (before.photo && before.photo !== stored.key) {
-      await storage.deletePublic(before.photo).catch(() => undefined);
+    if (displaced.photo && displaced.photo !== stored.key) {
+      await deleteStoredObject(displaced.photo, institutionId);
     }
 
     await ActivityService.record({
       institutionId,
       entityType: "ALUMNUS",
-      entityId: updated._id,
+      entityId: displaced._id,
       entityRef: institutionId,
       action: "Alumnus photo updated",
       performedBy: actor.id,
       performedByName: actor.name,
     });
 
-    return serialize(updated);
+    // `displaced` is the pre-image, so it cannot be serialized as-is. Mongoose
+    // stamps `updatedAt` inside the update and ignores an explicit value
+    // (verified against the driver), so the pre-image's copy is one write
+    // stale — and a "last updated" that predates the upload you just did is a
+    // visible lie. One scoped re-read costs far less than the storage write
+    // that has already happened. If the record has been deleted since, fall
+    // back to the state this call created rather than failing a write that
+    // succeeded.
+    const current = await Alumnus.findOne({ _id: objectId, institutionId }).lean<AlumnusDoc>();
+    return serialize(current ?? { ...displaced, photo: stored.key });
   },
 
   async remove(
@@ -293,7 +343,7 @@ export const AlumniService = {
     // would silently turn this cleanup into a no-op. Best-effort: a storage
     // failure must not fail a deletion that has already happened.
     if (removed.photo) {
-      await storage.deletePublic(removed.photo).catch(() => undefined);
+      await deleteStoredObject(removed.photo, institutionId);
     }
 
     await ActivityService.record({

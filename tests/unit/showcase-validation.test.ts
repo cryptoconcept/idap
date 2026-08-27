@@ -227,4 +227,3 @@ describe("alumnusPatchSchema", () => {
     expect("org" in untouched).toBe(false);
   });
 });
-
