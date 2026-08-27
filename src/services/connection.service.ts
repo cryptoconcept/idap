@@ -5,13 +5,14 @@ import type { PlatformConnectionDoc, PlatformCredentialDoc, SyncRunDoc } from "@
 import {
   PLATFORMS,
   PLATFORM_LABELS,
+  SYNC_LOCK_STALE_MINUTES,
   SYNC_RUN_KEEP,
   type ConnectionStatus,
   type Platform,
   type SyncStatus,
 } from "@/lib/constants";
 import { credentialVaultReady, decryptCredential, encryptCredential } from "@/lib/security/credentials";
-import { notFound, validationError } from "@/lib/api/errors";
+import { AppError, notFound, validationError } from "@/lib/api/errors";
 import { requiredIso, toIso } from "@/lib/utils/serialize";
 import { storage } from "@/lib/storage";
 import { adapterFor } from "@/lib/connectors";
@@ -22,6 +23,7 @@ import {
   type ConnectResult,
   type InitiateResult,
   type InstitutionSummary,
+  type PlatformAdapter,
   type RefreshResult,
   type SyncOutcome,
   type SyncSourceData,
@@ -111,6 +113,45 @@ async function loadAdapterContext(platform: Platform): Promise<{ baseUrl: string
 async function buildAdapterContext(platform: Platform) {
   const { baseUrl, platformKey } = await loadAdapterContext(platform);
   return { baseUrl, platformKey, http: createConnectorHttp(baseUrl) };
+}
+
+/**
+ * `adapterFor` throws a generic Error for a `PLATFORMS` member with no
+ * registered adapter — true of FEESBASKET throughout Plan 9a, since its
+ * adapter doesn't land until Plan 9b. That's the right behaviour for
+ * `adapterFor` itself (fail loudly, one lookup point), but reaching an
+ * admin as an unhandled 500 from clicking "Request connection" on a
+ * FeesBasket card they were able to configure a credential for (Task 7's
+ * admin UI doesn't know which platforms have adapters yet either) is not.
+ * Every call site that needs a real adapter goes through here instead, so
+ * an unbuilt platform reads as a clean, expected refusal (fix round 1,
+ * finding I3).
+ */
+function resolveAdapter(platform: Platform): PlatformAdapter {
+  try {
+    return adapterFor(platform);
+  } catch {
+    throw validationError(`${PLATFORM_LABELS[platform]} integration is not available yet`);
+  }
+}
+
+/**
+ * A caught plain Error/network failure from an adapter call (as opposed to a
+ * `ConnectorAuthError`) is real and actionable — the platform itself is
+ * unreachable or misconfigured — but its raw message must never reach the
+ * HTTP response body verbatim; only `lastError` (already recorded by the
+ * caller, on the connection row) carries that detail. Surfaced as 502 rather
+ * than the default 500 so it doesn't fall into this codebase's generic
+ * "Something went wrong" scrubbing for truly unknown errors — 502 signals a
+ * knowable, external, actionable cause instead (fix round 1, routed call 1).
+ */
+function upstreamError(platform: Platform): AppError {
+  return new AppError(
+    "INTERNAL_ERROR",
+    `${PLATFORM_LABELS[platform]} could not be reached right now — try again shortly`,
+    undefined,
+    502,
+  );
 }
 
 function messageOf(error: unknown): string {
@@ -261,7 +302,7 @@ export const ConnectionService = {
   async initiate(institutionId: string, platform: Platform, actor: Actor): Promise<ConnectionEntry> {
     await connectToDatabase();
 
-    const adapter = adapterFor(platform);
+    const adapter = resolveAdapter(platform);
     if (!adapter.initiate) {
       throw validationError(`${PLATFORM_LABELS[platform]} does not support this connection flow`);
     }
@@ -290,10 +331,24 @@ export const ConnectionService = {
       // A plain thrown Error here means the platform-key call itself failed
       // (bad config, the remote side down) — it says nothing about this
       // institution's own grant, so the connection's status is left alone;
-      // only the error is recorded for the admin to see.
-      await PlatformConnection.updateOne({ institutionId, platform }, { $set: { lastError: message } });
+      // only the error is recorded for the admin to see. `upsert: true`
+      // (fix round 1, finding I2): a first-ever `initiate` attempt has no
+      // existing row to update, so without it the failure vanished
+      // silently. `setDefaultsOnInsert: false` is deliberate and load-bearing
+      // here, NOT an oversight — Mongoose 8 defaults that option to `true`,
+      // and the schema's `status` default is "PENDING"; leaving the option
+      // at its default would silently populate `status: "PENDING"` on this
+      // insert even though `status` is absent from `$set`, making a failed,
+      // never-accepted attempt read as "Requested" — exactly the misleading
+      // state this fix exists to avoid. `externalRef` is set explicitly
+      // since it's a required field with no default to fall back on.
+      await PlatformConnection.updateOne(
+        { institutionId, platform },
+        { $set: { lastError: message, externalRef: institutionId } },
+        { upsert: true, setDefaultsOnInsert: false },
+      );
       await recordActivity(institutionId, platform, "Connection initiate failed", message, actor);
-      throw error;
+      throw upstreamError(platform);
     }
 
     const updated = await PlatformConnection.findOneAndUpdate(
@@ -329,7 +384,7 @@ export const ConnectionService = {
   async refresh(institutionId: string, platform: Platform, actor: Actor): Promise<ConnectionEntry> {
     await connectToDatabase();
 
-    const adapter = adapterFor(platform);
+    const adapter = resolveAdapter(platform);
     if (!adapter.refresh) {
       throw validationError(`${PLATFORM_LABELS[platform]} does not support refreshing a connection`);
     }
@@ -360,10 +415,12 @@ export const ConnectionService = {
       const message = messageOf(error);
       // Same reasoning as `initiate`'s catch: a plain thrown Error from the
       // platform-key polling call is not evidence this institution's grant
-      // is bad, so the status is left untouched.
+      // is bad, so the status is left untouched. No `upsert` needed here —
+      // unlike `initiate`, `refresh` already required an existing row (the
+      // NOT_FOUND check above), so this always matches something.
       await PlatformConnection.updateOne({ institutionId, platform }, { $set: { lastError: message } });
       await recordActivity(institutionId, platform, "Connection refresh failed", message, actor);
-      throw error;
+      throw upstreamError(platform);
     }
 
     const set: Record<string, unknown> = {
@@ -412,7 +469,7 @@ export const ConnectionService = {
   ): Promise<ConnectionEntry> {
     await connectToDatabase();
 
-    const adapter = adapterFor(platform);
+    const adapter = resolveAdapter(platform);
     if (!adapter.connectWithKey) {
       throw validationError(
         `Connecting with a key is not supported for this platform (${PLATFORM_LABELS[platform]})`,
@@ -431,9 +488,12 @@ export const ConnectionService = {
       result = await adapter.connectWithKey(ctx, institutionId, key);
     } catch (error) {
       const message = messageOf(error);
+      // Same reasoning as `initiate`/`refresh`'s catch blocks — kept
+      // consistent with them even though the routed fix only named those
+      // two explicitly, since this is the same bug shape (see report).
       await PlatformConnection.updateOne({ institutionId, platform }, { $set: { lastError: message } });
       await recordActivity(institutionId, platform, "Connect with key failed", message, actor);
-      throw error;
+      throw upstreamError(platform);
     }
 
     const updated = await PlatformConnection.findOneAndUpdate(
@@ -473,9 +533,19 @@ export const ConnectionService = {
   ): Promise<{ connection: ConnectionEntry; run: SyncRunDTO }> {
     await connectToDatabase();
 
+    // A lock older than SYNC_LOCK_STALE_MINUTES is treated as abandoned (a
+    // crashed process, a killed request) rather than genuinely in flight, and
+    // can be reacquired — otherwise a single crash mid-sync would brick this
+    // connection's Sync button forever, with no admin recourse short of a
+    // direct DB edit (fix round 1, finding I1).
+    const staleBefore = new Date(Date.now() - SYNC_LOCK_STALE_MINUTES * 60_000);
     const locked = await PlatformConnection.findOneAndUpdate(
-      { institutionId, platform, syncInProgress: { $ne: true } },
-      { $set: { syncInProgress: true } },
+      {
+        institutionId,
+        platform,
+        $or: [{ syncInProgress: { $ne: true } }, { syncStartedAt: { $lt: staleBefore } }],
+      },
+      { $set: { syncInProgress: true, syncStartedAt: new Date() } },
       { new: true },
     ).select("+grantTokenEncrypted");
 
@@ -486,6 +556,14 @@ export const ConnectionService = {
     }
 
     try {
+      // Cross-platform invariant, checked at the service level rather than
+      // leaning on PassPercent-specific guards deep in its adapter (which
+      // FeesBasket's adapter would otherwise have to reimplement
+      // identically) — routed call 2, fix round 1.
+      if (locked.status !== "CONNECTED") {
+        throw validationError("Connect to this platform before syncing");
+      }
+
       const institution = await Institution.findOne({ institutionId }).lean();
       if (!institution) throw notFound("Institution not found");
 
@@ -496,7 +574,7 @@ export const ConnectionService = {
       }
 
       const ctx = await buildAdapterContext(platform);
-      const adapter = adapterFor(platform);
+      const adapter = resolveAdapter(platform);
 
       const allResults = await ResultService.list(institutionId);
       const publishedResults = allResults.filter((row) => row.status === "PUBLISHED");
@@ -572,8 +650,22 @@ export const ConnectionService = {
       );
 
       return { connection: toEntry(platform, true, updatedConnection), run: serializeRun(run) };
+    } catch (error) {
+      // Deliberate refusals (validationError/notFound thrown above, or by
+      // `resolveAdapter`/`buildAdapterContext`) pass through with their real
+      // codes untouched. Anything else here is a genuinely unexpected
+      // failure outside the adapter's own classified outcomes (which never
+      // reach this catch — `adapter.sync`'s try/catch above always resolves
+      // to a run instead) — e.g. a corrupt ciphertext or a DB write failure
+      // — and gets the same 502 treatment as `initiate`/`refresh` rather
+      // than a scrubbed 500 (routed call 1, fix round 1).
+      if (error instanceof AppError) throw error;
+      throw upstreamError(platform);
     } finally {
-      await PlatformConnection.updateOne({ institutionId, platform }, { $set: { syncInProgress: false } });
+      await PlatformConnection.updateOne(
+        { institutionId, platform },
+        { $set: { syncInProgress: false }, $unset: { syncStartedAt: "" } },
+      );
     }
   },
 
@@ -587,7 +679,14 @@ export const ConnectionService = {
 
     const updated = await PlatformConnection.findOneAndUpdate(
       { institutionId, platform },
-      { $set: { status: "DISCONNECTED" }, $unset: { grantTokenEncrypted: "" } },
+      {
+        $set: { status: "DISCONNECTED", syncInProgress: false },
+        // Also a manual escape hatch for a stuck sync lock (fix round 1,
+        // finding I1, point 4): an admin who suspects a crashed sync can
+        // disconnect and reconnect rather than wait out the staleness
+        // window.
+        $unset: { grantTokenEncrypted: "", syncStartedAt: "" },
+      },
       { new: true },
     );
     if (!updated) throw notFound("Connection not found");

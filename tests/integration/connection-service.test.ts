@@ -14,6 +14,8 @@ import type {
   SyncSourceData,
 } from "@/lib/connectors/types";
 import { assertPlatform, ConnectionService } from "@/services/connection.service";
+import { AppError } from "@/lib/api/errors";
+import { SYNC_LOCK_STALE_MINUTES } from "@/lib/constants";
 
 const VALID_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
 const actor = { id: "6a8880f3446c577c470cd06c", name: "Institution Admin" };
@@ -246,7 +248,7 @@ describe("initiate", () => {
     await expect(ConnectionService.initiate("INS0001", "PASSPERCENT", actor)).rejects.toThrow(/add a city/i);
   });
 
-  it("a plain Error from the adapter is recorded as lastError and rethrown, without changing an existing status", async () => {
+  it("a plain Error from the adapter is recorded as lastError (in full) and surfaced as a safe 502, without changing an existing status", async () => {
     registerAdapter(
       makeFakeAdapter({
         initiate: async () => {
@@ -263,13 +265,47 @@ describe("initiate", () => {
       externalRef: "INS0001",
     });
 
-    await expect(ConnectionService.initiate("INS0001", "PASSPERCENT", actor)).rejects.toThrow(
-      /submitting the connection request failed/,
-    );
+    let caught: unknown;
+    try {
+      await ConnectionService.initiate("INS0001", "PASSPERCENT", actor);
+    } catch (error) {
+      caught = error;
+    }
+
+    // Fix round 1, routed call 1: the raw adapter message must never reach
+    // the HTTP-facing error — only a safe, generic message with a 502
+    // status. The full detail still lands in `lastError` on the row.
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).status).toBe(502);
+    expect((caught as AppError).message).not.toMatch(/submitting the connection request failed/);
 
     const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
     expect(conn?.status).toBe("REJECTED"); // unchanged — not evidence this institution's grant is bad
     expect(conn?.lastError).toMatch(/submitting the connection request failed/);
+  });
+
+  it("a first-ever failed initiate (no prior PlatformConnection row) still records lastError, and leaves status unset rather than implying acceptance", async () => {
+    registerAdapter(
+      makeFakeAdapter({
+        initiate: async () => {
+          throw new Error("PassPercent: submitting the connection request failed (status 500)");
+        },
+      }),
+    );
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    // Deliberately no PlatformConnection.create — this is the very first attempt.
+    expect(await PlatformConnection.countDocuments({ institutionId: "INS0001" })).toBe(0);
+
+    await expect(ConnectionService.initiate("INS0001", "PASSPERCENT", actor)).rejects.toBeInstanceOf(AppError);
+
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(conn).not.toBeNull();
+    expect(conn?.lastError).toMatch(/submitting the connection request failed/);
+    // Deliberately unset, not defaulted to "PENDING" — a failed, never-accepted
+    // attempt must not read as "Requested" (fix round 1, finding I2).
+    expect(conn?.status).toBeUndefined();
+    expect(conn?.externalRef).toBe("INS0001");
   });
 });
 
@@ -369,9 +405,15 @@ describe("refresh", () => {
       remoteRequestId: "req-1",
     });
 
-    await expect(ConnectionService.refresh("INS0001", "PASSPERCENT", actor)).rejects.toThrow(
-      /polling the connection request failed/,
-    );
+    let caught: unknown;
+    try {
+      await ConnectionService.refresh("INS0001", "PASSPERCENT", actor);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).status).toBe(502);
+    expect((caught as AppError).message).not.toMatch(/polling the connection request failed/);
 
     const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
     expect(conn?.status).toBe("PENDING");
@@ -438,6 +480,59 @@ describe("connectWithKey", () => {
     await expect(
       ConnectionService.connectWithKey("INS0001", "PASSPERCENT", "some-key", actor),
     ).rejects.toThrow(/not supported for this platform/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FeesBasket is not yet wired (fix round 1, finding I3) — initiate/refresh/
+// connectWithKey. syncNow's equivalent test lives in its own describe block
+// below since it needs a connected fixture to get past the earlier checks.
+// ---------------------------------------------------------------------------
+
+describe("FeesBasket is not yet wired (fix round 1, finding I3)", () => {
+  it("initiate returns a clean VALIDATION_ERROR, not an unhandled exception, for FEESBASKET", async () => {
+    await makeCredential({ platform: "FEESBASKET", keyEncrypted: encryptCredential("fbk_live_test") });
+    await makeConnectableInstitution("INS0001");
+
+    let caught: unknown;
+    try {
+      await ConnectionService.initiate("INS0001", "FEESBASKET", actor);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).code).toBe("VALIDATION_ERROR");
+    expect((caught as AppError).message).toMatch(/not available yet/i);
+  });
+
+  it("refresh returns a clean VALIDATION_ERROR, not an unhandled exception, for FEESBASKET", async () => {
+    await makeCredential({ platform: "FEESBASKET", keyEncrypted: encryptCredential("fbk_live_test") });
+    await makeConnectableInstitution("INS0001");
+
+    let caught: unknown;
+    try {
+      await ConnectionService.refresh("INS0001", "FEESBASKET", actor);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).code).toBe("VALIDATION_ERROR");
+    expect((caught as AppError).message).toMatch(/not available yet/i);
+  });
+
+  it("connectWithKey returns a clean VALIDATION_ERROR, not an unhandled exception, for FEESBASKET", async () => {
+    await makeCredential({ platform: "FEESBASKET", keyEncrypted: encryptCredential("fbk_live_test") });
+    await makeConnectableInstitution("INS0001");
+
+    let caught: unknown;
+    try {
+      await ConnectionService.connectWithKey("INS0001", "FEESBASKET", "some-key", actor);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(AppError);
+    expect((caught as AppError).code).toBe("VALIDATION_ERROR");
+    expect((caught as AppError).message).toMatch(/not available yet/i);
   });
 });
 
@@ -665,6 +760,84 @@ describe("syncNow", () => {
       expect(entry.institutionId).not.toBe("PLATFORM");
     }
   });
+
+  it("refuses to sync a non-CONNECTED connection, without writing a SyncRun (routed call 2, fix round 1)", async () => {
+    registerAdapter(makeFakeAdapter());
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "PENDING",
+      externalRef: "INS0001",
+    });
+
+    await expect(ConnectionService.syncNow("INS0001", "PASSPERCENT", actor)).rejects.toThrow(
+      /connect to this platform/i,
+    );
+
+    // A sequencing mistake shouldn't leave a permanent failure record.
+    expect(await SyncRun.countDocuments({ institutionId: "INS0001" })).toBe(0);
+
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(conn?.status).toBe("PENDING"); // unchanged
+    expect(conn?.syncInProgress).toBe(false); // lock still cleared by `finally`
+  });
+
+  describe("stale lock escape hatch (fix round 1, finding I1)", () => {
+    it("a lock older than SYNC_LOCK_STALE_MINUTES can be reacquired by a new syncNow call", async () => {
+      registerAdapter(makeFakeAdapter());
+      await connectedFixture("INS0001", {
+        syncInProgress: true,
+        syncStartedAt: new Date(Date.now() - (SYNC_LOCK_STALE_MINUTES + 1) * 60_000),
+      });
+
+      const result = await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+      expect(result.run.status).toBe("SUCCESS");
+
+      const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+      expect(conn?.syncInProgress).toBe(false);
+    });
+
+    it("boundary: a lock started just 1 minute ago is still refused as already running", async () => {
+      registerAdapter(makeFakeAdapter());
+      await connectedFixture("INS0001", {
+        syncInProgress: true,
+        syncStartedAt: new Date(Date.now() - 60_000),
+      });
+
+      await expect(ConnectionService.syncNow("INS0001", "PASSPERCENT", actor)).rejects.toThrow(
+        /already running/i,
+      );
+    });
+  });
+
+  describe("FeesBasket is not yet wired (fix round 1, finding I3)", () => {
+    it("returns a clean VALIDATION_ERROR, not an unhandled exception, when syncing FEESBASKET", async () => {
+      await makeCredential({ platform: "FEESBASKET", keyEncrypted: encryptCredential("fbk_live_test") });
+      await makeConnectableInstitution("INS0001");
+      await PlatformConnection.create({
+        institutionId: "INS0001",
+        platform: "FEESBASKET",
+        status: "CONNECTED",
+        externalRef: "INS0001",
+      });
+
+      let caught: unknown;
+      try {
+        await ConnectionService.syncNow("INS0001", "FEESBASKET", actor);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(AppError);
+      expect((caught as AppError).code).toBe("VALIDATION_ERROR");
+      expect((caught as AppError).message).toMatch(/not available yet/i);
+
+      // The lock must still be released even though resolveAdapter refused.
+      const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "FEESBASKET" }).lean();
+      expect(conn?.syncInProgress).toBe(false);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -695,6 +868,25 @@ describe("disconnect", () => {
   it("404s when there is no connection to disconnect", async () => {
     await makeConnectableInstitution("INS0001");
     await expect(ConnectionService.disconnect("INS0001", "PASSPERCENT", actor)).rejects.toThrow(/not found/i);
+  });
+
+  it("clears a stuck syncInProgress lock and syncStartedAt (fix round 1, finding I1, point 4)", async () => {
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("pp_pgrant_live"),
+      syncInProgress: true,
+      syncStartedAt: new Date(),
+    });
+
+    await ConnectionService.disconnect("INS0001", "PASSPERCENT", actor);
+
+    const raw = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(raw?.syncInProgress).toBe(false);
+    expect(raw?.syncStartedAt).toBeUndefined();
   });
 });
 

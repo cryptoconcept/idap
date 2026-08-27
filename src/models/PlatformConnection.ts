@@ -25,14 +25,22 @@ const PlatformConnectionSchema = new Schema(
     lastSyncStatus: { type: String, enum: SYNC_STATUSES },
     lastError: { type: String, trim: true },
     /**
-     * Atomic sync lock (Task 8). Flipped true by the same
-     * `findOneAndUpdate({..., syncInProgress: {$ne: true}}, {$set: {syncInProgress: true}})`
-     * that admits exactly one concurrent `syncNow` per connection; cleared in
-     * a `finally` regardless of outcome. Added here rather than in Task 2
-     * because it exists solely to serve Task 8's lock — see plan ledger
-     * Ruling 1.
+     * Atomic sync lock (Task 8). Flipped true by a
+     * `findOneAndUpdate` guarded on `syncInProgress`/`syncStartedAt` that
+     * admits exactly one concurrent `syncNow` per connection; cleared in a
+     * `finally` regardless of outcome, and also cleared by `disconnect` as a
+     * manual escape hatch. Added here rather than in Task 2 because it
+     * exists solely to serve Task 8's lock — see plan ledger Ruling 1.
      */
     syncInProgress: { type: Boolean, default: false },
+    /**
+     * When the current (or most recent) lock was acquired. A lock older than
+     * `SYNC_LOCK_STALE_MINUTES` is treated as abandoned — a crashed process
+     * or a killed request — and can be reacquired by a new `syncNow` call
+     * rather than permanently bricking the connection's Sync button (Task 8
+     * fix round 1, finding I1).
+     */
+    syncStartedAt: { type: Date },
   },
   { timestamps: true },
 );

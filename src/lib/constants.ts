@@ -450,3 +450,13 @@ export type SyncStatus = (typeof SYNC_STATUSES)[number];
 
 /** SyncRun rows kept per (institution, platform) — a log, not an archive. */
 export const SYNC_RUN_KEEP = 20;
+
+/**
+ * A `syncInProgress` lock older than this is treated as abandoned (a crashed
+ * process, a killed request) rather than a genuine in-flight sync, and can be
+ * reacquired by a new `syncNow` call. Chosen as an order of magnitude above
+ * any realistic sync duration: the connector HTTP client caps each call at
+ * 15s + one retry, and even a dozen result-year PUTs plus the schema/profile
+ * calls stays well under a few minutes.
+ */
+export const SYNC_LOCK_STALE_MINUTES = 10;
