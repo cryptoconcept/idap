@@ -91,7 +91,7 @@ const SocialSchema = new Schema(
  */
 const FacilitySchema = new Schema(
   {
-    code: { type: String, required: true, trim: true, uppercase: true },
+    code: { type: String, required: true, trim: true },
     label: { type: String, required: true, trim: true },
     available: { type: Boolean, default: true },
     note: { type: String, trim: true },
