@@ -5,7 +5,6 @@ import { AchievementService } from "@/services/achievement.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 import { validationError } from "@/lib/api/errors";
-import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,6 +17,16 @@ export const dynamic = "force-dynamic";
  */
 const assetKindSchema = z.enum(["PHOTO", "CERTIFICATE"]);
 
+/**
+ * The upload form's only non-file field. Wrapped in an object (rather than
+ * `assetKindSchema.parse(form.get("kind"))` directly) so a bad or absent
+ * `kind` reports a field-scoped `kind: ...` message through
+ * `handleApiError`'s `firstZodMessage`, the same as every other parse in
+ * this codebase — a bare value's ZodError has no path to report and would
+ * read as `(root): ...` instead.
+ */
+const uploadKindSchema = z.object({ kind: assetKindSchema });
+
 const removeAssetSchema = z.object({
   kind: assetKindSchema,
   key: z.string().trim().min(1, "key is required"),
@@ -25,13 +34,18 @@ const removeAssetSchema = z.object({
 
 /**
  * Multipart upload of one photo or certificate onto one of the caller's own
- * achievements, selected by the form's `kind` field. `AchievementService`
- * does the real proof that the bytes are what they claim to be (magic-byte
- * sniffing for both kinds) — the size pre-check here for PHOTO only avoids
- * reading an oversized file into memory before rejecting it, mirroring
- * `settings/institution/media/route.ts`'s image branch. CERTIFICATE has no
- * such pre-check, same as that route's document branch: the PDF size cap is
- * `addCertificate`'s alone to enforce.
+ * achievements, selected by the form's `kind` field. Every real check —
+ * magic-byte sniffing and the size cap, for both kinds — is
+ * `AchievementService`'s alone to make (`validateImage` for PHOTO,
+ * `addCertificate`'s own PDF header + `SHOWCASE_MAX_PDF_BYTES` check for
+ * CERTIFICATE). This route does not re-check either cap: a route-level
+ * `MAX_IMAGE_BYTES` pre-check used to live here, duplicating a limit
+ * `validateImage` already enforces through a second, route-local copy of the
+ * same `5 * 1024 * 1024` constant — the same mistake, from the other
+ * direction, that this plan already deleted `SHOWCASE_MAX_IMAGE_BYTES` for
+ * (see its comment in `lib/constants.ts`). All this route checks before
+ * spending an `arrayBuffer()` read on the file is that one was actually
+ * chosen and that it isn't empty.
  */
 export async function POST(
   request: NextRequest,
@@ -43,13 +57,10 @@ export async function POST(
     const { user, institution } = await requireInstitution();
 
     const form = await request.formData();
-    const kind = assetKindSchema.parse(form.get("kind"));
+    const { kind } = uploadKindSchema.parse({ kind: form.get("kind") });
     const file = form.get("file");
     if (!(file instanceof File)) throw validationError("file: choose a file to upload");
     if (file.size <= 0) throw validationError("file: the file is empty");
-    if (kind === "PHOTO" && file.size > MAX_IMAGE_BYTES) {
-      throw validationError("file: files must be 5 MB or smaller");
-    }
 
     const actor = { id: user.id, name: user.name };
     const asset = { contentType: file.type, bytes: Buffer.from(await file.arrayBuffer()) };

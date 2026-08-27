@@ -1,4 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
@@ -15,6 +17,19 @@ import {
 } from "@/app/api/settings/achievements/[achievementId]/assets/route";
 import { AchievementService } from "@/services/achievement.service";
 import { Achievement } from "@/models";
+import { storage, type StoredObject } from "@/lib/storage";
+import { ACHIEVEMENT_MAX_PHOTOS } from "@/lib/constants";
+// The image cap has exactly one name (see the assets route's own comment on
+// why it does not keep a route-local copy) — showcase images are uploaded
+// through `validateImage`, so this is the limit an oversized upload must
+// exceed to be refused.
+import { MAX_IMAGE_BYTES } from "@/lib/media/image";
+
+// `storage.get()` reads the adapter's PRIVATE store, never where `putPublic`
+// writes — same helper as tests/integration/showcase-assets.test.ts, which
+// this mirrors for the HTTP-level cap-conflict test below.
+const PUBLIC_ROOT = resolve(process.env.PUBLIC_UPLOAD_DIR ?? join(process.cwd(), ".uploads-public"));
+const storedPath = (key: string) => resolve(PUBLIC_ROOT, key.replace(/^\/api\/media\//, ""));
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -215,6 +230,18 @@ describe("POST /api/settings/achievements", () => {
     expect((await response.json()).error.message).toMatch(/cross-origin/i);
     expect(await Achievement.countDocuments({})).toBe(0);
   });
+
+  // `requireInstitution()` is otherwise only pinned indirectly, through every
+  // other test's signed-in session. No cookie at all must 401 before
+  // `achievementCreateSchema.parse` or the service ever runs.
+  it("returns 401 without a session and creates nothing", async () => {
+    const response = await createAchievement(
+      jsonRequest({ body: achievementInput, origin: "http://localhost" }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await Achievement.countDocuments({})).toBe(0);
+  });
 });
 
 describe("PATCH /api/settings/achievements/[achievementId]", () => {
@@ -280,6 +307,52 @@ describe("PATCH /api/settings/achievements/[achievementId]", () => {
 
     const raw = await Achievement.findById(created.id).lean();
     expect(raw).not.toHaveProperty("description");
+  });
+
+  // `eventDate` is equally `.nullable()` on `achievementPatchSchema` but
+  // takes a DIFFERENT Zod branch than `description` (a union/date pipeline,
+  // not `optionalText`), so the `description` pair above does not exercise
+  // it. Same two halves, same route, through HTTP.
+  it("leaves the stored eventDate untouched when the patch omits it", async () => {
+    const created = await makeAchievement("INS0001", { eventDate: new Date("2026-02-01") });
+    await signInWithCookie("INS0001");
+
+    const response = await patchAchievement(
+      jsonRequest({
+        url: `http://localhost/api/settings/achievements/${created.id}`,
+        body: { title: "Renamed only" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.achievement.eventDate).toBe(new Date("2026-02-01").toISOString());
+
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.eventDate?.toISOString()).toBe(new Date("2026-02-01").toISOString());
+  });
+
+  it("MUTATION-DISTINGUISHING: clears the stored eventDate when the patch sends an explicit null, not merely omitting the key", async () => {
+    const created = await makeAchievement("INS0001", { eventDate: new Date("2026-02-01") });
+    await signInWithCookie("INS0001");
+
+    const response = await patchAchievement(
+      jsonRequest({
+        url: `http://localhost/api/settings/achievements/${created.id}`,
+        body: { eventDate: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.achievement.eventDate).toBeUndefined();
+
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("eventDate");
   });
 
   it("MUTATION-DISTINGUISHING: rejects a cross-origin PATCH and leaves the record unchanged", async () => {
@@ -471,6 +544,158 @@ describe("POST /api/settings/achievements/[achievementId]/assets", () => {
     expect(response.status).toBe(400);
   });
 
+  it("rejects an empty file", async () => {
+    const created = await makeAchievement("INS0001");
+    await signInWithCookie("INS0001");
+
+    const form = new FormData();
+    form.set("kind", "PHOTO");
+    form.set("file", new File([], "empty.png", { type: "image/png" }));
+
+    const response = await addAsset(
+      formRequest(
+        `http://localhost/api/settings/achievements/${created.id}/assets`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(400);
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
+  });
+
+  // Proves the route's `MAX_IMAGE_BYTES` pre-check was genuinely redundant,
+  // not load-bearing: with it removed, an oversized photo is still refused —
+  // now solely by `AchievementService.addPhoto`'s own `validateImage` call.
+  it("still rejects an oversized photo now that the route has no size pre-check of its own", async () => {
+    const created = await makeAchievement("INS0001");
+    await signInWithCookie("INS0001");
+
+    const oversized = Buffer.concat([PNG, Buffer.alloc(MAX_IMAGE_BYTES)]);
+    const form = new FormData();
+    form.set("kind", "PHOTO");
+    form.set("file", new File([new Uint8Array(oversized)], "big.png", { type: "image/png" }));
+
+    const response = await addAsset(
+      formRequest(
+        `http://localhost/api/settings/achievements/${created.id}/assets`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
+  });
+
+  // The route's only guard on `kind` that has no test of its own: delete
+  // `assetKindSchema.parse` and an absent or unrecognised `kind` falls
+  // through the `kind === "PHOTO"` ternary's `else` branch to
+  // `addCertificate` instead of 400ing at the route. Uses a real PDF so the
+  // divergence is stark under mutation — with the parse gone, this silently
+  // succeeds as a certificate upload instead of being refused.
+  it("rejects an absent kind", async () => {
+    const created = await makeAchievement("INS0001");
+    await signInWithCookie("INS0001");
+
+    const form = new FormData();
+    form.set("file", new File([new Uint8Array(PDF)], "cert.pdf", { type: "application/pdf" }));
+
+    const response = await addAsset(
+      formRequest(
+        `http://localhost/api/settings/achievements/${created.id}/assets`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.message).toMatch(/kind/i);
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
+    expect(raw?.certificates ?? []).toHaveLength(0);
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects an unknown kind value rather than silently filling a certificate slot", async () => {
+    const created = await makeAchievement("INS0001");
+    await signInWithCookie("INS0001");
+
+    const form = new FormData();
+    form.set("kind", "VIDEO");
+    form.set("file", new File([new Uint8Array(PDF)], "cert.pdf", { type: "application/pdf" }));
+
+    const response = await addAsset(
+      formRequest(
+        `http://localhost/api/settings/achievements/${created.id}/assets`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.message).toMatch(/kind/i);
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
+    expect(raw?.certificates ?? []).toHaveLength(0);
+  });
+
+  it("MUTATION-DISTINGUISHING: returns 409 over HTTP when a photo upload exceeds the cap, and stores no extra object", async () => {
+    const created = await makeAchievement("INS0001");
+    for (let i = 0; i < ACHIEVEMENT_MAX_PHOTOS; i += 1) {
+      await AchievementService.addPhoto(
+        "INS0001",
+        created.id,
+        { contentType: "image/png", bytes: PNG },
+        actor,
+      );
+    }
+    await signInWithCookie("INS0001");
+
+    const putPublic = vi.spyOn(storage, "putPublic");
+    try {
+      const form = new FormData();
+      form.set("kind", "PHOTO");
+      form.set("file", new File([new Uint8Array(PNG)], "one-too-many.png", { type: "image/png" }));
+
+      const response = await addAsset(
+        formRequest(
+          `http://localhost/api/settings/achievements/${created.id}/assets`,
+          form,
+          { origin: "http://localhost" },
+        ),
+        { params: Promise.resolve({ achievementId: created.id }) } as never,
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(409);
+      expect(payload.error.code).toBe("CONFLICT");
+
+      // The cap lives inside the update filter, so the object is written to
+      // storage before the filter can reject the push. Without the service's
+      // rollback that object would stay in storage forever, referenced by
+      // nothing — same check as showcase-assets.test.ts, run here through the
+      // HTTP route instead of the service directly.
+      expect(putPublic).toHaveBeenCalledTimes(1);
+      const stored = (await putPublic.mock.results[0]!.value) as StoredObject;
+      expect(existsSync(storedPath(stored.key))).toBe(false);
+    } finally {
+      putPublic.mockRestore();
+    }
+
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos).toHaveLength(ACHIEVEMENT_MAX_PHOTOS);
+  });
+
   it("MUTATION-DISTINGUISHING: rejects a cross-origin upload and stores nothing", async () => {
     const created = await makeAchievement("INS0001");
     await signInWithCookie("INS0001");
@@ -561,6 +786,16 @@ describe("DELETE /api/settings/achievements/[achievementId]/assets", () => {
 
     expect(response.status).toBe(200);
     expect(payload.achievement.photos).toBeUndefined();
+
+    // The raw stored document, not just the DTO: a DTO can report success
+    // over a write that did nothing, same reasoning as every sibling test in
+    // this file that asserts against `Achievement.findById(...).lean()`.
+    // `$pull` empties the array in place rather than unsetting the field, so
+    // the raw document holds `photos: []` here — `undefined` is what
+    // `serialize()` collapses an empty array to on the way out, not what
+    // storage itself holds.
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
   });
 
   it("MUTATION-DISTINGUISHING: rejects a cross-origin removal and leaves the asset in place", async () => {
