@@ -259,6 +259,7 @@ git commit -m "feat: align the facility vocabulary with PassPercent's keys"
 
 **Files:**
 - Create: `scripts/migrate-facility-codes.ts`
+- Modify: `src/models/Institution.ts:94` (remove `uppercase: true` from `FacilitySchema.code` — see Step 0)
 - Modify: `package.json` (add `"migrate:facility-codes": "tsx scripts/migrate-facility-codes.ts"`)
 - Test: `tests/integration/migrate-facility-codes.test.ts`
 
@@ -269,6 +270,43 @@ git commit -m "feat: align the facility vocabulary with PassPercent's keys"
 **Read `scripts/migrate-gallery-to-media.ts` first** and match its structure — it is the closest precedent, a data migration with the same dry-run-by-default / `--apply` flag, the same report-object shape, and the same `isMainModule` gating that keeps it importable by tests. (`scripts/sync-fee-indexes.ts` is an index sync, a different job.)
 
 **The rule that matters:** convert the nine mappable codes and leave `HOSTEL`/`SPORTS` **in place, unchanged**, reporting each. Never drop them, never guess a target. An institution with unmapped codes still has its other codes converted — unlike the media migration's all-or-nothing skip, because here the unmapped rows are individually identifiable and safe to leave beside converted ones.
+
+- [ ] **Step 0: Remove the setter that makes this migration impossible**
+
+`src/models/Institution.ts:94` currently reads:
+
+```ts
+code: { type: String, required: true, trim: true, uppercase: true },
+```
+
+Mongoose's `uppercase: true` is a **write-time setter**: every facility code is
+uppercased on `create`, on `save`, and on cast update values. Task 1's
+vocabulary is lowercase (`library`, `boys_hostel`), so with this setter in
+place the migration's `$set` writes `LIBRARY` back, the report claims success,
+and nothing has changed. Verified empirically — `new Institution({ facilities:
+[{ code: "library", ... }] })` yields `LIBRARY`.
+
+Delete `uppercase: true` from that line, keeping `trim: true`. Leave
+`regionCode`'s `uppercase: true` (line 149) alone — region codes really are
+uppercase. No existing test asserts the facility-code normalisation, so nothing
+should break; if something does, report it rather than working around it.
+
+Add this test to the new integration file, proving the setter is gone:
+
+```ts
+it("stores a lowercase facility code without uppercasing it", async () => {
+  await makeInstitution("INS0009", {
+    facilities: [{ code: "library", label: "Library", available: true }],
+  });
+  const row = await Institution.findOne({ institutionId: "INS0009" }).lean();
+  expect(row!.facilities![0].code).toBe("library");
+});
+```
+
+Mutation-check it in Step 5 as well: restore `uppercase: true`, confirm THIS
+test fails, remove it again, and verify with
+`grep -n "uppercase" src/models/Institution.ts` that only line ~149
+(`regionCode`) still has it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -374,7 +412,7 @@ Restore, confirm by `grep -n "HOSTEL" src/lib/profile/facilities.ts` (it should 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/migrate-facility-codes.ts tests/integration/migrate-facility-codes.test.ts package.json
+git add scripts/migrate-facility-codes.ts tests/integration/migrate-facility-codes.test.ts package.json src/models/Institution.ts
 git commit -m "feat: add the facility code migration"
 ```
 
@@ -702,12 +740,23 @@ git commit -m "feat: expose achievements and alumni on the public profile API"
 
 **Files:**
 - Create: `src/components/profile/sections/achievements-section.tsx`
-- Modify: `src/components/profile/profile-editor.tsx`, `src/components/profile/sections/facilities-section.tsx`
+- Modify: `src/components/profile/profile-editor.tsx`, `src/components/profile/sections/facilities-section.tsx`, `src/components/profile/section-form.tsx`
 - Test: browser verification (Task 13); no new unit tests — the logic lives in Tasks 5, 7 and 8
 
 **Follow `media-section.tsx`** for structure: list, create/edit dialog, asset upload, hide/show, delete behind the confirm-dialog pattern, and add-controls **disabled with a visible reason** when a cap is reached rather than refusing after a file picker.
 
 This task also adds the facilities **unmapped-code notice**: a facility whose code is in `UNMAPPABLE_LEGACY_CODES` renders with a "needs re-picking" marker explaining that the code has no equivalent in the new vocabulary and asking the admin to choose specific ones. Do not auto-convert it in the UI either.
+
+It also carries a second facilities fix. `toFacilityCode` in
+`src/components/profile/section-form.tsx:311` upper-snake-cases a free-text
+label (`"Robotics Lab"` → `"ROBOTICS_LAB"`). That matched the old codes; against
+Task 1's lowercase vocabulary it now mints a custom code in a case no other code
+uses. Change it to lower-snake (`"robotics_lab"`), and update the placeholder at
+`facilities-section.tsx:180` to match. This only affects newly entered custom
+facilities — it is not a data migration, and Task 2's migration deliberately
+does not touch custom codes. The `uppercase: true` setter that used to mask this
+is removed in Task 2, so after that task the value written is whatever this
+function returns.
 
 - [ ] **Step 1: Implement. Step 2: `tsc`/eslint at baseline. Step 3: Commit**
 
