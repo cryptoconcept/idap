@@ -1,8 +1,8 @@
 # Institution Profile API
 
 I-DAP owns the master record for an institution — identity, contact, address, academic
-detail, management, facilities, social links and a gallery — and exposes it over three
-audiences:
+detail, management, facilities, social links and a media library (photos, YouTube/Vimeo
+links, brochures and prospectuses) — and exposes it over three audiences:
 
 | Audience | Base path | Auth | Can write? |
 | --- | --- | --- | --- |
@@ -54,7 +54,7 @@ curl -b cookies.txt https://your-domain.com/api/settings/institution
     "academic": { "board": "CBSE", "classesOffered": ["Grade 1", "Grade 10"] },
     "management": { "managementType": "TRUST", "principalName": "Dr. Latha Rao" },
     "facilities": [{ "code": "LIBRARY", "label": "Library", "available": true }],
-    "gallery": []
+    "media": []
   },
   "completion": {
     "percent": 62,
@@ -138,44 +138,91 @@ Errors: `400 VALIDATION_ERROR` (`action` missing or not `publish`/`unpublish`), 
 
 ### `POST /api/settings/institution/media`
 
-`multipart/form-data` upload of a `LOGO`, `COVER`, or `GALLERY` image.
+`multipart/form-data` upload. `target` is the upload **destination**; `kind` is the media
+**type**, and only matters (and is only ever sent) when `target` is `MEDIA` — having one
+word mean both in the same subsystem is exactly what this split avoids.
 
 | Field | Required | Notes |
 | --- | --- | --- |
-| `file` | yes | JPEG, PNG or WebP. Verified by magic bytes, not the declared content type — a renamed non-image is rejected even if it claims `image/png`. 5 MB ceiling. |
-| `kind` | yes | `LOGO` \| `COVER` \| `GALLERY` |
-| `title` | no | Gallery items only; ≤120 characters |
-| `description` | no | Gallery items only; ≤400 characters |
+| `file` | yes | An image for `target=LOGO`/`COVER`/`MEDIA` with `kind` omitted or `IMAGE`; a PDF for `target=MEDIA` with `kind` `BROCHURE`/`PROSPECTUS`. Verified by magic bytes, not the declared content type — a renamed file is rejected even if it claims the right one. Images: JPEG/PNG/WebP, 5 MB ceiling. Documents: PDF (`%PDF-` header), 20 MB ceiling. |
+| `target` | yes | `LOGO` \| `COVER` \| `MEDIA` |
+| `kind` | no | `IMAGE` \| `BROCHURE` \| `PROSPECTUS` — only read when `target` is `MEDIA`; omitted or `IMAGE` takes the image path, `BROCHURE`/`PROSPECTUS` takes the PDF path. Videos are never uploaded here — see the `/media/video` endpoint below. |
+| `title` | no | `target=MEDIA` only; ≤120 characters. Silently ignored for `LOGO`/`COVER`. |
+| `caption` | no | `target=MEDIA` only; ≤240 characters (FeesBasket's caption cap). Silently ignored for `LOGO`/`COVER`. |
 
 `LOGO` and `COVER` **replace** the existing image — the old object is deleted (best
-effort) after the new one is stored. `GALLERY` **appends**, capped at 60 items; a 61st
-upload returns `409 CONFLICT` and the just-uploaded object is cleaned up so nothing
-orphans. To remove a logo or cover entirely, `PATCH` `{"logoUrl": null}` or
-`{"coverImageUrl": null}` through `/api/settings/institution` — there is no delete route
-for `LOGO`/`COVER`, only for gallery items. Clearing the field leaves the stored object in
-place; only a *replacement* upload cleans the old one up.
+effort) after the new one is stored. `MEDIA` **appends** to the media library, capped
+**per kind, not as one shared total**: 60 images, 10 videos, 10 brochures, 10
+prospectuses. A cap-exceeding upload returns `409 CONFLICT` and the just-uploaded object
+is cleaned up so nothing orphans. To remove a logo or cover entirely, `PATCH`
+`{"logoUrl": null}` or `{"coverImageUrl": null}` through `/api/settings/institution` —
+there is no delete route for `LOGO`/`COVER`, only for media items. Clearing the field
+leaves the stored object in place; only a *replacement* upload cleans the old one up.
 
 ```bash
 curl -X POST https://your-domain.com/api/settings/institution/media \
   -b cookies.txt \
   -H "Origin: https://your-domain.com" \
-  -F "kind=GALLERY" \
+  -F "target=MEDIA" \
   -F "title=Annual Day 2026" \
   -F "file=@campus.jpg;type=image/jpeg"
 ```
 
 ```json
-{ "success": true, "profile": { "gallery": [{ "id": "6a88...", "imageUrl": "https://...", "title": "Annual Day 2026", "status": "ACTIVE" }] } }
+{ "success": true, "profile": { "media": [{ "id": "6a88...", "kind": "IMAGE", "url": "https://...", "title": "Annual Day 2026", "status": "ACTIVE" }] } }
 ```
 
-Errors: `400 VALIDATION_ERROR` (missing/oversized/non-image file, bad `kind`), `401`,
-`403`, `409 CONFLICT` (gallery full).
+A brochure or prospectus is the same request with `target=MEDIA`, `kind=BROCHURE` (or
+`PROSPECTUS`), and a PDF `file`:
+
+```bash
+curl -X POST https://your-domain.com/api/settings/institution/media \
+  -b cookies.txt \
+  -H "Origin: https://your-domain.com" \
+  -F "target=MEDIA" \
+  -F "kind=BROCHURE" \
+  -F "title=Admissions Brochure 2026" \
+  -F "file=@brochure.pdf;type=application/pdf"
+```
+
+Errors: `400 VALIDATION_ERROR` (missing/oversized/wrong-type file, bad `target`/`kind`),
+`401`, `403`, `409 CONFLICT` (that kind's cap already reached).
+
+### `POST /api/settings/institution/media/video`
+
+Adds a YouTube or Vimeo link. No bytes are ever uploaded — the URL is normalized and
+validated against an explicit host allow-list (`youtube.com`, `m.youtube.com`, `youtu.be`,
+`vimeo.com`, `player.vimeo.com`); anything else is rejected before it reaches the
+database. A JSON body, not multipart.
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `url` | yes | A YouTube or Vimeo link. Normalized to a canonical form and split into `provider`/`videoId`. |
+| `title` | no | ≤120 characters |
+| `caption` | no | ≤240 characters |
+
+```bash
+curl -X POST https://your-domain.com/api/settings/institution/media/video \
+  -b cookies.txt \
+  -H "Origin: https://your-domain.com" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","title":"Campus Tour"}'
+```
+
+```json
+{ "success": true, "profile": { "media": [{ "id": "6a90...", "kind": "VIDEO", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "provider": "YOUTUBE", "videoId": "dQw4w9WgXcQ", "title": "Campus Tour", "status": "ACTIVE" }] } }
+```
+
+Errors: `400 VALIDATION_ERROR` (`url` missing, or not a YouTube/Vimeo link — message names
+what is supported), `401`, `403`, `409 CONFLICT` (this exact video already added, or the
+10-video cap already reached).
 
 ### `PATCH /api/settings/institution/media/:mediaId`
 
-Edits one gallery item in place — title, description, `sortOrder`, and the
-`ACTIVE`/`HIDDEN` flag the public projection filters on. Setting `status: "HIDDEN"` is how
-an image leaves the public profile without being deleted.
+Edits one media item in place — title, caption, `sortOrder`, and the `ACTIVE`/`HIDDEN`
+flag the public projection filters on. Works on any kind (image, video, brochure,
+prospectus) addressed by the same `:mediaId`. Setting `status: "HIDDEN"` is how an item
+leaves the public profile without being deleted.
 
 ```bash
 curl -X PATCH https://your-domain.com/api/settings/institution/media/6a88... \
@@ -185,12 +232,29 @@ curl -X PATCH https://your-domain.com/api/settings/institution/media/6a88... \
   -d '{"status":"HIDDEN"}'
 ```
 
-Errors: `400 VALIDATION_ERROR`, `401`, `403`, `404` (no such gallery item on this
+**Clearing the caption.** Same three-state convention as `logoUrl`/`coverImageUrl` on the
+main `PATCH` above: omitting `caption` leaves it alone, a string `$set`s it, and an
+explicit `null` clears it (`$unset`, not a stored empty string) — unlike the "known
+limitation" on plain text fields below, a media caption genuinely can be blanked through
+this API.
+
+```bash
+curl -X PATCH https://your-domain.com/api/settings/institution/media/6a88... \
+  -b cookies.txt \
+  -H "Origin: https://your-domain.com" \
+  -H "Content-Type: application/json" \
+  -d '{"caption": null}'
+```
+
+Errors: `400 VALIDATION_ERROR`, `401`, `403`, `404` (no such media item on this
 institution).
 
 ### `DELETE /api/settings/institution/media/:mediaId`
 
-Removes one gallery image (not `LOGO`/`COVER` — see above) and deletes the stored object.
+Removes one media item (not `LOGO`/`COVER` — see above) and deletes the stored object —
+for an image, video link, brochure or prospectus alike. A video's URL points at
+YouTube/Vimeo, not this institution's storage, so nothing is deleted from storage for
+those; only the array entry goes.
 
 ```bash
 curl -X DELETE https://your-domain.com/api/settings/institution/media/6a88... \
@@ -315,15 +379,26 @@ curl https://your-domain.com/api/public/INS0001/profile
     "management": { "managementType": "TRUST", "principalName": "Dr. Latha Rao", "headDesignation": "Principal" },
     "facilities": [{ "code": "LIBRARY", "label": "Library", "available": true, "note": "12,000 titles" }],
     "social": null,
-    "gallery": []
+    "media": [
+      { "id": "6a8b...", "kind": "IMAGE", "url": "https://...blob.vercel-storage.com/media/INS0001/....jpg", "title": "Campus Front Gate", "caption": "Main entrance on Hebbal Road", "sortOrder": 0 },
+      { "id": "6a90...", "kind": "VIDEO", "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "title": "Campus Tour", "provider": "YOUTUBE", "videoId": "dQw4w9WgXcQ", "sortOrder": 1 },
+      { "id": "6a90...", "kind": "BROCHURE", "url": "https://...blob.vercel-storage.com/media/INS0001/documents/....pdf", "title": "Admissions Brochure 2026", "sortOrder": 2 }
+    ]
   }
 }
 ```
 
+Every `media` item carries `id`, `kind`, `url` (always an absolute URL, even for a
+locally-stored file — see [§4](#4-the-public-projection)), `sortOrder`, and
+`title`/`caption` when set; `provider` and `videoId` appear only on `kind: "VIDEO"` items.
+A field that is unset is omitted from the object entirely (never sent as `null`) — the
+brochure above has no `caption` because none was given.
+
 Note what is **absent** even though it exists in the database: `active`, `profileStatus`,
-`publishedAt`, `id`/`_id`, `createdAt`/`updatedAt`, `contact.alternateEmail`'s sibling
-`headEmail`/`headPhone` on `management` (names and designations only), and any gallery
-item with `status: "HIDDEN"`. See [§4](#4-the-public-projection) for the full allow-list.
+`publishedAt`, `id`/`_id` on the institution itself, `createdAt`/`updatedAt`,
+`contact.alternateEmail`'s sibling `headEmail`/`headPhone` on `management` (names and
+designations only), each media item's `uploadedAt`, and any media item with
+`status: "HIDDEN"`. See [§4](#4-the-public-projection) for the full allow-list.
 
 `404` example — draft, suspended, unpublished, deactivated, or unknown, all identical:
 
@@ -374,14 +449,19 @@ deny-list and not an allow-list, and how it's tested.
 `coverImageUrl`, the full address block (including `geo`), primary contact
 (`phone`/`email`/`website`/`contactPerson` plus `secondaryPhone`/`whatsapp`/`alternateEmail`),
 the full `academic` block, `management` (**names and designations only** — `headEmail` and
-`headPhone` are never public), `facilities`, `social`, and gallery items with
-`status: "ACTIVE"` (title/description/imageUrl only — `_id`, `sortOrder` and `uploadedAt`
-are not exposed).
+`headPhone` are never public), `facilities`, `social`, and media items with
+`status: "ACTIVE"` — `id` (the item's own id, not the institution's `_id`), `kind`, `url`,
+`title`, `caption`, `sortOrder`, and, for `kind: "VIDEO"` only, `provider` and `videoId`.
+`url` is always resolved to an absolute URL by `toPublicUrl` (`src/lib/media/public-url.ts`)
+before it leaves this projection — Vercel Blob's own URLs are absolute already and pass
+through unchanged, while the local-disk backend's `/api/media/…` keys are resolved against
+`env.APP_URL` first, so a consumer never has to know which storage backend is behind a
+given deployment. `uploadedAt` is **not** exposed on a media item.
 
-**Never public:** `active`, `profileStatus`, `publishedAt`, `_id`/`id`, `createdAt`,
-`updatedAt`, `management.headEmail`, `management.headPhone`, gallery items with
-`status: "HIDDEN"` (they are dropped, not marked hidden in the response), and anything not
-explicitly named above.
+**Never public:** `active`, `profileStatus`, `publishedAt`, the institution's own
+`_id`/`id`, `createdAt`, `updatedAt`, `management.headEmail`, `management.headPhone`, each
+media item's `uploadedAt`, media items with `status: "HIDDEN"` (they are dropped, not
+marked hidden in the response), and anything not explicitly named above.
 
 ---
 
@@ -408,8 +488,11 @@ explicitly named above.
 | `academic.coursesOffered[]` | ≤120 items, 120 chars each |
 | `facilities[]` | ≤40 items |
 | `social.other[]` | ≤6 items |
-| Gallery | ≤60 images total (enforced atomically in the service, not just the schema) |
-| Image upload | JPEG/PNG/WebP, ≤5 MB, magic-byte verified |
+| Media items | per kind, not one shared total — enforced atomically in the service, not just the schema: **60** images, **10** videos, **10** brochures, **10** prospectuses |
+| Media title | ≤120 characters |
+| Media caption | ≤240 characters (FeesBasket's caption cap — `MEDIA_CAPTION_MAX`) |
+| Media image upload | JPEG/PNG/WebP, ≤5 MB, magic-byte verified |
+| Media document upload | PDF only, ≤20 MB, magic-byte (`%PDF-` header) verified |
 
 ### Enums
 
@@ -419,8 +502,11 @@ explicitly named above.
 | `profileStatus` | `DRAFT`, `PUBLISHED`, `SUSPENDED`, `ARCHIVED` (only `PUBLISHED` — and `active`  — is ever public) |
 | `academic.genderType` | `BOYS`, `GIRLS`, `CO_ED` |
 | `management.managementType` | `GOVERNMENT`, `AIDED`, `UNAIDED`, `PRIVATE`, `TRUST`, `SOCIETY`, `MINORITY`, `AUTONOMOUS`, `OTHER` |
-| `gallery[].status` | `ACTIVE`, `HIDDEN` |
-| media upload `kind` | `LOGO`, `COVER`, `GALLERY` |
+| `media[].status` | `ACTIVE`, `HIDDEN` |
+| `media[].kind` | `IMAGE`, `VIDEO`, `BROCHURE`, `PROSPECTUS` |
+| `media[].provider` | `YOUTUBE`, `VIMEO` — `kind: "VIDEO"` items only |
+| media upload `target` | `LOGO`, `COVER`, `MEDIA` |
+| media upload `kind` | `IMAGE`, `BROCHURE`, `PROSPECTUS` — read only when `target` is `MEDIA` |
 
 ### Error codes
 
@@ -431,8 +517,8 @@ Every error uses `{ "success": false, "error": { "code", "message", "details"? }
 | `VALIDATION_ERROR` | 400 | Zod rejects the body; `details` lists every failing field |
 | `UNAUTHORIZED` | 401 | No session / not signed in |
 | `FORBIDDEN` | 403 | Wrong role, wrong institution, or cross-origin write |
-| `NOT_FOUND` | 404 | Institution or gallery item doesn't exist for this actor — or, on public routes, isn't published |
-| `CONFLICT` | 409 | Gallery already at 60 items |
+| `NOT_FOUND` | 404 | Institution or media item doesn't exist for this actor — or, on public routes, isn't published |
+| `CONFLICT` | 409 | That media kind's cap already reached, or (video only) this exact link was already added |
 | `INTERNAL_ERROR` | 500 | Unexpected — logged server-side, generic message to the caller |
 
 ---
