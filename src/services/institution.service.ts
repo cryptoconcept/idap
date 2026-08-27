@@ -7,11 +7,12 @@ import { generateInstitutionId, reserveInstitutionId } from "./sequence.service"
 import { ActivityService } from "./activity.service";
 import { allocateSlug } from "./slug.service";
 import { hashPassword } from "@/lib/security/password";
-import { AppError, notFound } from "@/lib/api/errors";
+import { AppError, notFound, validationError } from "@/lib/api/errors";
 import { escapeRegex, requiredIso, toIso } from "@/lib/utils/serialize";
 import type { InstitutionDTO, Paginated, ProfileDTO } from "@/lib/types";
 import {
   MEDIA_MAX_ITEMS,
+  MEDIA_MAX_PDF_BYTES,
   type InstitutionType,
   type MediaKind,
   type MediaProvider,
@@ -24,7 +25,7 @@ import { toPublicProfile, type PublicProfile } from "@/lib/profile/public-projec
 import type { DerivedOfferings } from "@/lib/academic/offerings";
 import { AcademicStructureService } from "./academic-structure.service";
 import type { z } from "zod";
-import { mediaUploadSchema } from "@/lib/validation/institution";
+import { mediaUploadSchema, videoLinkSchema } from "@/lib/validation/institution";
 import type {
   createInstitutionSchema,
   mediaItemPatchSchema,
@@ -34,6 +35,7 @@ import type {
 } from "@/lib/validation/institution";
 import { validateImage } from "@/lib/media/image";
 import { isOwnedMediaUrl } from "@/lib/media/ownership";
+import { normalizeVideoUrl } from "@/lib/media/video-url";
 
 type InstitutionRow = InstitutionDoc;
 
@@ -551,6 +553,204 @@ export const InstitutionService = {
       entityId: updated._id,
       entityRef: institutionId,
       action: parsed.target === "LOGO" ? "Logo updated" : "Cover image updated",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated as InstitutionRow);
+  },
+
+  /**
+   * Uploads a brochure or prospectus PDF. Follows `addMediaImage`'s shape
+   * exactly — the same atomic per-kind `$expr` cap filter, the same
+   * `storage.deletePublic` rollback when the cap rejects the push, the same
+   * `ActivityService.record` call — differing only in what it validates:
+   * a multipart form's declared `contentType` and filename are both
+   * client-supplied and prove nothing, so the bytes themselves must start
+   * with the PDF magic number before anything touches storage.
+   */
+  async addMediaDocument(
+    institutionId: string,
+    input: {
+      kind: "BROCHURE" | "PROSPECTUS";
+      fileName: string;
+      contentType: string;
+      bytes: Buffer;
+      title?: string;
+      caption?: string;
+    },
+    actor: { id: string; name: string },
+  ): Promise<ProfileDTO> {
+    const parsed = mediaUploadSchema.parse({
+      target: "MEDIA",
+      kind: input.kind,
+      title: input.title,
+      caption: input.caption,
+    });
+
+    // Neither the declared contentType nor the filename is trustworthy —
+    // both are supplied by the client. Only the bytes prove anything.
+    const MAGIC = Buffer.from("%PDF-");
+    if (!input.bytes.subarray(0, MAGIC.length).equals(MAGIC)) {
+      throw validationError("file: that file is not a PDF");
+    }
+    if (input.bytes.byteLength > MEDIA_MAX_PDF_BYTES) {
+      throw validationError(
+        `file: files must be ${Math.floor(MEDIA_MAX_PDF_BYTES / (1024 * 1024))} MB or smaller`,
+      );
+    }
+
+    await connectToDatabase();
+    const before = await Institution.findOne({ institutionId }).select("_id media").lean();
+    if (!before) throw notFound("Institution not found");
+
+    const kind = input.kind;
+
+    // Never derived from the client-supplied filename.
+    const objectId = new Types.ObjectId();
+    const key = `media/${institutionId}/documents/${objectId.toHexString()}.pdf`;
+    const stored = await storage.putPublic({
+      key,
+      body: input.bytes,
+      contentType: "application/pdf",
+    });
+
+    const updated = await Institution.findOneAndUpdate(
+      {
+        institutionId,
+        $expr: {
+          $lt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ["$media", []] },
+                  cond: { $eq: ["$$this.kind", kind] },
+                },
+              },
+            },
+            MEDIA_MAX_ITEMS[kind],
+          ],
+        },
+      },
+      {
+        $push: {
+          media: {
+            _id: objectId,
+            kind,
+            url: stored.key,
+            title: parsed.title,
+            caption: parsed.caption,
+            sortOrder: before.media?.length ?? 0,
+            status: "ACTIVE",
+            uploadedAt: new Date(),
+          },
+        },
+      },
+      { new: true },
+    ).lean();
+
+    if (!updated) {
+      await storage.deletePublic(stored.key).catch(() => undefined);
+      throw new AppError("CONFLICT", `A profile can hold at most ${MEDIA_MAX_ITEMS[kind]} ${kind === "BROCHURE" ? "brochures" : "prospectuses"}`);
+    }
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "INSTITUTION",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: kind === "BROCHURE" ? "Brochure added" : "Prospectus added",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated as InstitutionRow);
+  },
+
+  /**
+   * Adds a YouTube or Vimeo link. No bytes are ever stored — `normalizeVideoUrl`
+   * is the single place that knows what a video URL looks like. The duplicate
+   * check (on the normalized `(provider, videoId)` pair) and the per-kind cap
+   * both live inside the same atomic update filter as the `$push`, so two
+   * concurrent submissions can never both land. A `null` result means either
+   * the duplicate or the cap matched; the row is re-read so the admin gets the
+   * accurate reason rather than a generic refusal.
+   */
+  async addMediaVideo(
+    institutionId: string,
+    input: { url: string; title?: string; caption?: string },
+    actor: { id: string; name: string },
+  ): Promise<ProfileDTO> {
+    const parsed = videoLinkSchema.parse(input);
+    const normalized = normalizeVideoUrl(parsed.url);
+    if (!normalized) {
+      throw validationError("url: only YouTube and Vimeo links are supported");
+    }
+
+    await connectToDatabase();
+    const before = await Institution.findOne({ institutionId }).select("_id media").lean();
+    if (!before) throw notFound("Institution not found");
+
+    const objectId = new Types.ObjectId();
+    const updated = await Institution.findOneAndUpdate(
+      {
+        institutionId,
+        media: {
+          $not: {
+            $elemMatch: { provider: normalized.provider, videoId: normalized.videoId },
+          },
+        },
+        $expr: {
+          $lt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ["$media", []] },
+                  cond: { $eq: ["$$this.kind", "VIDEO"] },
+                },
+              },
+            },
+            MEDIA_MAX_ITEMS.VIDEO,
+          ],
+        },
+      },
+      {
+        $push: {
+          media: {
+            _id: objectId,
+            kind: "VIDEO",
+            url: normalized.url,
+            title: parsed.title,
+            caption: parsed.caption,
+            sortOrder: before.media?.length ?? 0,
+            status: "ACTIVE",
+            provider: normalized.provider,
+            videoId: normalized.videoId,
+            uploadedAt: new Date(),
+          },
+        },
+      },
+      { new: true },
+    ).lean();
+
+    if (!updated) {
+      const row = await Institution.findOne({ institutionId }).select("media").lean();
+      if (!row) throw notFound("Institution not found");
+      const isDuplicate = row.media?.some(
+        (item) => item.provider === normalized.provider && item.videoId === normalized.videoId,
+      );
+      if (isDuplicate) {
+        throw new AppError("CONFLICT", "This video has already been added");
+      }
+      throw new AppError("CONFLICT", `A profile can hold at most ${MEDIA_MAX_ITEMS.VIDEO} videos`);
+    }
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "INSTITUTION",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: "Video added",
       performedBy: actor.id,
       performedByName: actor.name,
     });

@@ -172,3 +172,9 @@ export const mediaItemPatchSchema = z.object({
   sortOrder: z.number().int().min(0).max(999).optional(),
   status: z.enum(MEDIA_STATUSES).optional(),
 });
+
+export const videoLinkSchema = z.object({
+  url: z.string().trim().min(1, "url: paste a YouTube or Vimeo link"),
+  title: optionalText(120),
+  caption: optionalText(MEDIA_CAPTION_MAX),
+});
