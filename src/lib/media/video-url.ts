@@ -27,7 +27,7 @@ function host(url: URL): string {
 function youtubeId(url: URL, h: string): string | null {
   if (h === "youtu.be") return url.pathname.slice(1) || null;
   const segments = url.pathname.split("/").filter(Boolean);
-  if (segments[0] === "embed" || segments[0] === "shorts") return segments[1] ?? null;
+  if (segments[0] === "embed" || segments[0] === "shorts" || segments[0] === "live") return segments[1] ?? null;
   if (url.pathname === "/watch") return url.searchParams.get("v");
   return null;
 }

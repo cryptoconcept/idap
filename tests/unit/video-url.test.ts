@@ -17,7 +17,8 @@ describe("normalizeVideoUrl — YouTube shapes", () => {
   ];
 
   for (const shape of shapes) {
-    it(`normalises ${shape.trim()}`, () => {
+    const desc = shape !== shape.trim() ? `normalises ${shape.trim()} (trimming whitespace)` : `normalises ${shape.trim()}`;
+    it(desc, () => {
       expect(normalizeVideoUrl(shape)).toEqual({
         provider: "YOUTUBE",
         videoId: "dQw4w9WgXcQ",
@@ -25,6 +26,18 @@ describe("normalizeVideoUrl — YouTube shapes", () => {
       });
     });
   }
+
+  it("normalises https://www.youtube.com/live/dQw4w9WgXcQ", () => {
+    expect(normalizeVideoUrl("https://www.youtube.com/live/dQw4w9WgXcQ")).toEqual({
+      provider: "YOUTUBE",
+      videoId: "dQw4w9WgXcQ",
+      url: YT,
+    });
+  });
+
+  it("rejects https://www.youtube.com/live/short (id fails length check)", () => {
+    expect(normalizeVideoUrl("https://www.youtube.com/live/short")).toBeNull();
+  });
 });
 
 describe("normalizeVideoUrl — Vimeo shapes", () => {
