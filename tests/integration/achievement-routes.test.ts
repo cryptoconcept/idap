@@ -170,6 +170,40 @@ describe("POST /api/settings/achievements", () => {
     expect(after).toEqual(before);
   });
 
+  // `institutionId` survives a smuggled body only because
+  // `AchievementService.create` re-assigns it after the object spread
+  // (`{ ...input, institutionId, status: "ACTIVE" }`) — `photos` and
+  // `certificates` get no such re-assignment. They are ordinary schema paths
+  // the model will happily persist, so `.parse()` at the route is the ONLY
+  // thing standing between a raw body and storage keys that bypass the
+  // upload path entirely: no magic-byte check, no size cap, no per-kind cap,
+  // none of Task 7's rollback machinery, and no proof the key even belongs
+  // to this institution's storage prefix.
+  it("MUTATION-DISTINGUISHING: strips photos and certificates from the create body — a caller cannot plant storage keys without going through the upload endpoint", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await createAchievement(
+      jsonRequest({
+        body: {
+          ...achievementInput,
+          photos: ["showcase/INS0002/achievements/deadbeef.jpg"],
+          certificates: ["showcase/INS0002/achievements/deadbeef.pdf"],
+        },
+        origin: "http://localhost",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+
+    // The raw stored document, not the DTO: `serialize` already turns an
+    // empty array into `undefined` on the way out, so asserting only the
+    // response would pass even if the array were stored non-empty.
+    const raw = await Achievement.findById(payload.achievement.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
+    expect(raw?.certificates ?? []).toHaveLength(0);
+  });
+
   it("MUTATION-DISTINGUISHING: rejects a cross-origin create and creates nothing", async () => {
     await signInWithCookie("INS0001");
 
