@@ -21,7 +21,7 @@ Every task's requirements implicitly include these.
 - **`HIDDEN` never leaves the building** — excluded from every outbound surface.
 - **Guard optional numerics with `!= null`, never `?? 0`.**
 - `npx tsc --noEmit` → 0 errors. `npx eslint src` → **exactly 0 errors / 7 warnings**. Run eslint yourself and report the count — tests and `tsc` do not catch a lint regression.
-- Full suite green. Baseline at plan start: **1202 tests / 108 files**.
+- Full suite green. Baseline at plan start: **1195 tests / 107 files** (this branch forks from `main`; the 7 nav-grouping tests live on a separate unmerged branch).
 - Test factories are positional: `makeInstitution(institutionId, overrides)` and `makeProfiledInstitution(institutionId, overrides)` from `tests/helpers/factories.ts`.
 - **Integration tests need the database lifecycle hooks** — `clearDatabase`, `startTestDatabase`, `stopTestDatabase` from `../helpers/db`, wired via `beforeAll`/`afterAll`/`beforeEach` as `tests/integration/academic-structure-crud.test.ts` does. Without them a model call hangs until a 10s "buffering timed out" error that reads like a code bug and is not one.
 - **No `git checkout`, `git switch`, `git worktree add`, or `git stash`** — shared working directory. A stash here has already silently reverted uncommitted work once. Use `git show <ref>:<path>`, and a scratchpad file copy to save state.
