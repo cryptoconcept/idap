@@ -446,7 +446,7 @@ export const SHOWCASE_MAX_PDF_BYTES = 20 * 1024 * 1024;
 - [ ] **Step 1: Write the failing test**
 
 Cover, each as its own named test:
-- Every enum's members match PassPercent's lists one-for-one when uppercased. **Read the enums from `/Users/automicai/Documents/GitHub/passpercent/backend/src/` and assert against the literal lists** — this is the parity guard the spec §12 requires, and it must fail if either side drifts.
+- Every enum's members match PassPercent's lists one-for-one when uppercased, asserted against **literal lists written into the test file**. Transcribe those literals from PassPercent's source while writing the test, and cite the source path in a comment — but **the test must not read that repository at runtime**. It is a sibling checkout that will not exist on CI or another machine, and a parity guard that errors on a missing path fails for the wrong reason. This is the guard the spec §12 requires.
 - `achievementCreateSchema` requires `category` and `title`, rejects a title over 120 characters, a description over 2000, and an unknown category.
 - `alumnusCreateSchema` requires `name` and `category`, accepts `batch` as free text (`"2015"` and `"2012-2015"` both valid), and rejects a name over 100.
 - Both patch schemas make every field optional.
@@ -649,12 +649,24 @@ git commit -m "feat: add alumni routes"
 ### Task 10: Public API exposure
 
 **Files:**
-- Modify: `src/lib/profile/public-projection.ts`, `src/lib/api/openapi.ts`
+- Modify: `src/lib/profile/public-projection.ts`, `src/services/institution.service.ts`, `src/lib/api/openapi.ts`
 - Test: `tests/unit/public-projection.test.ts`, `tests/integration/public-profile.test.ts` (extend both)
 
 **Interfaces:**
-- Consumes: `toPublicUrl` from `@/lib/media/public-url`; Tasks 5-6's services.
+- Consumes: `toPublicUrl` from `@/lib/media/public-url`; `AchievementService.list` and `AlumniService.list` (Tasks 5-6).
 - Produces: `achievements` and `alumni` on the public profile payload.
+
+**A structural point the other tasks do not face.** `toPublicProfile(row, offerings)`
+is a projection over the **institution document**, and it is called from
+`InstitutionService.getPublicProfile` (`institution.service.ts:978`). Media works
+there because `media[]` is embedded on that document. **Achievements and alumni are
+separate collections, so they are not on `row` and cannot be projected from it.**
+
+So `getPublicProfile` must fetch both — filtered to `ACTIVE`, scoped to the same
+institution — and pass them into `toPublicProfile` as a third argument, alongside
+the `offerings` argument that already works this way. Widen `toPublicProfile`'s
+signature to match; do not reach into the database from inside the projection,
+which is a pure function over what it is handed and must stay that way.
 
 Shapes are in spec §10. **Extend the existing tests, do not replace them** — that file already guards the media projection.
 
