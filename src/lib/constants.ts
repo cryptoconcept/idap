@@ -158,6 +158,35 @@ export type GalleryStatus = (typeof GALLERY_STATUSES)[number];
 /** A gallery, not a media platform. Enforced in the service, not only the UI. */
 export const GALLERY_MAX_ITEMS = 60;
 
+export const MEDIA_KINDS = ["IMAGE", "VIDEO", "BROCHURE", "PROSPECTUS"] as const;
+export type MediaKind = (typeof MEDIA_KINDS)[number];
+
+export const MEDIA_KIND_LABELS: Record<MediaKind, string> = {
+  IMAGE: "Photo",
+  VIDEO: "Video",
+  BROCHURE: "Brochure",
+  PROSPECTUS: "Prospectus",
+};
+
+export const MEDIA_STATUSES = ["ACTIVE", "HIDDEN"] as const;
+export type MediaStatus = (typeof MEDIA_STATUSES)[number];
+
+export const MEDIA_PROVIDERS = ["YOUTUBE", "VIMEO"] as const;
+
+/** Per kind, not one shared total: sixty brochures is a data-entry error. */
+export const MEDIA_MAX_ITEMS: Record<MediaKind, number> = {
+  IMAGE: 60,
+  VIDEO: 10,
+  BROCHURE: 10,
+  PROSPECTUS: 10,
+};
+
+export const MEDIA_MAX_PDF_BYTES = 20 * 1024 * 1024;
+
+/** FeesBasket caps caption at 240 (feesbasket-api-map.md §4). Enforced at
+ *  input so the value IDAP holds is always the value it can push. */
+export const MEDIA_CAPTION_MAX = 240;
+
 export const RESULT_BOARDS = [
   "CBSE",
   "ICSE",
