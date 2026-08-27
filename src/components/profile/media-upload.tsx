@@ -118,10 +118,14 @@ export async function addMediaVideo(input: {
 /**
  * Edits one media item — title, caption, order, or the ACTIVE/HIDDEN flag —
  * and returns the refreshed profile, or `null` after reporting the failure.
+ * `caption: null` clears it (distinct from omitting the key, which leaves
+ * the stored caption untouched) — `JSON.stringify` keeps an explicit `null`
+ * but drops an `undefined` key, which is exactly the wire behaviour this
+ * three-state distinction depends on.
  */
 export async function patchMediaItem(
   mediaId: string,
-  patch: { title?: string; caption?: string; sortOrder?: number; status?: MediaStatus },
+  patch: { title?: string; caption?: string | null; sortOrder?: number; status?: MediaStatus },
 ): Promise<ProfileDTO | null> {
   try {
     const response = await fetch(`/api/settings/institution/media/${mediaId}`, {

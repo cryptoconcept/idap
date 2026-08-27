@@ -180,7 +180,15 @@ export const mediaDocumentKindSchema = z.enum(["BROCHURE", "PROSPECTUS"]);
 
 export const mediaItemPatchSchema = z.object({
   title: optionalText(120),
-  caption: optionalText(MEDIA_CAPTION_MAX),
+  /**
+   * The one field on this patch that accepts an explicit `null`, same
+   * convention as `updateProfileSchema.logoUrl`/`coverImageUrl` above: absent
+   * (`undefined`) leaves the stored caption alone, a string `$set`s it, and
+   * `null` is the documented way to clear it. Without this, a caption can be
+   * overwritten but never removed — `optionalText` turns `""` into
+   * `undefined`, which the service already treats as "not supplied."
+   */
+  caption: optionalText(MEDIA_CAPTION_MAX).nullable(),
   sortOrder: z.number().int().min(0).max(999).optional(),
   status: z.enum(MEDIA_STATUSES).optional(),
 });

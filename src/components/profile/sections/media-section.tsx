@@ -840,23 +840,19 @@ export function MediaSection({
   }
 
   async function saveCaption(item: MediaItem) {
-    const caption = captionDraft.trim();
-    // The patch schema (`optionalText`, Tasks 5-6) treats an empty string as
-    // "no value supplied" and leaves the stored caption untouched — so a
-    // blank save would round-trip successfully, report "updated", and then
-    // silently show the old caption again. Refusing it here, with a reason,
-    // beats that quiet no-op.
-    if (caption.length === 0) {
-      toast.error(
-        "A caption can't be cleared to blank here — type replacement text, or Cancel to leave it as is.",
-      );
-      return;
-    }
+    const trimmed = captionDraft.trim();
+    // Blank means "remove the caption," not "leave it alone" — that is why
+    // this sends an explicit `null` rather than `""`. `optionalText` (the
+    // schema `title`/status still use) would silently turn `""` into
+    // `undefined`, which the service treats as "not supplied" and leaves
+    // untouched; `caption` alone accepts `null` precisely so clearing it is
+    // expressible instead of a no-op.
+    const caption = trimmed.length > 0 ? trimmed : null;
     setBusyId(item.id);
     const next = await patchMediaItem(item.id, { caption });
     setBusyId(null);
     if (next) {
-      toast.success("Caption updated");
+      toast.success(caption === null ? "Caption removed" : "Caption updated");
       onProfile(next);
       setEditingCaptionId(null);
       setCaptionDraft("");

@@ -769,6 +769,12 @@ export const InstitutionService = {
    * deleting it. Addressed by `_id` through an array filter, so a concurrent
    * upload or delete cannot shift the write onto a different item the way a
    * positional index would.
+   *
+   * Same three-state rule as `buildProfileUpdate` above: a key absent from
+   * the patch is `undefined` and is left alone; a key carrying a value is
+   * `$set`; `caption` explicitly `null` (the only field `mediaItemPatchSchema`
+   * allows that on) is `$unset`, so a cleared caption is actually gone rather
+   * than stored as a literal null the DTO would have to keep translating back.
    */
   async updateMediaItem(
     institutionId: string,
@@ -781,22 +787,31 @@ export const InstitutionService = {
     await connectToDatabase();
 
     const set: Record<string, unknown> = {};
+    const unset: Record<string, ""> = {};
     for (const [key, value] of Object.entries(patch)) {
       if (value === undefined) continue;
-      set[`media.$[item].${key}`] = value;
+      if (value === null) unset[`media.$[item].${key}`] = "";
+      else set[`media.$[item].${key}`] = value;
     }
 
     const objectId = new Types.ObjectId(mediaId);
 
-    if (Object.keys(set).length === 0) {
+    if (Object.keys(set).length === 0 && Object.keys(unset).length === 0) {
       const row = await Institution.findOne({ institutionId, "media._id": objectId }).lean();
       if (!row) throw notFound("Media item not found");
       return serialize(row as InstitutionRow);
     }
 
+    // Only the operators that actually have work in them: an empty `$set` (or
+    // `$unset`) is rejected by the server, and a patch may legitimately be
+    // clear-only (`{ caption: null }` with nothing else to `$set`).
+    const update: Record<string, unknown> = {};
+    if (Object.keys(set).length > 0) update.$set = set;
+    if (Object.keys(unset).length > 0) update.$unset = unset;
+
     const updated = await Institution.findOneAndUpdate(
       { institutionId, "media._id": objectId },
-      { $set: set },
+      update,
       { new: true, arrayFilters: [{ "item._id": objectId }] },
     ).lean();
     if (!updated) throw notFound("Media item not found");

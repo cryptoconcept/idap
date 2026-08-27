@@ -323,6 +323,65 @@ describe("media routes", () => {
       expect(item.caption).toBe("Original");
       expect(item.status).toBe("ACTIVE");
     });
+
+    it("leaves an existing caption untouched when the patch omits it", async () => {
+      const mediaId = await seedImage("INS0001", { caption: "Original" });
+      await signInWithCookie("INS0001");
+
+      const response = await patchMedia(
+        jsonRequest({
+          url: `http://localhost/api/settings/institution/media/${mediaId}`,
+          body: { status: "HIDDEN" },
+          origin: "http://localhost",
+        }),
+        { params: Promise.resolve({ mediaId }) } as never,
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      const item = payload.profile.media.find((entry: { id: string }) => entry.id === mediaId);
+      expect(item.caption).toBe("Original");
+      expect(item.status).toBe("HIDDEN");
+
+      // Assert the persisted document too — the point of this test is that
+      // an absent key never reaches `$set`/`$unset` at all, not merely that
+      // the response happens to echo the old value.
+      const row = await Institution.findOne({ institutionId: "INS0001" }).select("media").lean();
+      const stored = row!.media!.find((entry) => String(entry._id) === mediaId)!;
+      expect(stored.caption).toBe("Original");
+    });
+
+    it("MUTATION-DISTINGUISHING: clears the caption when the patch sends an explicit null, not merely omitting the key", async () => {
+      // `optionalText` turns `""` into `undefined`, which the service already
+      // treats as "not supplied" — so the only way to actually remove a
+      // caption is an explicit `null`, distinct from the omitted-key case
+      // above. This test exists specifically to prove that distinction is
+      // real: if `null` were handled the same as "absent" (both skipped),
+      // this is the one case that would fail while the omit test kept passing.
+      const mediaId = await seedImage("INS0001", { caption: "Original" });
+      await signInWithCookie("INS0001");
+
+      const response = await patchMedia(
+        jsonRequest({
+          url: `http://localhost/api/settings/institution/media/${mediaId}`,
+          body: { caption: null },
+          origin: "http://localhost",
+        }),
+        { params: Promise.resolve({ mediaId }) } as never,
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      const item = payload.profile.media.find((entry: { id: string }) => entry.id === mediaId);
+      expect(item.caption).toBeUndefined();
+
+      // Assert the persisted document, not just the DTO response: the
+      // caption key must be gone from storage (an `$unset`), not merely
+      // coerced away on the way out through `serialize`.
+      const row = await Institution.findOne({ institutionId: "INS0001" }).select("media").lean();
+      const stored = row!.media!.find((entry) => String(entry._id) === mediaId)!;
+      expect(stored.caption).toBeUndefined();
+    });
   });
 
   describe("DELETE /media/[mediaId]", () => {
