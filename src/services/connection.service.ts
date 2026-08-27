@@ -684,8 +684,10 @@ export const ConnectionService = {
         // Also a manual escape hatch for a stuck sync lock (fix round 1,
         // finding I1, point 4): an admin who suspects a crashed sync can
         // disconnect and reconnect rather than wait out the staleness
-        // window.
-        $unset: { grantTokenEncrypted: "", syncStartedAt: "" },
+        // window. `lastError` is cleared too (fix round 2, F5) — a card that
+        // just errored otherwise keeps showing its red banner after
+        // disconnecting, until the next initiate/refresh happens to touch it.
+        $unset: { grantTokenEncrypted: "", syncStartedAt: "", lastError: "" },
       },
       { new: true },
     );

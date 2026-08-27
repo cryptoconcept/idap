@@ -888,6 +888,22 @@ describe("disconnect", () => {
     expect(raw?.syncInProgress).toBe(false);
     expect(raw?.syncStartedAt).toBeUndefined();
   });
+
+  it("clears lastError (fix round 2, F5) — a disconnected connection should not keep showing a stale error banner", async () => {
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "ERROR",
+      externalRef: "INS0001",
+      lastError: "PassPercent: grant token rejected (401)",
+    });
+
+    await ConnectionService.disconnect("INS0001", "PASSPERCENT", actor);
+
+    const raw = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(raw?.lastError).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

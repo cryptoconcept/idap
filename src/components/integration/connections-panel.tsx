@@ -10,6 +10,7 @@ import {
   Loader2,
   Plug,
   RefreshCw,
+  ShieldAlert,
   Unplug,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -104,6 +105,7 @@ function RunRow({ run }: { run: SyncRunDTO }) {
                 {step.ok ? "✓" : "✗"}
               </span>
               <span className="text-muted-foreground">
+                <span className="sr-only">{step.ok ? "Passed: " : "Failed: "}</span>
                 {step.step}
                 {step.detail ? ` — ${step.detail}` : ""}
               </span>
@@ -145,26 +147,40 @@ function PlatformCard({
   const [runsOpen, setRunsOpen] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runs, setRuns] = useState<SyncRunDTO[] | null>(null);
+  const [runsError, setRunsError] = useState(false);
 
   const label = PLATFORM_LABELS[entry.platform];
   const status = entry.status;
   const isConnected = status === "CONNECTED";
+  // `disconnect` and `listRuns` make no adapter call and load no credential
+  // (connection.service.ts) — so run history is a read of what already
+  // happened, independent of whether the platform is still CONNECTED. A
+  // ConnectorAuthError-driven sync failure flips status to ERROR
+  // (connection.service.ts:602-611) while leaving remoteInstitution/scopes
+  // and every prior SyncRun exactly where they were; that is precisely the
+  // moment an admin most needs to see them, not the moment to hide them.
+  // Deliberately NOT widened to DISCONNECTED — a disconnected card showing
+  // stale history is noise, not signal.
+  const hasConnectionHistory = status === "CONNECTED" || status === "ERROR";
   const isPendingApproval = status === "PENDING" || status === "AWAITING_APPROVAL";
   const showRequest = !status || status === "DISCONNECTED" || status === "REJECTED" || status === "ERROR";
   const canDisconnect = Boolean(status) && status !== "DISCONNECTED";
 
   async function loadRuns() {
     setRunsLoading(true);
+    setRunsError(false);
     try {
       const response = await fetch(`/api/settings/connections/${entry.platform}/runs`);
       const payload = await readJson(response);
       if (!response.ok || !payload?.success) {
         toast.error(errorMessage(payload) ?? "Could not load sync history.");
+        setRunsError(true);
         return;
       }
       setRuns((payload.runs as SyncRunDTO[] | undefined) ?? []);
     } catch {
       toast.error("Could not reach the server. Please try again.");
+      setRunsError(true);
     } finally {
       setRunsLoading(false);
     }
@@ -279,6 +295,57 @@ function PlatformCard({
     }
   }
 
+  // A grant only exists once `refresh` returns `kind: "CONNECTED"`
+  // (connection.service.ts:426-435) or a sync's `ConnectorAuthError` flips an
+  // already-CONNECTED row to ERROR — so only those two statuses have
+  // anything for the platform to revoke. Cancelling a PENDING/AWAITING_APPROVAL
+  // request, or clearing a REJECTED one, never issued access in the first
+  // place; telling that admin to go revoke something on {label}'s dashboard
+  // would send them after a grant that was never made. Matches the
+  // status-conditional dialog copy shape in `scholarship-actions.tsx`'s
+  // archive dialog.
+  const disconnectCopy = (() => {
+    if (isPendingApproval) {
+      return {
+        title: `Cancel the ${label} connection request?`,
+        description: (
+          <>
+            This cancels the request on IDAP&apos;s side. No access has been granted yet, so there
+            is nothing to revoke on {label} — you can request a connection again at any time.
+          </>
+        ),
+        confirmLabel: "Cancel request",
+        confirmBusyLabel: "Cancelling…",
+      };
+    }
+    if (status === "REJECTED") {
+      return {
+        title: `Clear the rejected ${label} request?`,
+        description: (
+          <>
+            This clears the rejected request on IDAP&apos;s side. No access was ever granted, so
+            there is nothing to revoke on {label} — you can request a connection again at any time.
+          </>
+        ),
+        confirmLabel: "Clear request",
+        confirmBusyLabel: "Clearing…",
+      };
+    }
+    return {
+      title: `Disconnect ${label}?`,
+      description: (
+        <>
+          This only removes the connection on IDAP&apos;s side and stops future syncs. It does{" "}
+          <strong>not</strong> revoke {label}&apos;s access on its own — the grant stays live until
+          the school (or a {label} administrator) also revokes it from {label}&apos;s own
+          dashboard.
+        </>
+      ),
+      confirmLabel: "Disconnect",
+      confirmBusyLabel: "Disconnecting…",
+    };
+  })();
+
   return (
     <div className="space-y-4 rounded-lg border border-border bg-card p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -287,7 +354,7 @@ function PlatformCard({
             <h3 className="text-sm font-semibold">{label}</h3>
             {status ? <ConnectionStatusBadge status={status} /> : null}
           </div>
-          {isConnected && entry.remoteInstitution ? (
+          {hasConnectionHistory && entry.remoteInstitution ? (
             <p className="text-xs text-muted-foreground">
               {entry.remoteInstitution.name}
               {entry.remoteInstitution.city ? ` · ${entry.remoteInstitution.city}` : ""}
@@ -296,13 +363,34 @@ function PlatformCard({
         </div>
       </div>
 
-      {!entry.configured ? (
+      {!entry.configured && !status ? (
         <p className="text-sm text-muted-foreground">
           Not configured. Ask a platform administrator to add a {label} API key before this can be
           connected.
         </p>
       ) : (
         <>
+          {/*
+            `configured` (an active PlatformCredential exists) and `status`
+            (this institution's connection row) are independent axes — a
+            platform admin can deactivate/delete a credential while an
+            institution is still CONNECTED (key rotation, incident response).
+            That must not make the whole card contradict its own header badge
+            or strand the admin without a Disconnect button, so this renders
+            as a notice ALONGSIDE the rest of the body, never a replacement
+            for it, once a connection row exists.
+          */}
+          {!entry.configured ? (
+            <div className="flex items-start gap-2.5 rounded-md border border-foreground/25 bg-mist px-3 py-2 text-xs text-muted-foreground">
+              <ShieldAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden />
+              <span>
+                {label}&apos;s API key was removed or deactivated. Syncing and new requests are
+                unavailable until a platform administrator restores it — this existing connection
+                is untouched.
+              </span>
+            </div>
+          ) : null}
+
           {entry.lastError ? (
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
               {entry.lastError}
@@ -322,7 +410,7 @@ function PlatformCard({
             </p>
           ) : null}
 
-          {isConnected ? (
+          {hasConnectionHistory ? (
             <div className="space-y-3">
               {entry.scopes?.length ? (
                 <div className="flex flex-wrap gap-1.5">
@@ -347,27 +435,27 @@ function PlatformCard({
 
           <div className="flex flex-wrap items-center gap-2">
             {showRequest ? (
-              <Button size="sm" onClick={requestConnection} disabled={busy}>
+              <Button size="sm" onClick={requestConnection} disabled={busy || !entry.configured}>
                 <Plug className="size-3.5" />
                 {busy ? "Requesting…" : "Request connection"}
               </Button>
             ) : null}
 
             {isPendingApproval ? (
-              <Button size="sm" variant="outline" onClick={checkStatus} disabled={busy}>
+              <Button size="sm" variant="outline" onClick={checkStatus} disabled={busy || !entry.configured}>
                 <RefreshCw className={cn("size-3.5", busy && "animate-spin")} />
                 {busy ? "Checking…" : "Check status"}
               </Button>
             ) : null}
 
             {isConnected ? (
-              <Button size="sm" onClick={syncNow} disabled={syncing}>
+              <Button size="sm" onClick={syncNow} disabled={syncing || !entry.configured}>
                 <RefreshCw className={cn("size-3.5", syncing && "animate-spin")} />
                 {syncing ? "Syncing…" : "Sync now"}
               </Button>
             ) : null}
 
-            {isConnected ? (
+            {hasConnectionHistory ? (
               <Button size="sm" variant="outline" onClick={toggleRuns}>
                 {runsOpen ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
                 Recent runs
@@ -383,18 +471,26 @@ function PlatformCard({
                 disabled={busy}
               >
                 <Unplug className="size-3.5" />
-                Disconnect
+                {isPendingApproval ? "Cancel request" : status === "REJECTED" ? "Clear request" : "Disconnect"}
               </Button>
             ) : null}
           </div>
 
-          {isConnected && runsOpen ? (
+          {hasConnectionHistory && runsOpen ? (
             <div className="space-y-2 border-t border-border pt-3">
               {runsLoading ? (
                 <p className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="size-3.5 animate-spin" aria-hidden />
                   Loading runs…
                 </p>
+              ) : runsError ? (
+                <div className="space-y-2">
+                  <p className="text-xs text-destructive">Could not load sync history.</p>
+                  <Button size="sm" variant="outline" onClick={loadRuns}>
+                    <RefreshCw className="size-3.5" />
+                    Try again
+                  </Button>
+                </div>
               ) : runs && runs.length > 0 ? (
                 <ul className="space-y-2">
                   {runs.map((run) => (
@@ -412,20 +508,15 @@ function PlatformCard({
       <Dialog open={confirmDisconnect} onOpenChange={(open) => !open && setConfirmDisconnect(false)}>
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
-            <DialogTitle>Disconnect {label}?</DialogTitle>
-            <DialogDescription>
-              This only removes the connection on IDAP&apos;s side and stops future syncs. It does{" "}
-              <strong>not</strong> revoke {label}&apos;s access on its own — the grant stays live until
-              the school (or a {label} administrator) also revokes it from {label}&apos;s own
-              dashboard.
-            </DialogDescription>
+            <DialogTitle>{disconnectCopy.title}</DialogTitle>
+            <DialogDescription>{disconnectCopy.description}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setConfirmDisconnect(false)} disabled={busy}>
               Cancel
             </Button>
             <Button variant="destructive" size="sm" onClick={disconnect} disabled={busy}>
-              {busy ? "Disconnecting…" : "Disconnect"}
+              {busy ? disconnectCopy.confirmBusyLabel : disconnectCopy.confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>
