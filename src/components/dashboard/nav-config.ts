@@ -1,6 +1,7 @@
 import {
   Award,
   Building2,
+  Cable,
   FileText,
   GraduationCap,
   Inbox,
@@ -69,6 +70,7 @@ const SUPER_ADMIN_NAV: NavGroup[] = [
       { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
       { href: "/admin/institutions", label: "Institutions", icon: Building2, prefix: true },
       { href: "/admin/api-clients", label: "API Clients", icon: KeyRound },
+      { href: "/admin/platforms", label: "Platforms", icon: Cable },
     ],
   },
   {
