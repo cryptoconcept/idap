@@ -104,6 +104,41 @@ describe("AlumniService round trip", () => {
     expect(rows.map((row) => row.name)).toEqual(["Amit", "Zara", "Meera"]);
   });
 
+  it("sorts batch as a raw string, descending, with no-batch alumni last — not a chronological guarantee", async () => {
+    // `batch` is free text (Alumnus.ts), so `.sort({ batch: -1, ... })` is a
+    // lexicographic string sort, not a calendar one. "2015" lands before
+    // "2009" here only because '1' > '0' at the second character — which
+    // happens to agree with chronological order for these two values, but a
+    // range like "2012-2015" would sort on its leading characters and would
+    // NOT reliably land where its start year implies. This test pins the
+    // actual (string, missing-sorts-last) behaviour the code has today, not
+    // a claim that the ordering is calendar-correct.
+    const withNoBatch = await AlumniService.create(
+      "INS0001",
+      { name: "No Batch Alum", category: "OTHER" },
+      actor,
+    );
+    // Confirms the fixture is genuinely field-absent, not an empty string —
+    // the two sort differently.
+    const raw = await Alumnus.findById(withNoBatch.id).lean();
+    expect(raw).not.toHaveProperty("batch");
+
+    await AlumniService.create(
+      "INS0001",
+      { name: "2015 Alum", batch: "2015", category: "OTHER" },
+      actor,
+    );
+    await AlumniService.create(
+      "INS0001",
+      { name: "2009 Alum", batch: "2009", category: "OTHER" },
+      actor,
+    );
+
+    const rows = await AlumniService.list("INS0001");
+
+    expect(rows.map((row) => row.name)).toEqual(["2015 Alum", "2009 Alum", "No Batch Alum"]);
+  });
+
   it("rejects an unknown category before any write", async () => {
     const badInput = { name: "Bad", category: "NOT_A_REAL_CATEGORY" } as unknown as AlumnusCreateInput;
 
@@ -277,6 +312,38 @@ describe("AlumniService three-state patch: note", () => {
 
     const raw = await Alumnus.findById(created.id).lean();
     expect(raw).not.toHaveProperty("note");
+  });
+});
+
+describe("AlumniService buildAlumnusUpdate: explicit undefined key", () => {
+  // Every "absent" case above omits the key entirely from the patch object
+  // literal (e.g. `{ name: "Renamed" }`), so `Object.entries` never even
+  // produces an entry for the untouched field — `buildAlumnusUpdate`'s
+  // `if (value === undefined) continue` line is never reached by those
+  // tests. This test passes the key explicitly with value `undefined`
+  // (`{ note: undefined }`), alongside a real change to another field so the
+  // call takes the main `findOneAndUpdate` branch rather than the read-only
+  // empty-patch branch, so the `continue` line is the thing standing between
+  // "left alone" and "stored as literal undefined".
+  it("an explicit undefined value alongside a real change is skipped, not written", async () => {
+    const created = await AlumniService.create(
+      "INS0001",
+      { name: "Debate Champ", category: "OTHER", note: "Original note" },
+      actor,
+    );
+
+    const updated = await AlumniService.update(
+      "INS0001",
+      created.id,
+      { name: "Debate Champ Renamed", note: undefined },
+      actor,
+    );
+
+    expect(updated.name).toBe("Debate Champ Renamed");
+    expect(updated.note).toBe("Original note");
+
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw?.note).toBe("Original note");
   });
 });
 
