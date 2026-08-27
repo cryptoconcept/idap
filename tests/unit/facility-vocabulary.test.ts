@@ -5,6 +5,7 @@ import {
   LEGACY_FACILITY_CODE_MAP,
   UNMAPPABLE_LEGACY_CODES,
 } from "@/lib/profile/facilities";
+import { toFacilityCode } from "@/components/profile/section-form";
 
 describe("facility vocabulary", () => {
   it("carries all 38 PassPercent keys, lowercase, with no duplicates", () => {
@@ -71,6 +72,18 @@ describe("facility vocabulary", () => {
     for (const target of Object.values(LEGACY_FACILITY_CODE_MAP)) {
       expect(FACILITY_CODES).toContain(target);
     }
+  });
+
+  // toFacilityCode has no other test coverage (`grep -rn "toFacilityCode" tests/`
+  // finds nothing else) even though it derives the codes the free-text "Add
+  // your own" path stores. The second assertion is load-bearing: it ties the
+  // free-text path to the vocabulary itself, so the two can never silently
+  // drift apart again — it fails if toFacilityCode reverts to uppercase, and
+  // it would also fail if the vocabulary were re-cased without the function
+  // following.
+  it("derives lower-snake codes that agree with the vocabulary's own casing", () => {
+    expect(toFacilityCode("Robotics Lab")).toBe("robotics_lab");
+    expect(FACILITY_CODES).toContain(toFacilityCode("Library"));
   });
 
   // MUTATION-DISTINGUISHING: HOSTEL and SPORTS must NOT appear in the map.
