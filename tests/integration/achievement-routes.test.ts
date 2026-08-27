@@ -101,6 +101,27 @@ async function signInWithCookie(institutionId: string, email = "achievements-adm
   (await cookies()).set(SESSION_COOKIE, token);
 }
 
+/**
+ * Platform-admin session: no `institutionId`, role `SUPER_ADMIN`.
+ * `requireInstitution()` (`src/lib/tenant/index.ts`) requires role exactly
+ * `INSTITUTION_ADMIN` — it denies SUPER_ADMIN and any other institution-
+ * scoped role (COUNSELOR, FRONT_DESK) alike, not merely the unauthenticated
+ * case the 401 tests cover. Same convention as
+ * tests/integration/results-routes.test.ts's `signInPlatformAdmin`.
+ */
+async function signInPlatformAdmin(email = "achievements-platform-admin@example.test") {
+  const user = await makeUser(undefined, "SUPER_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "SUPER_ADMIN",
+    institutionId: undefined,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
 beforeAll(async () => {
   await startTestDatabase("achievement-routes");
   await Achievement.syncIndexes();
@@ -240,6 +261,21 @@ describe("POST /api/settings/achievements", () => {
     );
 
     expect(response.status).toBe(401);
+    expect(await Achievement.countDocuments({})).toBe(0);
+  });
+
+  // `requireInstitution()` is INSTITUTION_ADMIN-only: it throws `forbidden`
+  // for a SUPER_ADMIN session exactly as it does for a COUNSELOR or
+  // FRONT_DESK one — the platform admin has no route to institution-owned
+  // achievement data, same boundary `results-routes.test.ts` pins for results.
+  it("returns 403 for an authenticated platform admin and creates nothing", async () => {
+    await signInPlatformAdmin();
+
+    const response = await createAchievement(
+      jsonRequest({ body: achievementInput, origin: "http://localhost" }),
+    );
+
+    expect(response.status).toBe(403);
     expect(await Achievement.countDocuments({})).toBe(0);
   });
 });
@@ -409,6 +445,27 @@ describe("PATCH /api/settings/achievements/[achievementId]", () => {
 
     expect(response.status).toBe(404);
   });
+
+  // `requireInstitution()` guards this route family too — pinned so far only
+  // on POST /achievements. No session at all must 401 before the patch is
+  // parsed or the record is touched.
+  it("returns 401 without a session and leaves the record unchanged", async () => {
+    const created = await makeAchievement("INS0001");
+    const before = await Achievement.findById(created.id).lean();
+
+    const response = await patchAchievement(
+      jsonRequest({
+        url: `http://localhost/api/settings/achievements/${created.id}`,
+        body: { title: "Should not apply" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(401);
+    const after = await Achievement.findById(created.id).lean();
+    expect(after).toEqual(before);
+  });
 });
 
 describe("DELETE /api/settings/achievements/[achievementId]", () => {
@@ -544,13 +601,22 @@ describe("POST /api/settings/achievements/[achievementId]/assets", () => {
     expect(response.status).toBe(400);
   });
 
-  it("rejects an empty file", async () => {
+  // Moved from the PHOTO branch (fix round 2) to the CERTIFICATE branch: a
+  // zero-byte PHOTO also 400s without this guard, because `validateImage`
+  // throws the identical "the file is empty" message on its own — so a test
+  // on that branch cannot tell the route's guard apart from the service's.
+  // A zero-byte CERTIFICATE never reaches an emptiness check at all absent
+  // this guard; it hits the `%PDF-` magic comparison instead and reports
+  // "that file is not a PDF" — a real but misleading diagnosis for an admin
+  // whose actual problem is a zero-byte export. This is the one branch
+  // where the route's own check produces the accurate message.
+  it("MUTATION-DISTINGUISHING: rejects an empty certificate file with the empty-file message, not the not-a-PDF one", async () => {
     const created = await makeAchievement("INS0001");
     await signInWithCookie("INS0001");
 
     const form = new FormData();
-    form.set("kind", "PHOTO");
-    form.set("file", new File([], "empty.png", { type: "image/png" }));
+    form.set("kind", "CERTIFICATE");
+    form.set("file", new File([], "empty.pdf", { type: "application/pdf" }));
 
     const response = await addAsset(
       formRequest(
@@ -560,10 +626,13 @@ describe("POST /api/settings/achievements/[achievementId]/assets", () => {
       ),
       { params: Promise.resolve({ achievementId: created.id }) } as never,
     );
+    const payload = await response.json();
 
     expect(response.status).toBe(400);
+    expect(payload.error.message).toMatch(/empty/i);
+    expect(payload.error.message).not.toMatch(/PDF/i);
     const raw = await Achievement.findById(created.id).lean();
-    expect(raw?.photos ?? []).toHaveLength(0);
+    expect(raw?.certificates ?? []).toHaveLength(0);
   });
 
   // Proves the route's `MAX_IMAGE_BYTES` pre-check was genuinely redundant,
@@ -759,6 +828,30 @@ describe("POST /api/settings/achievements/[achievementId]/assets", () => {
     );
 
     expect(response.status).toBe(404);
+  });
+
+  // `requireInstitution()` guards the assets route family too — the third
+  // and last of the three surfaces (create, item, assets). No session at
+  // all must 401 before the file is even read, let alone stored.
+  it("returns 401 without a session and stores nothing", async () => {
+    const created = await makeAchievement("INS0001");
+
+    const form = new FormData();
+    form.set("kind", "PHOTO");
+    form.set("file", new File([new Uint8Array(PNG)], "photo.png", { type: "image/png" }));
+
+    const response = await addAsset(
+      formRequest(
+        `http://localhost/api/settings/achievements/${created.id}/assets`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ achievementId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(401);
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
   });
 });
 

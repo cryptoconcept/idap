@@ -60,6 +60,14 @@ export async function POST(
     const { kind } = uploadKindSchema.parse({ kind: form.get("kind") });
     const file = form.get("file");
     if (!(file instanceof File)) throw validationError("file: choose a file to upload");
+    // Redundant for PHOTO — `validateImage` inside `addPhoto` throws this
+    // exact message for a zero-byte file on its own — but load-bearing for
+    // CERTIFICATE: an empty file there never reaches an emptiness check at
+    // all, only the `%PDF-` magic comparison, which reports "that file is
+    // not a PDF" — true, but the wrong diagnosis for an admin whose real
+    // problem is a zero-byte export. This guard is the only thing on that
+    // path that reports the accurate cause; do not delete it as dead code
+    // just because the PHOTO branch never needs it.
     if (file.size <= 0) throw validationError("file: the file is empty");
 
     const actor = { id: user.id, name: user.name };
