@@ -684,6 +684,49 @@ describe("syncNow", () => {
     expect(conn?.lastError).toMatch(/rejected the grant token/i);
   });
 
+  it("F3 (fix round 2): a mid-run 401 does not discard the steps/warnings already accumulated — the persisted SyncRun keeps them, and the connection still flips to ERROR", async () => {
+    registerAdapter(
+      makeFakeAdapter({
+        sync: async () => {
+          throw new ConnectorAuthError(
+            "PassPercent rejected the grant token (401) while calling PUT /partner/institution/results/2026",
+            [
+              { step: "schema", ok: true },
+              { step: "profile", ok: true },
+              { step: "results:2024-25", ok: true },
+              { step: "results:2025-26", ok: true },
+            ],
+            ["Result r9 in stream \"sslc\" / year \"2025-26\" has no reported \"passed\" — excluded from the rollup"],
+          );
+        },
+      }),
+    );
+    await connectedFixture("INS0001");
+
+    const result = await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+
+    // Both halves: the connection still flips to ERROR (unchanged behaviour)...
+    expect(result.connection.status).toBe("ERROR");
+    expect(result.run.status).toBe("FAILED");
+    // ...AND the run that already reached the public listing before the 401
+    // is not thrown away.
+    expect(result.run.steps?.map((s) => s.step)).toEqual([
+      "schema",
+      "profile",
+      "results:2024-25",
+      "results:2025-26",
+    ]);
+    expect(result.run.steps?.every((s) => s.ok)).toBe(true);
+    expect(result.run.warnings?.length).toBe(1);
+
+    const persisted = await SyncRun.findById(result.run.id).lean();
+    expect(persisted?.steps?.length).toBe(4);
+    expect(persisted?.status).toBe("FAILED");
+
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(conn?.status).toBe("ERROR");
+  });
+
   it("a plain Error/network failure from sync does NOT flip status — only ConnectorAuthError does — but still writes a FAILED run", async () => {
     registerAdapter(
       makeFakeAdapter({
@@ -838,6 +881,49 @@ describe("syncNow", () => {
       expect(conn?.syncInProgress).toBe(false);
     });
   });
+
+  describe("tenant isolation of the lock filter (mutation-checked, fix round 2, F4)", () => {
+    it("INS0001 (with no connection of its own) never locks or reaches the adapter using INS0002's connection row", async () => {
+      let syncCalls = 0;
+      registerAdapter(
+        makeFakeAdapter({
+          sync: async () => {
+            syncCalls += 1;
+            return { status: "SUCCESS", steps: [], warnings: [] };
+          },
+        }),
+      );
+      await makeCredential();
+      await makeConnectableInstitution("INS0001");
+      await makeConnectableInstitution("INS0002");
+      // Only INS0002 has ever connected for this platform.
+      await PlatformConnection.create({
+        institutionId: "INS0002",
+        platform: "PASSPERCENT",
+        status: "CONNECTED",
+        externalRef: "INS0002",
+        grantTokenEncrypted: encryptCredential("pp_pgrant_ins0002"),
+      });
+
+      await expect(ConnectionService.syncNow("INS0001", "PASSPERCENT", actor)).rejects.toThrow(/not found/i);
+
+      // The load-bearing assertions. A later, correctly-scoped write further
+      // down this same method (the final `connectionSet` update, still
+      // filtered on the outer `institutionId` "INS0001") independently
+      // throws its own "not found" once INS0001 turns out to have no row at
+      // all — so the message above alone would still read "not found" even
+      // with the LOCK query's `institutionId` removed, and would mask the
+      // break. What only a correctly-scoped lock query can guarantee: the
+      // fake adapter is never entered, and INS0002's row — the only
+      // PASSPERCENT connection that exists anywhere — is never locked.
+      expect(syncCalls).toBe(0);
+
+      const other = await PlatformConnection.findOne({ institutionId: "INS0002", platform: "PASSPERCENT" }).lean();
+      expect(other?.syncInProgress).toBe(false);
+      expect(other?.syncStartedAt).toBeUndefined();
+      expect(other?.status).toBe("CONNECTED");
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -904,6 +990,33 @@ describe("disconnect", () => {
     const raw = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
     expect(raw?.lastError).toBeUndefined();
   });
+
+  describe("tenant isolation (mutation-checked, fix round 2, F4)", () => {
+    it("never touches another institution's connection row — INS0001 (with no row of its own) is refused, and INS0002's row is untouched", async () => {
+      await makeConnectableInstitution("INS0001"); // deliberately no PlatformConnection row
+      await makeConnectableInstitution("INS0002");
+      await PlatformConnection.create({
+        institutionId: "INS0002",
+        platform: "PASSPERCENT",
+        status: "CONNECTED",
+        externalRef: "INS0002",
+        grantTokenEncrypted: encryptCredential("pp_pgrant_ins0002"),
+      });
+
+      // The load-bearing assertion is the throw itself: with `institutionId`
+      // removed from `disconnect`'s filter, this call would silently match
+      // INS0002's row (the only PASSPERCENT row that exists at all) instead
+      // of finding nothing, so it would resolve rather than reject.
+      await expect(ConnectionService.disconnect("INS0001", "PASSPERCENT", actor)).rejects.toThrow(/not found/i);
+
+      // Belt and braces: INS0002's row must be completely untouched.
+      const other = await PlatformConnection.findOne({ institutionId: "INS0002", platform: "PASSPERCENT" })
+        .select("+grantTokenEncrypted")
+        .lean();
+      expect(other?.status).toBe("CONNECTED");
+      expect(other?.grantTokenEncrypted).toBeDefined();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -939,5 +1052,25 @@ describe("listRuns", () => {
     expect(runs).toHaveLength(2);
     expect(runs[0].status).toBe("FAILED");
     expect(runs[1].status).toBe("SUCCESS");
+  });
+
+  describe("tenant isolation (mutation-checked, fix round 2, F4)", () => {
+    it("never returns another institution's runs", async () => {
+      await makeConnectableInstitution("INS0001");
+      await makeConnectableInstitution("INS0002");
+      await SyncRun.create({
+        institutionId: "INS0002",
+        platform: "PASSPERCENT",
+        trigger: "MANUAL",
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        status: "SUCCESS",
+      });
+
+      // INS0001 has no runs of its own — with `institutionId` removed from
+      // the filter, this would return INS0002's run instead of none.
+      const runs = await ConnectionService.listRuns("INS0001", "PASSPERCENT");
+      expect(runs).toHaveLength(0);
+    });
   });
 });

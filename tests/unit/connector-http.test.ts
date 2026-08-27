@@ -93,6 +93,24 @@ describe("createConnectorHttp", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("F5 (fix round 2): treats a Retry-After far past the cap as too long to wait — returns the original 429 immediately, with no blind retry", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(429, { error: "rate_limited" }, { "retry-after": "3600" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const http = createConnectorHttp("https://api.example.com");
+    // A 3600s Retry-After honoured verbatim would sleep well past
+    // SYNC_LOCK_STALE_MINUTES (10 minutes) before ever retrying, letting a
+    // second sync believe this one abandoned its lock. The fix must not wait
+    // at all here — this resolves with no timer advance needed.
+    const result = await http("/x", { method: "GET", token: "t" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1); // no second attempt
+    expect(result).toEqual({ status: 429, body: { error: "rate_limited" } });
+  });
+
   it("does not retry a second time — a 429 on the retry itself is returned as-is", async () => {
     // Exactly one retry, not a loop. If this ever regresses into a loop, this
     // is the test that fails: it demands the call count stop at two.

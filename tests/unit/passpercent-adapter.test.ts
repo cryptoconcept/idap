@@ -406,6 +406,40 @@ describe("passpercentAdapter", () => {
       expect(http).toHaveBeenCalledTimes(3);
     });
 
+    it("F3 (fix round 2): carries the steps/warnings accumulated before a 401 out on the thrown ConnectorAuthError, so a mid-run auth failure does not discard the run's history", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValueOnce({ status: 200, body: schemaBody() })
+        .mockResolvedValueOnce({ status: 200, body: { updated: true } })
+        .mockResolvedValueOnce({ status: 200, body: { updated: true } }) // results/2023-24 succeeds
+        .mockResolvedValueOnce({ status: 401, body: { error: "invalid token" } }); // results/2024-25 401s
+
+      const data = makeSyncData({
+        results: [
+          { id: "r1", level: "CLASS_10", academicYear: "2023-24", appeared: 40, passed: 36 },
+          { id: "r2", level: "CLASS_10", academicYear: "2024-25", appeared: 50, passed: 45 },
+        ],
+      });
+
+      let caught: unknown;
+      try {
+        await passpercentAdapter.sync(makeCtx(http), makeConnection(), data);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ConnectorAuthError);
+      const authError = caught as ConnectorAuthError;
+      // The two successful steps that already reached the public listing
+      // before the 401 must survive on the thrown error, not vanish.
+      expect(authError.steps).toEqual([
+        { step: "schema", ok: true },
+        { step: "profile", ok: true },
+        { step: "results:2023-24", ok: true },
+      ]);
+      expect(authError.warnings).toEqual([]);
+    });
+
     it("treats a 429 quota response as FAILED (not PARTIAL) and stops the run", async () => {
       const http = vi
         .fn()

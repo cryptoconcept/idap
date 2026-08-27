@@ -182,7 +182,10 @@ describe("buildProfilePatch", () => {
   it("includes academic.board only when it appears in the schema's board enum (case-sensitive)", () => {
     const { patch, warnings } = buildProfilePatch({
       institution: { academic: { board: "CBSE" } },
-      streams: [],
+      // Non-empty on purpose: isolates this test to board behaviour, since an
+      // empty `streams` now produces its own warning (F1) that would
+      // otherwise pollute the `warnings` count/content asserted below.
+      streams: ["sslc"],
       schemaFields,
     });
     expect(patch.board).toBe("CBSE");
@@ -192,7 +195,7 @@ describe("buildProfilePatch", () => {
   it("drops academic.board and warns when it is absent from the schema's enum", () => {
     const { patch, warnings } = buildProfilePatch({
       institution: { academic: { board: "cbse" } }, // wrong case — not a member
-      streams: [],
+      streams: ["sslc"], // non-empty — isolates this test from F1's empty-streams warning
       schemaFields,
     });
     expect(patch).not.toHaveProperty("board");
@@ -203,7 +206,7 @@ describe("buildProfilePatch", () => {
   it("drops academic.board and warns when the schema has no board field at all", () => {
     const { patch, warnings } = buildProfilePatch({
       institution: { academic: { board: "CBSE" } },
-      streams: [],
+      streams: ["sslc"], // non-empty — isolates this test from F1's empty-streams warning
       schemaFields: [],
     });
     expect(patch).not.toHaveProperty("board");
@@ -221,6 +224,34 @@ describe("buildProfilePatch", () => {
       schemaFields: [],
     });
     expect(patch).not.toHaveProperty("type");
+  });
+
+  // ---------------------------------------------------------------------------
+  // F1 (fix round 2): sending `streams: []` is not "nothing to say" on
+  // PassPercent's side — it is an explicit instruction to clear the listing's
+  // currently-declared streams. An empty derivation must omit the key
+  // entirely and warn, never send `[]`.
+  // ---------------------------------------------------------------------------
+
+  it("F1: omits `streams` entirely and warns when the derived list is empty, rather than sending []", () => {
+    const { patch, warnings } = buildProfilePatch({
+      institution: { institutionName: "Coaching Co" },
+      streams: [],
+      schemaFields: [],
+    });
+    expect(patch).not.toHaveProperty("streams");
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/streams/i);
+  });
+
+  it("F1: a non-empty derived list is still sent exactly as given, with no streams warning", () => {
+    const { patch, warnings } = buildProfilePatch({
+      institution: { institutionName: "Delhi Public School" },
+      streams: ["sslc", "puc"],
+      schemaFields: [],
+    });
+    expect(patch.streams).toEqual(["sslc", "puc"]);
+    expect(warnings.some((w) => /streams/i.test(w))).toBe(false);
   });
 });
 
@@ -524,6 +555,33 @@ describe("buildResultsPayloads", () => {
       });
       const puc = byYear.get("2024-25")!.streams.puc as Record<string, unknown>;
       expect((puc.toppers as unknown[]).length).toBe(2);
+    });
+
+    it("F6: skips a topper with no percentage and warns, rather than publishing pct: 0 (spec §6.5/§11.4)", () => {
+      const { byYear, warnings } = buildResultsPayloads({
+        results: [
+          {
+            id: "r1",
+            level: "CLASS_10",
+            academicYear: "2024-25",
+            appeared: 10,
+            passed: 9,
+            toppers: [
+              { id: "t1", name: "Has Pct", percentage: 95, rank: 1 },
+              { id: "t2", name: "No Pct", rank: 2 }, // percentage missing
+            ],
+          },
+        ],
+        institutionType: "SCHOOL",
+      });
+      const sslc = byYear.get("2024-25")!.streams.sslc as Record<string, unknown>;
+      const toppers = sslc.toppers as Record<string, unknown>[];
+      expect(toppers).toHaveLength(1);
+      expect(toppers[0]).toMatchObject({ rank: 1, name: "Has Pct", pct: 95 });
+      // The critical negative assertion: no fabricated pct: 0 for "No Pct" —
+      // it must be entirely absent from the output, not merely unnamed here.
+      expect(toppers.some((t) => t.name === "No Pct")).toBe(false);
+      expect(warnings.some((w) => w.includes("No Pct") && /percentage/i.test(w))).toBe(true);
     });
 
     it("emits photoKey from photoUrl for the adapter to resolve later", () => {

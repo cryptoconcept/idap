@@ -12,6 +12,16 @@
 const REQUEST_TIMEOUT_MS = 15_000;
 const RETRY_DELAY_MS = 2_000;
 
+/**
+ * Upper bound on how long a remote-supplied `Retry-After` is honoured before
+ * retrying. Kept well under `SYNC_LOCK_STALE_MINUTES` (10 minutes,
+ * `src/lib/constants.ts`) — an obedient wait here must never by itself be
+ * long enough to outlive the sync lock's staleness window and let a second
+ * `syncNow` believe this one is abandoned. 60s leaves a wide margin even
+ * stacked with this client's own per-call timeout and one retry.
+ */
+const MAX_RETRY_AFTER_MS = 60_000;
+
 export class ConnectorHttpError extends Error {
   constructor(
     public status: number,
@@ -120,8 +130,18 @@ export function createConnectorHttp(baseUrl: string): ConnectorHttp {
       return { status: first.status, body: first.body };
     }
 
-    const delayMs = first.retryAfterSeconds != null ? first.retryAfterSeconds * 1000 : RETRY_DELAY_MS;
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    const requestedDelayMs = first.retryAfterSeconds != null ? first.retryAfterSeconds * 1000 : RETRY_DELAY_MS;
+    if (requestedDelayMs > MAX_RETRY_AFTER_MS) {
+      // A wait this long risks outliving the sync lock's staleness window
+      // long before the retry ever fires. Rather than silently waiting a
+      // shorter, arbitrary amount and probably being rate-limited again
+      // anyway (a blind retry against a wait the server explicitly asked to
+      // be much longer), surface the original 429 immediately and let the
+      // caller treat it as an ordinary failed call.
+      return { status: first.status, body: first.body };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, requestedDelayMs));
 
     const second = await attempt(url, path, init);
     return { status: second.status, body: second.body };

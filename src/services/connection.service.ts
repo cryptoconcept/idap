@@ -602,7 +602,11 @@ export const ConnectionService = {
       } catch (error) {
         if (error instanceof ConnectorAuthError) {
           flipToError = true;
-          outcome = { status: "FAILED", steps: [], warnings: [], error: error.message };
+          // F3 (fix round 2): carry out whatever the adapter had already
+          // accumulated before the auth failure, rather than discarding it —
+          // a mid-run 401 must not erase the record of which years already
+          // reached the (public) listing.
+          outcome = { status: "FAILED", steps: error.steps, warnings: error.warnings, error: error.message };
         } else {
           // A plain Error/network failure — not evidence this institution's
           // grant is bad, so the connection's status is left alone, but a

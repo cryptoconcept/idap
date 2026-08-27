@@ -356,6 +356,10 @@ async function resolveYearPhotos(
 async function sync(ctx: AdapterContext, connection: ConnectionState, data: SyncSourceData): Promise<SyncOutcome> {
   const steps: SyncStep[] = [];
   const warnings: string[] = [];
+  // F3 (fix round 2): every `ConnectorAuthError` thrown below carries the
+  // `steps`/`warnings` accumulated so far. Results are pushed one year at a
+  // time — a 401 partway through must not discard the record of which years
+  // already reached the (public) listing before the grant died.
 
   const grantToken = connection.grantToken;
   if (!grantToken) {
@@ -366,7 +370,7 @@ async function sync(ctx: AdapterContext, connection: ConnectionState, data: Sync
   //    a grant by the time it runs, so it's used here for consistency.
   const schemaResp = await ctx.http("/api/partner/schema", { method: "GET", token: grantToken });
   const schemaOutcome = classifyGrantResponse(schemaResp, "GET /partner/schema");
-  if (schemaOutcome.kind === "authError") throw new ConnectorAuthError(schemaOutcome.message);
+  if (schemaOutcome.kind === "authError") throw new ConnectorAuthError(schemaOutcome.message, steps, warnings);
   if (schemaOutcome.kind !== "ok") {
     steps.push({ step: "schema", ok: false, detail: schemaOutcome.message });
     return { status: "FAILED", steps, warnings, error: schemaOutcome.message };
@@ -415,7 +419,7 @@ async function sync(ctx: AdapterContext, connection: ConnectionState, data: Sync
     body: patch,
   });
   const profileOutcome = classifyGrantResponse(profileResp, "PATCH /partner/institution");
-  if (profileOutcome.kind === "authError") throw new ConnectorAuthError(profileOutcome.message);
+  if (profileOutcome.kind === "authError") throw new ConnectorAuthError(profileOutcome.message, steps, warnings);
   if (profileOutcome.kind !== "ok") {
     steps.push({ step: "profile", ok: false, detail: profileOutcome.message });
     return { status: "FAILED", steps, warnings, error: profileOutcome.message };
@@ -442,7 +446,7 @@ async function sync(ctx: AdapterContext, connection: ConnectionState, data: Sync
     });
     const resultOutcome = classifyGrantResponse(resultResp, `PUT /partner/institution/results/${year}`);
 
-    if (resultOutcome.kind === "authError") throw new ConnectorAuthError(resultOutcome.message);
+    if (resultOutcome.kind === "authError") throw new ConnectorAuthError(resultOutcome.message, steps, warnings);
 
     if (resultOutcome.kind === "consent" || resultOutcome.kind === "quota") {
       steps.push({ step: `results:${year}`, ok: false, detail: resultOutcome.message });

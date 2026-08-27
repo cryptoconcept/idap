@@ -25,6 +25,21 @@ function resolveKey(key: string): string {
 const CONTENT_TYPE_SUFFIX = ".content-type";
 
 /**
+ * `putPublic` returns a `/api/media/`-prefixed key (see below) — that is the
+ * value every caller actually persists and hands back in (`ResultService`
+ * stores `stored.key` verbatim). Every OTHER consumer of that stored key must
+ * strip the prefix back off before resolving it against `PUBLIC_ROOT`, or the
+ * escape guard in `resolvePublicKey` rejects it as looking absolute. A raw,
+ * unprefixed key (no leading `/api/media/`) passes through unchanged, so both
+ * shapes keep working. Centralized here — once in `deletePublic`, once
+ * missing from `getPublic` (fix round 2, F2) — so the two can never drift
+ * apart on this again.
+ */
+function stripPublicKeyPrefix(key: string): string {
+  return key.replace(/^\/api\/media\//, "");
+}
+
+/**
  * Public media lives under a distinct root from the private `.uploads` tree
  * above, so the unauthenticated `/api/media` route can never reach a private
  * document even if its key-escape check were somehow bypassed.
@@ -81,13 +96,13 @@ export const localStorageAdapter: StorageAdapter = {
   },
 
   async deletePublic(key) {
-    const target = resolvePublicKey(key.replace(/^\/api\/media\//, ""));
+    const target = resolvePublicKey(stripPublicKeyPrefix(key));
     await Promise.allSettled([unlink(target), unlink(`${target}${CONTENT_TYPE_SUFFIX}`)]);
   },
 
   async getPublic(key) {
     try {
-      const target = resolvePublicKey(key);
+      const target = resolvePublicKey(stripPublicKeyPrefix(key));
       const [body, contentType] = await Promise.all([
         readFile(target),
         readFile(`${target}${CONTENT_TYPE_SUFFIX}`, "utf8").catch(

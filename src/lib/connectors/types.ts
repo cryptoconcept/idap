@@ -80,5 +80,19 @@ export type SyncSourceData = {
  * `sync`/`refresh`; the connection service catches it to flip the connection
  * to an error state that means "needs reconnection" rather than treating it
  * as an ordinary sync failure.
+ *
+ * `steps`/`warnings` (fix round 2, F3) carry whatever `sync` had already
+ * accumulated before the 401 — results are pushed one year at a time, so a
+ * mid-run auth failure must not discard the record of which years already
+ * reached the (public) listing. Both default to `[]` so existing call sites
+ * that construct this with just a message keep working unchanged.
  */
-export class ConnectorAuthError extends Error {}
+export class ConnectorAuthError extends Error {
+  constructor(
+    message: string,
+    public readonly steps: SyncStep[] = [],
+    public readonly warnings: string[] = [],
+  ) {
+    super(message);
+  }
+}

@@ -175,7 +175,19 @@ export function buildProfilePatch(input: {
     // undefined/null/"" -> omitted; PassPercent 400s on empty name/city.
   }
 
-  patch.streams = streams;
+  // F1 (fix round 2): sending `streams: []` is NOT "we have nothing to say"
+  // on PassPercent's side — per the partial-patch contract, an omitted key
+  // leaves the field untouched but an explicitly empty one clears it. An
+  // institution with no mappable segment and no mappable result would
+  // otherwise silently wipe the streams a listing already declares. Omit the
+  // key entirely instead, and say so.
+  if (streams.length > 0) {
+    patch.streams = streams;
+  } else {
+    warnings.push(
+      "No institution segment mapped to a PassPercent stream and no published result mapped to one either — streams left untouched on PassPercent (an empty list would have cleared them)",
+    );
+  }
 
   const academic = rec(institution.academic);
   const board = academic ? nonEmptyStr(academic.board) : undefined;
@@ -223,11 +235,20 @@ function mapToppers(source: unknown, warnings: string[], context: string): Mappe
       warnings.push(`Topper "${name || "(unnamed)"}" in ${context} has no rank — skipped`);
       continue;
     }
+    // F6 (fix round 2): a missing `percentage` is "unknown", not zero — per
+    // spec §6.5/§11.4, skip the topper and warn rather than fabricate
+    // `pct: 0` on a public listing. Deriving a rank without a real
+    // percentage would be inventing data exactly like deriving a rank would.
+    const pct = num(t.percentage);
+    if (pct == null) {
+      warnings.push(`Topper "${name || "(unnamed)"}" in ${context} has no percentage — skipped`);
+      continue;
+    }
     out.push(
       omitUndefined({
         rank,
         name,
-        pct: num(t.percentage) ?? 0,
+        pct,
         photoKey: nonEmptyStr(t.photoUrl),
       }) as MappedTopper,
     );
