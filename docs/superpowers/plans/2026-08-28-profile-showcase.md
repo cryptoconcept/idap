@@ -475,8 +475,11 @@ export type ShowcaseStatus = (typeof SHOWCASE_STATUSES)[number];
 export const ACHIEVEMENT_MAX_PHOTOS = 10;
 export const ACHIEVEMENT_MAX_CERTIFICATES = 5;
 export const ACHIEVEMENT_MAX_STUDENTS = 50;
-export const SHOWCASE_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const SHOWCASE_MAX_PDF_BYTES = 20 * 1024 * 1024;
+// SHOWCASE_MAX_IMAGE_BYTES was removed in Task 7 (see the ledger's revision of
+// Ruling 20): nothing read it, so it advertised a cap it did not enforce. The
+// showcase image path is capped by MAX_IMAGE_BYTES via validateImage, which is
+// the reuse the spec asked for.
 ```
 
 **On casing:** members match PassPercent's one-for-one; only the casing differs, because IDAP's house style is uppercase enums (`RESULT_STATUSES`, `MEDIA_KINDS`). Matching their lowercase would break IDAP's internal consistency for no gain, and a future push lowercases at the mapping boundary.
