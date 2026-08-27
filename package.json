@@ -11,6 +11,7 @@
     "seed": "tsx scripts/seed.ts",
     "backfill:slugs": "NODE_OPTIONS=--conditions=react-server tsx scripts/backfill-slugs.ts",
     "sync:fee-indexes": "tsx scripts/sync-fee-indexes.ts",
+    "migrate:media": "tsx scripts/migrate-gallery-to-media.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "./scripts/acceptance-test.sh"
