@@ -148,9 +148,7 @@ describe("public profile API", () => {
     expect((await callById("INS0001", "198.51.100.4")).status).toBe(200);
   });
 
-  it("does not yet include media in the payload, even though items exist", async () => {
-    // `media` (renamed from `gallery`) is deliberately withheld from the
-    // public payload until a later task adds it back with its own tests.
+  it("omits hidden media items from the payload", async () => {
     await makeInstitution("INS0001", {
       slug: "sunrise-academy",
       profileStatus: "PUBLISHED",
@@ -162,7 +160,7 @@ describe("public profile API", () => {
 
     const response = await callById("INS0001");
     const body = await response.json();
-    expect(body.profile).not.toHaveProperty("media");
-    expect(body.profile).not.toHaveProperty("gallery");
+    expect(body.profile.media).toHaveLength(1);
+    expect(body.profile.media[0].url).toBe("https://cdn.test/visible.jpg");
   });
 });

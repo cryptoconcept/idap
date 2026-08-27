@@ -29,7 +29,8 @@ const GOES_PUBLIC: { label: string; detail: string }[] = [
   },
   {
     label: "Images",
-    detail: "Logo and cover image",
+    detail:
+      "Logo, cover image, and every media image that is not hidden — with its title and caption",
   },
   {
     label: "Address",

@@ -439,7 +439,7 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
           tags: ["Website"],
           summary: "Read the institution's full public profile",
           description:
-            "Everything a hosted profile page or a website integration needs to render the institution — contact details, academics, facilities, and social links — sourced from the same profile the institution publishes once. Only a `PUBLISHED` and active institution's profile is returned; a draft, suspended or nonexistent one 404s, so a caller cannot tell them apart. No credentials required.",
+            "Everything a hosted profile page or a website integration needs to render the institution — contact details, academics, facilities, social links and a media library — sourced from the same profile the institution publishes once. Only a `PUBLISHED` and active institution's profile is returned; a draft, suspended or nonexistent one 404s, so a caller cannot tell them apart. No credentials required.",
           operationId: "getPublicProfileById",
           security: [],
           responses: {
@@ -1345,6 +1345,17 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
                           url: { type: "string", format: "uri" },
                         },
                       },
+                    },
+                  },
+                },
+                media: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      url: { type: "string", format: "uri" },
+                      title: { type: "string" },
+                      caption: { type: "string" },
                     },
                   },
                 },

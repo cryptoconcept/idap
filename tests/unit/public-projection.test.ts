@@ -74,12 +74,10 @@ describe("public profile projection", () => {
     expect(out.management).not.toHaveProperty("headPhone");
   });
 
-  it("does not yet expose media, even though the underlying doc has items", () => {
-    // `media` (renamed from `gallery`) is deliberately withheld from the
-    // public payload until a later task adds it back with its own tests.
-    const out = toPublicProfile(DOC) as Record<string, unknown>;
-    expect(out).not.toHaveProperty("media");
-    expect(out).not.toHaveProperty("gallery");
+  it("omits hidden media items", () => {
+    const out = toPublicProfile(DOC) as PublicProfile;
+    expect(out.media).toHaveLength(1);
+    expect(out.media[0].title).toBe("Campus");
   });
 
   it("does not leak a field that was added to the schema but not to the allow-list", () => {
@@ -106,6 +104,7 @@ describe("public profile projection", () => {
 
     expect(out.institutionName).toBe("Bare");
     expect(out.facilities).toEqual([]);
+    expect(out.media).toEqual([]);
     expect(out.academic).toBeUndefined();
   });
 });

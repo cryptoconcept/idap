@@ -146,8 +146,20 @@ export function toPublicProfile(
 
     social,
 
-    // `media` (renamed from `gallery`) is deliberately withheld from the
-    // public payload for now. It is added in a later task with its own
-    // tests, once the shape covers every media kind rather than only images.
+    // Parity with the pre-rename `gallery` projection: same filter (hidden
+    // items excluded), same sort (by `sortOrder`), same three fields per item
+    // — just under their new names (`imageUrl`→`url`, `description`→`caption`).
+    // Absolute URL resolution, `id`/`kind`/`provider`/`videoId`, and non-image
+    // kinds are Task 7's addition, deliberately not here.
+    media: Array.isArray(doc.media)
+      ? (doc.media as unknown[])
+          .filter((item: unknown) => (item as Record<string, unknown> | undefined)?.status !== "HIDDEN")
+          .sort((a: unknown, b: unknown) => ((a as Record<string, unknown> | undefined)?.sortOrder as number ?? 0) - ((b as Record<string, unknown> | undefined)?.sortOrder as number ?? 0))
+          .map((item: unknown) => ({
+            url: String((item as Record<string, unknown> | undefined)?.url ?? ""),
+            title: text((item as Record<string, unknown> | undefined)?.title),
+            caption: text((item as Record<string, unknown> | undefined)?.caption),
+          }))
+      : [],
   };
 }
