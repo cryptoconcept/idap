@@ -3,6 +3,8 @@ import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Alumnus, type AlumnusDoc } from "@/models";
 import { notFound } from "@/lib/api/errors";
+import { validateImage } from "@/lib/media/image";
+import { storage } from "@/lib/storage";
 import type { AlumnusCreateInput, AlumnusPatchInput } from "@/lib/validation/showcase";
 import { ActivityService } from "./activity.service";
 
@@ -174,6 +176,81 @@ export const AlumniService = {
     return serialize(updated);
   },
 
+  /**
+   * Sets the alumnus's photograph. An alumnus has exactly one, so this is a
+   * replace-in-place rather than a capped push — there is no `$expr` cap to
+   * enforce, only the obligation not to orphan the object it replaced.
+   *
+   * `validateImage` runs before anything is stored: JPEG/PNG/WebP only,
+   * non-empty, size-bounded, and a magic-byte sniff that must agree with the
+   * declared content type. A multipart form's `contentType` and filename are
+   * both client-supplied and prove nothing, so a file refused for its bytes or
+   * its size never reaches storage at all.
+   */
+  async setPhoto(
+    institutionId: string,
+    alumnusId: string,
+    input: { contentType: string; bytes: Buffer },
+    actor: { id: string; name: string },
+  ): Promise<AlumnusDTO> {
+    const { extension } = validateImage(input);
+
+    await connectToDatabase();
+    const objectId = toObjectId(alumnusId);
+
+    // An unknown or foreign id 404s before anything is stored, so a mistyped
+    // id never burns a storage write this then has to take back out.
+    const before = await Alumnus.findOne({ _id: objectId, institutionId })
+      .select("_id photo")
+      .lean<AlumnusDoc>();
+    if (!before) throw notFound("Alumnus not found");
+
+    // Never derived from the client-supplied filename.
+    const assetId = new Types.ObjectId();
+    const key = `showcase/${institutionId}/alumni/${assetId.toHexString()}${extension}`;
+    const stored = await storage.putPublic({
+      key,
+      body: input.bytes,
+      contentType: input.contentType,
+    });
+
+    const updated = await Alumnus.findOneAndUpdate(
+      { _id: objectId, institutionId },
+      { $set: { photo: stored.key } },
+      { new: true },
+    ).lean<AlumnusDoc>();
+    if (!updated) {
+      // The record was deleted between the read above and this write. Take the
+      // object back out rather than leaving it in storage referenced by nothing.
+      await storage.deletePublic(stored.key).catch(() => undefined);
+      throw notFound("Alumnus not found");
+    }
+
+    // The photo this replaced is now referenced by nothing. Unlike `logoUrl`
+    // — free text on the profile PATCH, which is why `addMediaImage` guards
+    // its equivalent with `isOwnedMediaUrl` — `photo` is never accepted from
+    // a request body: it is absent from `alumnusCreateSchema`, from
+    // `alumnusPatchSchema` and from `PATCHABLE_FIELDS`, so its stored value
+    // is always a key this service minted under this institution's own
+    // prefix. Best-effort: a cleanup failure must not fail the request that
+    // has already stored the new object.
+    if (before.photo && before.photo !== stored.key) {
+      await storage.deletePublic(before.photo).catch(() => undefined);
+    }
+
+    await ActivityService.record({
+      institutionId,
+      entityType: "ALUMNUS",
+      entityId: updated._id,
+      entityRef: institutionId,
+      action: "Alumnus photo updated",
+      performedBy: actor.id,
+      performedByName: actor.name,
+    });
+
+    return serialize(updated);
+  },
+
   async remove(
     institutionId: string,
     alumnusId: string,
@@ -187,6 +264,16 @@ export const AlumniService = {
       institutionId,
     }).lean<AlumnusDoc>();
     if (!removed) throw notFound("Alumnus not found");
+
+    // The deleted record was the only thing referencing this object, so it
+    // goes with it — otherwise every deletion leaks its photo. Same
+    // provenance argument as `setPhoto` above: `photo` is written only by
+    // that method, so this key is always one this service minted for this
+    // institution. Best-effort: a storage failure must not fail a deletion
+    // that has already happened.
+    if (removed.photo) {
+      await storage.deletePublic(removed.photo).catch(() => undefined);
+    }
 
     await ActivityService.record({
       institutionId,
