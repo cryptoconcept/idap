@@ -18,3 +18,5 @@ export { Offer, type OfferDoc } from "./Offer";
 export { PlatformCredential, type PlatformCredentialDoc } from "./PlatformCredential";
 export { PlatformConnection, type PlatformConnectionDoc } from "./PlatformConnection";
 export { SyncRun, type SyncRunDoc } from "./SyncRun";
+export { Achievement, type AchievementDoc } from "./Achievement";
+export { Alumnus, type AlumnusDoc } from "./Alumnus";

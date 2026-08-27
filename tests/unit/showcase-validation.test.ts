@@ -142,9 +142,13 @@ describe("achievementPatchSchema", () => {
     expect("eventDate" in untouched).toBe(false);
   });
 
-  it("distinguishes an explicit null level (clear) from an absent one (leave alone)", () => {
-    const cleared = achievementPatchSchema.parse({ level: null });
-    expect(cleared.level).toBeNull();
+  it("rejects an explicit null level — the model defaults level to SCHOOL, so there is no 'no level' state to clear back to", () => {
+    expect(() => achievementPatchSchema.parse({ level: null })).toThrow();
+  });
+
+  it("accepts a level patch that changes it, leaving it absent when untouched", () => {
+    const changed = achievementPatchSchema.parse({ level: "STATE" });
+    expect(changed.level).toBe("STATE");
 
     const untouched = achievementPatchSchema.parse({ title: "Renamed only" });
     expect(untouched.level).toBeUndefined();
