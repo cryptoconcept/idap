@@ -312,8 +312,8 @@ export function TagsField({
 export function toFacilityCode(label: string): string {
   return label
     .trim()
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "_")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 40);
 }

@@ -74,12 +74,15 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
           const selected: Facility[] = field.value ?? [];
           const has = (code: string) => selected.some((entry) => entry.code === code);
 
+          function addFacility(code: string, label: string) {
+            if (!code || !label) return;
+            if (has(code) || selected.length >= MAX_FACILITIES) return;
+            field.onChange([...selected, { code, label, available: true, note: "" }]);
+          }
+
           function add(label: string) {
             const trimmed = label.trim();
-            const code = toFacilityCode(trimmed);
-            if (!trimmed || !code) return;
-            if (has(code) || selected.length >= MAX_FACILITIES) return;
-            field.onChange([...selected, { code, label: trimmed, available: true, note: "" }]);
+            addFacility(toFacilityCode(trimmed), trimmed);
           }
 
           function update(index: number, patch: Partial<Facility>) {
@@ -114,16 +117,7 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                                     ? field.onChange(
                                         selected.filter((entry) => entry.code !== suggestion.code),
                                       )
-                                    : selected.length < MAX_FACILITIES &&
-                                      field.onChange([
-                                        ...selected,
-                                        {
-                                          code: suggestion.code,
-                                          label: suggestion.label,
-                                          available: true,
-                                          note: "",
-                                        },
-                                      ])
+                                    : addFacility(suggestion.code, suggestion.label)
                                 }
                                 className={cn(
                                   "rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
@@ -177,7 +171,7 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                   <p className="text-xs text-muted-foreground">
                     The code is derived from the label:{" "}
                     <span className="font-mono text-[11px]">
-                      {toFacilityCode(draft) || "ROBOTICS_LAB"}
+                      {toFacilityCode(draft) || "robotics_lab"}
                     </span>
                     . {selected.length} of {MAX_FACILITIES} used.
                   </p>
