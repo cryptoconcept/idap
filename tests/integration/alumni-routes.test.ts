@@ -15,6 +15,11 @@ import {
 import { POST as uploadAlumnusPhoto } from "@/app/api/settings/alumni/[alumnusId]/photo/route";
 import { AlumniService } from "@/services/alumni.service";
 import { Alumnus } from "@/models";
+// The image cap has exactly one name (see the photo route's own comment on
+// why it does not keep a route-local copy) — showcase images are uploaded
+// through `validateImage`, so this is the limit an oversized upload must
+// exceed to be refused.
+import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 // `storage.get()` reads the adapter's PRIVATE store, never where `putPublic`
 // writes — same helper as tests/integration/showcase-assets.test.ts and
@@ -519,8 +524,13 @@ describe("DELETE /api/settings/alumni/[alumnusId]", () => {
     expect(existsSync(storedPath(key))).toBe(false);
   });
 
+  // `.toEqual(before)`, not `.not.toBeNull()`: the latter would also pass if
+  // the record had been mutated rather than left alone, and a broken guard
+  // that mutates instead of rejecting is exactly the kind of thing nobody
+  // predicts. Matches PATCH's form on the same two guards.
   it("MUTATION-DISTINGUISHING: rejects a cross-origin DELETE and leaves the record intact", async () => {
     const created = await makeAlumnus("INS0001");
+    const before = await Alumnus.findById(created.id).lean();
     await signInWithCookie("INS0001");
 
     const response = await deleteAlumnus(
@@ -533,11 +543,13 @@ describe("DELETE /api/settings/alumni/[alumnusId]", () => {
 
     expect(response.status).toBe(403);
     expect((await response.json()).error.message).toMatch(/cross-origin/i);
-    expect(await Alumnus.findById(created.id).lean()).not.toBeNull();
+    const after = await Alumnus.findById(created.id).lean();
+    expect(after).toEqual(before);
   });
 
   it("returns 404 for another institution's alumnus and leaves it intact", async () => {
     const foreign = await makeAlumnus("INS0002");
+    const before = await Alumnus.findById(foreign.id).lean();
     await signInWithCookie("INS0001");
 
     const response = await deleteAlumnus(
@@ -549,7 +561,8 @@ describe("DELETE /api/settings/alumni/[alumnusId]", () => {
     );
 
     expect(response.status).toBe(404);
-    expect(await Alumnus.findById(foreign.id).lean()).not.toBeNull();
+    const after = await Alumnus.findById(foreign.id).lean();
+    expect(after).toEqual(before);
   });
 
   it("returns 404 for an unknown id", async () => {
@@ -564,6 +577,26 @@ describe("DELETE /api/settings/alumni/[alumnusId]", () => {
     );
 
     expect(response.status).toBe(404);
+  });
+
+  // `requireInstitution()` guards this route family too — the only mutating
+  // handler in this file that didn't already have a 401 test of its own. No
+  // session at all must 401 before the record is touched.
+  it("returns 401 without a session and leaves the record unchanged", async () => {
+    const created = await makeAlumnus("INS0001");
+    const before = await Alumnus.findById(created.id).lean();
+
+    const response = await deleteAlumnus(
+      jsonRequest({
+        url: `http://localhost/api/settings/alumni/${created.id}`,
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(401);
+    const after = await Alumnus.findById(created.id).lean();
+    expect(after).toEqual(before);
   });
 });
 
@@ -588,6 +621,55 @@ describe("POST /api/settings/alumni/[alumnusId]/photo", () => {
     expect(response.status).toBe(200);
     expect(payload.alumnus.photo).toContain("showcase/INS0001/alumni/");
     expect(existsSync(storedPath(payload.alumnus.photo))).toBe(true);
+  });
+
+  // `AlumniService.setPhoto` reads a `{ new: false }` pre-image specifically
+  // so each write deletes the key its OWN write displaced, not a key read
+  // earlier — the mechanism that makes concurrent uploads safe (Task 7).
+  // That behaviour was pinned only at the service layer until now: if this
+  // route ever stopped reaching `setPhoto` correctly, every other test in
+  // this block would still pass while every replaced photo piled up in
+  // storage forever. Both halves matter — asserting only that the record
+  // changed would miss the leak entirely.
+  it("replaces an existing photo: the old object is gone from storage and the record references the new one", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const firstForm = new FormData();
+    firstForm.set("file", new File([new Uint8Array(PNG)], "first.png", { type: "image/png" }));
+    const firstResponse = await uploadAlumnusPhoto(
+      formRequest(
+        `http://localhost/api/settings/alumni/${created.id}/photo`,
+        firstForm,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const firstPayload = await firstResponse.json();
+    const firstKey = firstPayload.alumnus.photo as string;
+    expect(existsSync(storedPath(firstKey))).toBe(true);
+
+    const secondForm = new FormData();
+    secondForm.set("file", new File([new Uint8Array(PNG)], "second.png", { type: "image/png" }));
+    const secondResponse = await uploadAlumnusPhoto(
+      formRequest(
+        `http://localhost/api/settings/alumni/${created.id}/photo`,
+        secondForm,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const secondPayload = await secondResponse.json();
+    const secondKey = secondPayload.alumnus.photo as string;
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondKey).not.toBe(firstKey);
+    expect(existsSync(storedPath(firstKey))).toBe(false);
+    expect(existsSync(storedPath(secondKey))).toBe(true);
+
+    // The raw stored document, not just the DTO.
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw?.photo).toBe(secondKey);
   });
 
   it("rejects a request with no file", async () => {
@@ -635,6 +717,58 @@ describe("POST /api/settings/alumni/[alumnusId]/photo", () => {
     );
 
     expect(response.status).toBe(400);
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("photo");
+  });
+
+  // Proves the ruling behind this route carrying no size/empty pre-check of
+  // its own: an empty file is still refused, solely by
+  // `AlumniService.setPhoto`'s own `validateImage` call.
+  it("rejects an empty file, and stores nothing", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const form = new FormData();
+    form.set("file", new File([], "empty.png", { type: "image/png" }));
+
+    const response = await uploadAlumnusPhoto(
+      formRequest(
+        `http://localhost/api/settings/alumni/${created.id}/photo`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.message).toMatch(/empty/i);
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("photo");
+  });
+
+  // Same ruling, the size half: an oversized file is still refused, solely
+  // by `validateImage`'s own 5 MB cap.
+  it("rejects an oversized photo, and stores nothing", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const oversized = Buffer.concat([PNG, Buffer.alloc(MAX_IMAGE_BYTES)]);
+    const form = new FormData();
+    form.set("file", new File([new Uint8Array(oversized)], "big.png", { type: "image/png" }));
+
+    const response = await uploadAlumnusPhoto(
+      formRequest(
+        `http://localhost/api/settings/alumni/${created.id}/photo`,
+        form,
+        { origin: "http://localhost" },
+      ),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
     const raw = await Alumnus.findById(created.id).lean();
     expect(raw).not.toHaveProperty("photo");
   });
