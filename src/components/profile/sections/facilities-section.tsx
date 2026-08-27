@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, X } from "lucide-react";
 import type { z } from "zod";
 import { updateProfileSchema } from "@/lib/validation/institution";
-import { FACILITY_SUGGESTIONS } from "@/lib/profile/facilities";
+import { FACILITY_GROUPS } from "@/lib/profile/facilities";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -96,35 +96,51 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                 title="Suggested"
                 description="Tap to add or remove. These are only shortcuts — nothing is limited to this list."
               >
-                <ul className="flex flex-wrap gap-1.5">
-                  {FACILITY_SUGGESTIONS.map((suggestion) => {
-                    const on = has(suggestion.code);
-                    return (
-                      <li key={suggestion.code}>
-                        <button
-                          type="button"
-                          aria-pressed={on}
-                          disabled={!on && selected.length >= MAX_FACILITIES}
-                          onClick={() =>
-                            on
-                              ? field.onChange(
-                                  selected.filter((entry) => entry.code !== suggestion.code),
-                                )
-                              : add(suggestion.label)
-                          }
-                          className={cn(
-                            "rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
-                            on
-                              ? "border-transparent bg-foreground text-background"
-                              : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
-                          )}
-                        >
-                          {suggestion.label}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <div className="space-y-3">
+                  {FACILITY_GROUPS.map((group) => (
+                    <div key={group.group} className="space-y-1.5">
+                      <p className="text-xs font-medium text-muted-foreground">{group.group}</p>
+                      <ul className="flex flex-wrap gap-1.5">
+                        {group.items.map((suggestion) => {
+                          const on = has(suggestion.code);
+                          return (
+                            <li key={suggestion.code}>
+                              <button
+                                type="button"
+                                aria-pressed={on}
+                                disabled={!on && selected.length >= MAX_FACILITIES}
+                                onClick={() =>
+                                  on
+                                    ? field.onChange(
+                                        selected.filter((entry) => entry.code !== suggestion.code),
+                                      )
+                                    : selected.length < MAX_FACILITIES &&
+                                      field.onChange([
+                                        ...selected,
+                                        {
+                                          code: suggestion.code,
+                                          label: suggestion.label,
+                                          available: true,
+                                          note: "",
+                                        },
+                                      ])
+                                }
+                                className={cn(
+                                  "rounded-full border px-2.5 py-1 text-xs transition-colors disabled:opacity-50",
+                                  on
+                                    ? "border-transparent bg-foreground text-background"
+                                    : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground",
+                                )}
+                              >
+                                {suggestion.label}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
 
                 <div className="space-y-1.5">
                   <Label htmlFor="facilities-draft">Add your own</Label>
