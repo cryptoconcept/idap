@@ -7,7 +7,7 @@ import type {
   SyncSourceData,
   SyncVacancy,
 } from "@/lib/connectors/types";
-import { ConnectorAuthError, ConnectorRejectedError } from "@/lib/connectors/types";
+import { ConnectorAuthError, ConnectorCapExceededError, ConnectorRejectedError } from "@/lib/connectors/types";
 import { edufleetAdapter } from "@/lib/connectors/edufleet";
 
 // ---------------------------------------------------------------------------
@@ -1463,6 +1463,85 @@ describe("edufleetAdapter", () => {
       const result = await edufleetAdapter.closeJob!(ctx, makeConnection(), "vac-1", "AGGREGATED");
 
       expect(result.kind).toBe("BLOCKED");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // M4 / L2 — the two answers that used to fall to "could not be reached"
+  // -------------------------------------------------------------------------
+
+  describe("429 and 404 classification", () => {
+    it("MUTATION-DISTINGUISHING: a spent daily cap throws ConnectorCapExceededError naming the cap and the reset, not a transient failure", async () => {
+      // M4. eduFleet answered instantly and precisely; "could not be reached
+      // right now — try again shortly" is false in both halves, and it is the
+      // one instruction that cannot succeed until the cap resets.
+      const http = vi.fn().mockResolvedValue({
+        status: 429,
+        body: { error: "Daily write cap reached", reason: "write_cap_exceeded", dailyWriteCap: 100 },
+      });
+
+      const error = await edufleetAdapter
+        .createJob!(makeCtx(http), makeGrantConnection(), SCHOOL_BODY, "SCHOOL_POSTED")
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConnectorCapExceededError);
+      expect((error as ConnectorCapExceededError).dailyWriteCap).toBe(100);
+      expect((error as Error).message).toMatch(/100/);
+      expect((error as Error).message).toMatch(/midnight IST/);
+      expect((error as Error).message).not.toMatch(/try again shortly/);
+    });
+
+    it("MUTATION-DISTINGUISHING: a Contract One cap names the SHARED pool, not the school's own limit", async () => {
+      // Contract One spends `spendWrite(auth.partner)` — the platform-wide
+      // 500/day pool every unconnected school shares. Telling a school "your
+      // daily limit" there would be wrong, and only the credential IDAP chose
+      // to send can tell the two budgets apart.
+      const http = vi.fn().mockResolvedValue({
+        status: 429,
+        body: { error: "Daily write cap reached", reason: "write_cap_exceeded", dailyWriteCap: 500 },
+      });
+
+      const error = await edufleetAdapter
+        .createJob!(makeCtx(http), makeConnection(), AGGREGATED_BODY, "AGGREGATED")
+        .catch((e: unknown) => e);
+
+      expect((error as Error).message).toMatch(/shared/i);
+      expect((error as Error).message).toMatch(/500/);
+    });
+
+    it("leaves a burst 429 on the transient path — a per-minute limiter really does clear in moments", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 429,
+        body: { error: "Rate limit exceeded", reason: "rate_limited" },
+      });
+
+      const error = await edufleetAdapter
+        .createJob!(makeCtx(http), makeGrantConnection(), SCHOOL_BODY, "SCHOOL_POSTED")
+        .catch((e: unknown) => e);
+
+      expect(error).not.toBeInstanceOf(ConnectorCapExceededError);
+      expect(error).toBeInstanceOf(Error);
+    });
+
+    it("MUTATION-DISTINGUISHING: a 404 comes back BLOCKED with reason not_found rather than as something to retry", async () => {
+      // L2. Both PATCH routes 404 AFTER `spendWrite`, so every retry of "try
+      // again shortly" costs another unit to be told the same thing.
+      const http = vi.fn().mockResolvedValue({
+        status: 404,
+        body: { error: "Job not found for this partner", reason: "not_found" },
+      });
+
+      const result = await edufleetAdapter.patchJob!(
+        makeCtx(http),
+        makeConnection(),
+        "vac-1",
+        { title: "x" },
+        "AGGREGATED",
+      );
+
+      expect(result).toMatchObject({ kind: "BLOCKED", reason: "not_found" });
+      // The action that must not happen: no second attempt.
+      expect(http).toHaveBeenCalledTimes(1);
     });
   });
 

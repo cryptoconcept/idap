@@ -16,6 +16,7 @@ import { adapterFor } from "@/lib/connectors";
 import { createConnectorHttp } from "@/lib/connectors/http";
 import {
   ConnectorAuthError,
+  ConnectorCapExceededError,
   ConnectorRejectedError,
   type AdapterContext,
   type ConnectionState,
@@ -282,6 +283,15 @@ async function callAdapter(
       throw error;
     }
     if (error instanceof AppError) throw error;
+    // M4. A spent daily cap gets its own answer, and a 429 rather than the
+    // 502 below: nothing is wrong with eduFleet, so "could not be reached"
+    // is false, and nothing changes by retrying, so "try again shortly" is
+    // the one instruction that cannot work. The adapter has already worded
+    // WHICH budget — the school's own grant, or the platform-wide pool — and
+    // when it resets, because only it knows which credential was sent.
+    if (error instanceof ConnectorCapExceededError) {
+      throw new AppError("RATE_LIMITED", error.message);
+    }
     if (error instanceof ConnectorRejectedError) {
       const said = error.detail ?? error.reason;
       throw validationError(
@@ -743,6 +753,8 @@ function blockedMessage(reason: string, claimState?: VacancyClaimState): string 
         default:
           return `${LABEL} will not accept changes to this listing right now — the school has claimed it, or a claim or takedown is awaiting review there. Manage it on ${LABEL}, or try again once that clears.`;
       }
+    case "not_found":
+      return `${LABEL} no longer has this advert, so IDAP cannot update or close it. Nothing is live over there any more — publish this vacancy again to create a new advert, or delete it here.`;
     case "upgrade_required":
       return `Your ${LABEL} plan has no room for another live listing — close one there or upgrade the plan, then try again.`;
     case "insufficient_scope":
@@ -819,6 +831,15 @@ async function recordBlockedReason(
   vacancy: VacancyDoc,
   message: string,
   claimState?: VacancyClaimState,
+  /**
+   * L2. Set to `"closed"` on a `404`, and only there. eduFleet does not have
+   * this job under this partner, so from IDAP's side the advert is not live —
+   * and recording that is what stops the reconciler repushing a listing that
+   * will 404 again on every sync, one unit each. It also puts the school back
+   * in control: a closed listing is republished as a NEW one, and `remove`
+   * can delete the row without a close it can never make.
+   */
+  remoteStatus?: VacancyListingRemoteStatus,
 ): Promise<VacancyListingDTO | undefined> {
   if (!vacancy.listing) return undefined;
   const updated = await Vacancy.findOneAndUpdate(
@@ -826,6 +847,7 @@ async function recordBlockedReason(
     {
       $set: {
         "listing.blockedReason": message,
+        ...(remoteStatus ? { "listing.remoteStatus": remoteStatus } : {}),
         // The one field a `403` may write besides the reason, and only when
         // the adapter actually established it. This is what makes the three
         // claimed-listing behaviours reachable at all: the delete's
@@ -1055,7 +1077,14 @@ async function settle(
   if (result.kind === "BLOCKED") {
     const claimState = toClaimState(result.claimState);
     const message = blockedMessage(result.reason, claimState);
-    const listing = await recordBlockedReason(institutionId, vacancy, message, claimState);
+    const listing = await recordBlockedReason(
+      institutionId,
+      vacancy,
+      message,
+      claimState,
+      // L2: the one BLOCKED reason that also settles what eduFleet is showing.
+      result.reason === "not_found" ? "closed" : undefined,
+    );
     await record(institutionId, vacancy, "eduFleet push blocked", `${vacancy.title} — ${result.detail}`, actor);
     return { status: "BLOCKED", message, listing };
   }

@@ -1510,6 +1510,64 @@ describe("clearing all benefits", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// M4 / L2 — the two answers that used to read as "try again shortly"
+// ---------------------------------------------------------------------------
+
+describe("a spent daily write cap and a vanished job", () => {
+  it("MUTATION-DISTINGUISHING: a 429 write_cap_exceeded is a 429 naming the cap, never a 502 inviting a retry", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    await makeConnectedGrant("INS0001");
+    const vacancy = await makeVacancy("INS0001");
+    // Two 429s: `createConnectorHttp` retries a 429 exactly once, and the
+    // second answer is returned as-is. No unit is spent on either —
+    // `spendWrite` returns before its CAS update on the cap branch.
+    stubFetch(
+      jsonResponse(429, { error: "Daily write cap reached", reason: "write_cap_exceeded", dailyWriteCap: 100 }),
+      jsonResponse(429, { error: "Daily write cap reached", reason: "write_cap_exceeded", dailyWriteCap: 100 }),
+    );
+
+    const error = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toMatchObject({ code: "RATE_LIMITED", status: 429 });
+    expect((error as Error).message).toMatch(/100/);
+    expect((error as Error).message).toMatch(/midnight IST/);
+    // The wording that was categorically wrong: eduFleet answered instantly,
+    // and nothing changes by trying again shortly.
+    expect((error as Error).message).not.toMatch(/could not be reached/);
+    expect((error as Error).message).not.toMatch(/try again shortly/);
+  });
+
+  it("MUTATION-DISTINGUISHING: a 404 marks the listing closed so the sweep stops repushing it, and says what to do next", async () => {
+    // L2. Recording only a `blockedReason` would leave `planFor` returning
+    // REPUSH on every sync — a 404 and a write unit each time, the same shape
+    // as the claimed-listing trap. `closed` is the honest local reading:
+    // eduFleet does not have this job, so nothing is live over there.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-95", contract: "AGGREGATED", lastPushedAt: new Date() },
+    });
+    stubFetch(jsonResponse(404, { error: "Job not found for this partner", reason: "not_found" }));
+
+    const blocked = expectOutcome(
+      await VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
+      "BLOCKED",
+    );
+
+    expect(blocked.message).toMatch(/no longer has this advert/i);
+    const listing = await storedListing(String(vacancy._id));
+    expect(listing?.remoteStatus).toBe("closed");
+    expect(listing?.blockedReason).toBeTruthy();
+    // The id is kept, not erased: a republish mints a fresh externalJobId and
+    // this record is the only account of what the old advert was.
+    expect(listing?.jobId).toBe("ef-job-95");
+  });
+});
+
 describe("pushClose", () => {
   it("does nothing at all for a vacancy that was never published", async () => {
     await makeInstitution("INS0001");

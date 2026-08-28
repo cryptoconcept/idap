@@ -192,11 +192,13 @@ export interface PlatformAdapter {
  *   or a `409`. Every other vacancy in the run is unaffected, so the
  *   reconciler records it and carries on.
  * - `"RUN"` — the platform itself could not serve the call: unreachable,
- *   misconfigured, an uncataloged 5xx, or the daily write cap spent (a `429`
- *   is not classified and arrives here). Continuing would spend the rest of
- *   the run discovering the same thing once per vacancy, so the reconciler
- *   stops. This is what bounds a sweep's cost when eduFleet is down or the
- *   school's 100 daily write units run out mid-run.
+ *   misconfigured, an uncataloged 5xx, or the daily write cap spent — the cap
+ *   is now classified (`ConnectorCapExceededError`) rather than arriving as
+ *   an unrecognised `429`, but it is still RUN-scoped, because it is a fact
+ *   about the credential's budget and not about any one vacancy. Continuing
+ *   would spend the rest of the run discovering the same thing once per
+ *   vacancy, so the reconciler stops. This is what bounds a sweep's cost when
+ *   eduFleet is down or the daily write units run out mid-run.
  *
  * A `ConnectorAuthError` is deliberately NOT representable here. It is not a
  * failure of one push, it is proof the credential is dead, and it must reach
@@ -309,6 +311,40 @@ export class ConnectorRejectedError extends Error {
     message: string,
     public readonly reason?: string,
     public readonly detail?: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Thrown when the remote platform refuses a request because a DAILY WRITE CAP
+ * is spent, rather than because the request was wrong or the platform was
+ * unavailable. It is its own type because it is the only failure here that is
+ * neither transient nor reproducible-on-retry: nothing about the request will
+ * work today and everything about it will work tomorrow.
+ *
+ * That is exactly the fact the generic path got wrong. eduFleet answers a
+ * spent cap with `429 {reason: "write_cap_exceeded", dailyWriteCap}` — an
+ * instant, precise answer — and it used to fall to the terminal plain `Error`,
+ * which a caller turns into "could not be reached right now — try again
+ * shortly". Both halves are false: eduFleet answered, and trying again
+ * shortly cannot work. A school that spent its budget got, for the rest of
+ * the day, the one message that is categorically wrong and the one
+ * instruction that cannot succeed.
+ *
+ * Deliberately NOT `ConnectorRejectedError`: that type means "the identical
+ * request will be refused identically", and its callers word it as a
+ * permanent refusal of THIS vacancy. A cap refuses everything, temporarily.
+ *
+ * Burst rate limiting (`429 {reason: "rate_limited"}`, and the write-budget
+ * contention 429 that shares that reason) is NOT this. Those clear in
+ * moments, so the transient wording is honest for them and they keep it.
+ */
+export class ConnectorCapExceededError extends Error {
+  constructor(
+    message: string,
+    /** The cap the platform reported, when it supplied one. */
+    public readonly dailyWriteCap?: number,
   ) {
     super(message);
   }

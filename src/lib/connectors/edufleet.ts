@@ -26,7 +26,7 @@
  * `./http`'s docblock. It throws only on a network failure or a timeout.
  */
 
-import { ConnectorAuthError, ConnectorRejectedError } from "./types";
+import { ConnectorAuthError, ConnectorCapExceededError, ConnectorRejectedError } from "./types";
 import type {
   AdapterContext,
   ConnectionState,
@@ -828,7 +828,10 @@ function credentialFor(
 
 /**
  * Shared classification for all three job-push methods below. Every branch
- * here mirrors api-map §5's error catalog for the four job routes.
+ * here mirrors api-map §5's error catalog for the four job routes — including,
+ * since the fix wave, the two it used to leave to the terminal `throw`: a
+ * `404` (L2) and a `429 write_cap_exceeded` (M4). See those branches for why
+ * each needed its own answer rather than "could not be reached right now".
  *
  * `403` never throws: `claim_pending` and `hiddenPendingReview` (Contract
  * One's PATCH, api-map §2.2) both revert on their own — a rejected claim or
@@ -958,6 +961,56 @@ function classifyJobPush(
     // without it a create that succeeded remotely and lost its local write
     // leaves a live, public, permanently unaddressable advert.
     return { kind: "CONFLICT", ownedByContract, jobId: str(body.jobId), detail: describeFailure(resp) };
+  }
+
+  // L2. A 404 is terminal, and until the fix wave it was reported as
+  // retryable. Both PATCH routes 404 AFTER `spendWrite` — `updatePartnerJob`
+  // when no `{partnerId, partnerExternalJobId, origin:"aggregated"}` job
+  // exists, `updateSchoolJob` when no `{_id, schoolId, partnerId}` one does —
+  // so every retry of "could not be reached right now, try again shortly"
+  // costs another unit to be told the same thing. eduFleet does not have this
+  // job under this partner, and no amount of waiting changes that.
+  //
+  // BLOCKED rather than a throw, because the caller has to be able to RECORD
+  // it: a bare throw leaves `blockedReason` set on a listing the reconciler
+  // then repushes on every sync — one unit each, forever, which is the same
+  // shape as the claimed-listing trap. The caller reads `not_found` and marks
+  // the listing closed, which stops the sweep, lets the school publish a NEW
+  // listing (eduFleet has nothing under the old id either) and lets the row
+  // be deleted.
+  if (resp.status === 404) {
+    return { kind: "BLOCKED", reason: "not_found", detail: describeFailure(resp) };
+  }
+
+  // M4. A spent daily write cap is neither a bad request nor an outage, and
+  // saying "could not be reached right now — try again shortly" about it gets
+  // both halves wrong: eduFleet answered instantly and precisely, and nothing
+  // changes until the cap resets. `spendWrite` returns the 429 BEFORE its CAS
+  // update, so no unit is spent discovering this — the defect is diagnosis,
+  // not cost, and it is what makes a spent budget unexplainable to a school.
+  //
+  // The wording depends on WHICH budget, which only `credential` can say.
+  // Contract Two spends the school's own grant; Contract One spends the
+  // Partner document's platform-wide pool, shared by every unconnected school
+  // — so telling a school "your daily limit" would be wrong there, and
+  // telling them to wait without saying whose limit it is would be useless.
+  //
+  // The other 429s — the per-minute burst limiter and `spendWrite`'s
+  // write-budget contention, which share `reason: "rate_limited"` — really do
+  // clear in moments, so they fall through to the transient wording below and
+  // keep it.
+  if (resp.status === 429) {
+    const body = rec(resp.body);
+    if (str(body?.reason) === "write_cap_exceeded") {
+      const cap = typeof body?.dailyWriteCap === "number" ? body.dailyWriteCap : undefined;
+      const capPhrase = cap !== undefined ? ` of ${cap} writes a day` : "";
+      throw new ConnectorCapExceededError(
+        credential === "GRANT"
+          ? `Your eduFleet Exchange connection's daily publishing limit${capPhrase} is used up. It resets at midnight IST — publishing and updates will work again then, and nothing will change before.`
+          : `IDAP's shared eduFleet Exchange publishing limit${capPhrase} is used up for today. It resets at midnight IST. Connecting your own eduFleet Exchange account gives this school its own budget instead of the shared one.`,
+        cap,
+      );
+    }
   }
 
   // A 400 is deterministic: the same body will be refused the same way, and

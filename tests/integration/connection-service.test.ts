@@ -1302,6 +1302,35 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     vi.unstubAllGlobals();
   });
 
+  it("MUTATION-DISTINGUISHING: a spent daily write cap stops the sweep instead of hitting it once per vacancy", async () => {
+    // M4's scope half. The cap is a fact about the credential's BUDGET, not
+    // about any one vacancy, so every vacancy after the first would be
+    // refused identically. `runVacancyAction` reads RUN scope off the status,
+    // and classifying the cap as a 429 rather than leaving it in the 502
+    // catch-all moved it — so 429 has to be RUN-scoped too, or the sweep
+    // would grind through the whole worklist rediscovering the same fact.
+    await edufleetFixture();
+    const first = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+    await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    const capped = { error: "Daily write cap reached", reason: "write_cap_exceeded", dailyWriteCap: 500 };
+    const fetchMock = stubFetch(
+      jsonResponse(200, SCHOOL_OK),
+      jsonResponse(429, capped), // first close
+      jsonResponse(429, capped), // the http client's one retry
+      jsonResponse(200, { jobId: "ef-job-1", status: "closed" }), // must never be reached
+    );
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(result.run.status).toBe("FAILED");
+    // The action that must not happen: a second vacancy's close. Probe, close,
+    // retry — and nothing after.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.run.warnings?.some((w) => w.includes(String(first._id)))).toBe(true);
+    expect(result.run.error).toMatch(/midnight IST/);
+  });
+
   it("closes the advert for a FILLED vacancy — one probe, one close, and the listing is recorded closed", async () => {
     await edufleetFixture();
     const vacancy = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });

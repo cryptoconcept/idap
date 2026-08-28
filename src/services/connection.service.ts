@@ -169,11 +169,20 @@ function messageOf(error: unknown): string {
  * adapter has no business knowing that split. This flattens both, keeping the
  * one distinction a reconciler genuinely needs: whether the failure was about
  * THIS vacancy or about the platform, i.e. whether continuing the sweep is
- * worth anything. `status >= 500` is the line, because that is exactly where
- * the service puts `upstreamError` (502) — eduFleet unreachable, misconfigured,
- * or answering an uncataloged 5xx, and an unclassified `429` write-cap
- * refusal with it. A `400`/`404` refusal is about one vacancy and the sweep
- * carries on.
+ * worth anything.
+ *
+ * Two statuses are RUN-scoped. `>= 500` is where the service puts
+ * `upstreamError` (502) — eduFleet unreachable, misconfigured, or answering an
+ * uncataloged 5xx. `429` is the daily write cap, which since M4 arrives as a
+ * classified `RATE_LIMITED` rather than as an unrecognised failure the 502
+ * swept up: it is a fact about the credential's budget, not about any one
+ * vacancy, and every vacancy after it would be refused identically. That
+ * scope was already right while the cap came through as a 502, so it has to
+ * move with the status — otherwise classifying the cap properly would
+ * silently turn a sweep that stops into one that grinds through every
+ * remaining vacancy.
+ *
+ * A `400`/`404` refusal is about one vacancy and the sweep carries on.
  *
  * **`ConnectorAuthError` is not caught here, and that is load-bearing.** It
  * does not extend `AppError`, so it falls through to the `throw` below,
@@ -188,7 +197,8 @@ async function runVacancyAction(run: () => Promise<VacancyPublishOutcome>): Prom
     outcome = await run();
   } catch (error) {
     if (error instanceof AppError) {
-      return { ok: false, scope: error.status >= 500 ? "RUN" : "VACANCY", detail: error.message };
+      const platformScoped = error.status >= 500 || error.status === 429;
+      return { ok: false, scope: platformScoped ? "RUN" : "VACANCY", detail: error.message };
     }
     throw error;
   }
