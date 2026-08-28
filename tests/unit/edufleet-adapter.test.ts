@@ -116,7 +116,9 @@ describe("edufleetAdapter", () => {
       const http = vi.fn().mockResolvedValue({ status: 500, body: { error: "internal" } });
       const ctx = makeCtx(http);
 
-      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow();
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow(
+        /polling the connection request failed \(status 500\)/,
+      );
     });
 
     it("maps pending to PENDING", async () => {
@@ -152,11 +154,11 @@ describe("edufleetAdapter", () => {
       expect(result).toEqual({ kind: "REJECTED", remoteStatus: "rejected", detail: "Declined by the school" });
     });
 
-    it("throws on an unrecognized status", async () => {
+    it("throws on an unrecognized status, naming it rather than silently resembling PENDING", async () => {
       const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "mystery" } });
       const ctx = makeCtx(http);
 
-      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow();
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow(/unrecognized status "mystery"/);
     });
 
     it("completed returns a non-CONNECTED result carrying an actionable detail", async () => {
@@ -232,6 +234,11 @@ describe("edufleetAdapter", () => {
 
         if (result.kind !== "CONNECTED") throw new Error("expected CONNECTED");
         expect(result.remoteInstitution?.slug).toBeUndefined();
+        // The assertion above passes vacuously if `remoteInstitution` itself
+        // is undefined (optional chaining short-circuits to `undefined`,
+        // same as a populated object with no slug). Assert a field that
+        // must be present to prove the object itself actually came back.
+        expect(result.remoteInstitution?.name).toBe("St. Xavier's High School");
       });
 
       it("MUTATION-DISTINGUISHING: a cosmetic lookup failure never costs the grant", async () => {
@@ -305,7 +312,29 @@ describe("edufleetAdapter", () => {
         expect(result.grantToken).toBe("ef_pgrant_still_ok");
       });
 
-      it("returns a non-CONNECTED result on a 409 already_redeemed race", async () => {
+      it('MUTATION-DISTINGUISHING: `partner_revoked` — a distinct failure that merely contains the substring "revoked" — does NOT throw ConnectorAuthError', async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: { token: "ef_pgrant_survives_the_substring", scopes: ["jobs:write"] },
+        });
+        // `partner_revoked` means the *partner registration* was revoked —
+        // nothing a school can act on — as distinct from `revoked`, which
+        // for a grant call means the school itself disconnected. The two
+        // reason strings share a substring; the check at `resp.status ===
+        // 401 && ... === "revoked"` must stay an exact match, not
+        // `.includes("revoked")`.
+        http.mockResolvedValueOnce({ status: 401, body: { reason: "partner_revoked" } });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).toBe("CONNECTED");
+        if (result.kind !== "CONNECTED") throw new Error("unreachable");
+        expect(result.grantToken).toBe("ef_pgrant_survives_the_substring");
+      });
+
+      it("returns a non-CONNECTED result carrying an actionable detail on a 409 redeem race (api-map §5: already_redeemed and not_approved take this identical, undifferentiated path — body.reason is never read)", async () => {
         const http = vi.fn();
         mockApprovedThenRedeem(http, { status: 409, body: { error: "already_redeemed" } });
         const ctx = makeCtx(http);
@@ -313,16 +342,9 @@ describe("edufleetAdapter", () => {
         const result = await edufleetAdapter.refresh!(ctx, makeConnection());
 
         expect(result.kind).not.toBe("CONNECTED");
-      });
-
-      it("returns a non-CONNECTED result on a 409 not_approved race", async () => {
-        const http = vi.fn();
-        mockApprovedThenRedeem(http, { status: 409, body: { error: "not_approved" } });
-        const ctx = makeCtx(http);
-
-        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
-
-        expect(result.kind).not.toBe("CONNECTED");
+        expect((result as { detail?: string }).detail).toBe(
+          "already redeemed (or no longer approved) — reconnect from eduFleet if needed",
+        );
       });
 
       it("throws on any other non-2xx redeem status", async () => {
@@ -330,7 +352,9 @@ describe("edufleetAdapter", () => {
         mockApprovedThenRedeem(http, { status: 500, body: { error: "internal" } });
         const ctx = makeCtx(http);
 
-        await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow();
+        await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow(
+          /redeeming the connection request failed \(status 500\)/,
+        );
       });
     });
   });
