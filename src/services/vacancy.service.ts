@@ -156,8 +156,10 @@ function asSentence(text: string): string {
  *    answer is the explicit "Close on eduFleet Exchange" button — not a
  *    surprise buried in a save.
  * 3. **The patch touches something eduFleet's PATCH would actually carry.**
- *    `spendWrite` runs before eduFleet validates, so every push costs one of
- *    the school's daily write units whatever it contains. A status-only patch
+ *    `spendWrite` runs before eduFleet validates, so every push costs a daily
+ *    write unit whatever it contains — the school's own 100/day grant budget
+ *    under Contract Two, or the platform-wide 500/day pool every unconnected
+ *    school shares under Contract One. A status-only patch
  *    (which is exactly what the dashboard's status dropdown sends) and a
  *    subject-only patch (neither PATCH route accepts a subject) would both
  *    spend a unit to send eduFleet nothing it does not already have.

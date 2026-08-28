@@ -202,6 +202,41 @@ describe("rule 1: contract selection", () => {
     expect(listing?.claimState).toBe("unclaimed");
   });
 
+  // NOT marked MUTATION-DISTINGUISHING, and the label was withheld on
+  // evidence rather than caution. Two INDEPENDENT guards hold this property:
+  // `toInstitutionInput` no longer reads `district` off the institution row,
+  // and `buildAggregatedJobBody` no longer puts the key in the body. Each
+  // single mutation was run against this test and it passed under BOTH — so
+  // the assertion cannot distinguish either guard on its own, and claiming it
+  // could would be a false claim about the test. The distinguishing test for
+  // the body builder lives in `tests/unit/edufleet-vacancy-map.test.ts`; this
+  // one is still worth keeping, as the only proof the whole path from a
+  // stored profile field to the wire carries no district.
+  it("a Contract One create carries no district, even when the profile holds one eduFleet would reject", async () => {
+    // H2, end to end. "Bangalore Urban" is not one of eduFleet's 31 district
+    // keys (its current spelling is "Bengaluru Urban"), and the check is
+    // exact and case-sensitive. Sending it would 400 AFTER `spendWrite` had
+    // taken a unit from the platform-wide 500/day pool that every unconnected
+    // school shares — so this school's stale profile field would degrade
+    // publishing for every other school on IDAP.
+    await makeInstitution("INS0001", { district: "Bangalore Urban", state: "Karnataka" });
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    const fetchMock = stubFetch(jsonResponse(201, { jobId: "ef-job-2b", status: "active" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    const call = callAt(fetchMock, 0);
+    expect(call.url).toBe(`${BASE_URL}/api/partner/jobs`);
+    expect(call.body).not.toHaveProperty("district");
+    // Controls: the push still happened and still carries what Contract One
+    // needs, so a failure above reads as "district leaked" and nothing else.
+    // `state` stays because eduFleet never validates it — it only reads it to
+    // decide whether the district check applies, and there is no district.
+    expect(call.body.city).toBe("Mysore");
+    expect(call.body.state).toBe("Karnataka");
+  });
+
   it("uses Contract One when a connection exists but is not CONNECTED, and when it holds no grant", async () => {
     await makeInstitution("INS0001");
     await makeInstitution("INS0002");

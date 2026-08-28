@@ -165,6 +165,40 @@ describe("buildAggregatedJobBody", () => {
     expect(buildAggregatedJobBody(vac(), inst())).toMatchObject({ institutionName: "DPS", city: "Bengaluru" });
   });
 
+  it("MUTATION-DISTINGUISHING: never sends district, whatever the institution row carries", () => {
+    // H2. eduFleet's `createPartnerJob` exact-match, case-sensitively
+    // validates `district` against 31 Karnataka display strings whenever the
+    // state is Karnataka — and a BLANK state defaults to Karnataka, so
+    // omitting the state opts in. IDAP's district is free text, so the
+    // spellings schools really type ("Bangalore Urban" below among them) all
+    // 400 — and `spendWrite` runs before validation, so each one takes a unit
+    // from the PLATFORM-WIDE 500/day pool that every unconnected school
+    // shares. The key is therefore never built at all.
+    //
+    // The cast is the point of the test: `InstitutionPushInput` no longer
+    // declares `district`, so only a runtime object carrying one can prove
+    // the BODY BUILDER is what drops it rather than the type.
+    const withDistrict = { ...inst(), district: "Bangalore Urban" } as InstitutionPushInput;
+
+    const body = buildAggregatedJobBody(vac(), withDistrict);
+
+    expect(body).not.toHaveProperty("district");
+    // Control: everything Contract One does forward is still forwarded, so a
+    // failure here means "district leaked", never "the body stopped working".
+    expect(body).toMatchObject({ institutionName: "DPS", city: "Bengaluru" });
+  });
+
+  it("still sends state — eduFleet never validates it, and with no district the Karnataka check cannot fire", () => {
+    // `createPartnerJob` reads `state` once, only to decide whether the
+    // district/taluk checks apply, and otherwise stores it verbatim. There is
+    // no enum and no rejection path for it, so it costs nothing to send and
+    // is real display data on the advert. IDAP never sends `taluk`, which is
+    // guarded by the same `isKarnataka && ...` conditional.
+    const body = buildAggregatedJobBody(vac(), inst({ state: "Karnataka" }));
+    expect(body).toMatchObject({ state: "Karnataka" });
+    expect(body).not.toHaveProperty("taluk");
+  });
+
   it("MUTATION-DISTINGUISHING: drops a benefit eduFleet does not recognise rather than sending it", () => {
     // eduFleet's sanitizeFacilities() discards unknown labels SILENTLY — no
     // error, no signal — so an unknown benefit must never leave IDAP.

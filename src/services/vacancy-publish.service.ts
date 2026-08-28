@@ -56,10 +56,22 @@ import { ActivityService } from "./activity.service";
  *
  * The economics that shape the rest: eduFleet runs `spendWrite()` BEFORE it
  * validates anything on all four job routes, so every `400` and every `409`
- * permanently burns one of the school's daily write units (100/day on a
- * grant, 500/day on the platform key) without creating anything. Every local
- * refusal below therefore happens before `ctx.http` exists, and no failure is
- * ever retried.
+ * permanently burns a daily write unit without creating anything.
+ *
+ * **Which budget it burns is not the same question as which school pushed.**
+ * Contract Two spends the school's own grant (`PartnerGrant`, 100/day), and
+ * only that school pays. Contract One spends `spendWrite(auth.partner)` —
+ * the **Partner** document's 500/day pool, which is IDAP's single
+ * platform-wide budget shared by every school with no eduFleet connection.
+ * A push that reliably fails under Contract One is therefore not a
+ * per-school bug: one misconfigured institution can exhaust the pool and
+ * stop every OTHER unconnected school from publishing. That asymmetry is why
+ * `preflight` refuses locally rather than letting eduFleet answer, and why
+ * the mapping module sends no field eduFleet exact-match validates against a
+ * list IDAP does not control (see `buildAggregatedJobBody` on `district`).
+ *
+ * Every local refusal below therefore happens before `ctx.http` exists, and
+ * no failure is ever retried.
  */
 
 const PLATFORM = "EDUFLEET" as const;
@@ -367,16 +379,23 @@ function toVacancyInput(vacancy: VacancyDoc, externalJobId: string): VacancyPush
   };
 }
 
+/**
+ * `district` is deliberately not read off the institution at all, not merely
+ * left out of the body: eduFleet exact-match validates it against 31
+ * Karnataka display strings and IDAP's is free text, so forwarding it spends
+ * the platform-wide pool on a 400 for an ordinary profile typo
+ * (`buildAggregatedJobBody` carries the full reasoning). `state` stays —
+ * eduFleet never validates it, it only reads it to decide whether the
+ * district check applies, and with no district sent that check cannot fire.
+ */
 function toInstitutionInput(institution: {
   institutionName: string;
   city?: string | null;
-  district?: string | null;
   state?: string | null;
 }): InstitutionPushInput {
   return {
     institutionName: institution.institutionName,
     city: institution.city ?? undefined,
-    district: institution.district ?? undefined,
     state: institution.state ?? undefined,
     // `branchId` is left undefined on purpose: IDAP has no source for an
     // eduFleet branch id, and inventing one from any other field would 400
@@ -428,7 +447,7 @@ function assertPreflightPatch(vacancy: VacancyPushInput, remote: RemoteJobSalary
 /**
  * The only fields either contract's PATCH actually applies
  * (`PartnerJobPatch`, `SchoolJobPatch`). Everything else in a create body —
- * `externalJobId`, `subject`, `institutionName`, `city`, `district`, `state`
+ * `externalJobId`, `subject`, `institutionName`, `city`, `state`
  * — is read by neither update path and would be silently ignored, which is
  * the one failure mode this plan keeps refusing to ship: a school edits a
  * field, sees "saved", and eduFleet never hears about it.

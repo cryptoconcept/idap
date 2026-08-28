@@ -13,7 +13,8 @@ export const dynamic = "force-dynamic";
  *
  * It is deliberately thin. Every rule that governs a push already lives in the
  * service — which contract to use, the city gate, the preflight that keeps a
- * doomed body from burning one of the school's daily write units, how a `403`
+ * doomed body from burning a daily write unit (the school's own under
+ * Contract Two, the platform-wide pool under Contract One), how a `403`
  * or a `409` is recorded — and re-stating any of it here would give the
  * product two answers to the same question. What this file owns is the three
  * things a route owns: the request is same-origin, the caller is an
