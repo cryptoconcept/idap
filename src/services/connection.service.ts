@@ -7,6 +7,7 @@ import {
   PLATFORM_LABELS,
   SYNC_LOCK_STALE_MINUTES,
   SYNC_RUN_KEEP,
+  VACANCY_MAX_RECORDS,
   type ConnectionStatus,
   type Platform,
   type SyncStatus,
@@ -232,20 +233,44 @@ async function runVacancyAction(run: () => Promise<VacancyPublishOutcome>): Prom
  * The rows are small, `select`ed and `lean`, and the cost of loading them is
  * a fraction of one HTTP call.
  *
- * Sorted oldest-first so a run's steps are stable and reproducible rather
- * than in whatever order Mongo returns.
+ * Sorted oldest-first, with `_id` breaking ties, so a run's steps are stable
+ * and reproducible rather than in whatever order Mongo returns — and, since
+ * L3 bounded the read, so that which vacancies fall outside the bound is
+ * stable too.
  *
  * TENANT-SENSITIVE: `institutionId` scopes the read, and each closure passes
  * it back into the publish service, which scopes its own reads and writes
  * with it again. A vacancy id is not an authorisation on either side.
  */
-async function loadSyncVacancies(institutionId: string, actor: Actor): Promise<SyncVacancy[]> {
+async function loadSyncVacancies(
+  institutionId: string,
+  actor: Actor,
+): Promise<{ vacancies: SyncVacancy[]; truncated: boolean }> {
+  // L3: bounded, and the bound is `VACANCY_MAX_RECORDS` because that constant
+  // already claims to bound "the dashboard list AND the eduFleet sync
+  // payload" — `VacancyService.list` enforced it and this reader did not, so
+  // the comment described an enforcement that existed on one of its two
+  // readers. `create` refusing past the cap makes it unreachable in practice
+  // today, and `create`'s own comment already admits its count-then-create
+  // window is not atomic; an unbounded read feeding a sweep is not something
+  // to leave resting on that.
+  //
+  // `+ 1` rather than a bare limit, so "exactly at the cap" and "more than
+  // the cap" are distinguishable — a silent truncation reads as "everything
+  // was reconciled".
   const rows = await Vacancy.find({ institutionId })
     .select("title status listing")
-    .sort({ createdAt: 1 })
+    // `_id` as the tiebreaker, not decoration: `createdAt` alone is not a
+    // total order (two vacancies created in the same millisecond tie), and
+    // once the read is limited an unstable tie decides WHICH vacancies fall
+    // outside the cap as well as what order the run's steps come in. An
+    // ObjectId is monotonic, so this makes oldest-first mean one thing.
+    .sort({ createdAt: 1, _id: 1 })
+    .limit(VACANCY_MAX_RECORDS + 1)
     .lean<Pick<VacancyDoc, "_id" | "title" | "status" | "listing">[]>();
 
-  return rows.map((row) => {
+  const truncated = rows.length > VACANCY_MAX_RECORDS;
+  const vacancies = (truncated ? rows.slice(0, VACANCY_MAX_RECORDS) : rows).map((row) => {
     const vacancyId = String(row._id);
     return {
       vacancyId,
@@ -268,6 +293,8 @@ async function loadSyncVacancies(institutionId: string, actor: Actor): Promise<S
       close: () => runVacancyAction(() => VacancyPublishService.pushClose(institutionId, vacancyId, actor)),
     };
   });
+
+  return { vacancies, truncated };
 }
 
 /**
@@ -769,7 +796,10 @@ export const ConnectionService = {
         institution: institution as unknown as Record<string, unknown>,
         results: publishedResults as unknown as Record<string, unknown>[],
         readPublicMedia: storage.getPublic,
-        vacancies: reconcilesVacancies ? await loadSyncVacancies(institutionId, actor) : undefined,
+        ...(reconcilesVacancies ? await loadSyncVacancies(institutionId, actor).then((w) => ({
+          vacancies: w.vacancies,
+          vacanciesTruncated: w.truncated,
+        })) : { vacancies: undefined }),
       };
 
       const state: ConnectionState = {

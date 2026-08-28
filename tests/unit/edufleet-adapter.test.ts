@@ -645,8 +645,8 @@ describe("edufleetAdapter", () => {
 
     const LIVE = { contract: "AGGREGATED", remoteStatus: "active" } as const;
 
-    function makeData(vacancies?: SyncVacancy[]): SyncSourceData {
-      return { institution: {}, results: [], readPublicMedia: vi.fn(), vacancies };
+    function makeData(vacancies?: SyncVacancy[], vacanciesTruncated?: boolean): SyncSourceData {
+      return { institution: {}, results: [], readPublicMedia: vi.fn(), vacancies, vacanciesTruncated };
     }
 
     function grantConnection() {
@@ -920,6 +920,36 @@ describe("edufleetAdapter", () => {
       expect(steps).toContain(`close:${done.vacancyId}`);
       expect(steps).toContain(`close:${dies.vacancyId}`);
       expect(done.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("MUTATION-DISTINGUISHING: a truncated worklist is never reported as SUCCESS, and the warning says how many were looked at", async () => {
+      // L3. The service's read is bounded, so a school past the cap hands
+      // over a PREFIX. Reconciling it and reporting SUCCESS would tell an
+      // admin "eduFleet is in step with IDAP" about vacancies the run never
+      // read — and by the oldest-first ordering those are its longest-lived
+      // adverts.
+      const inStep = makeVacancy({ status: "FILLED", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(
+        makeCtx(makeHttp()),
+        grantConnection(),
+        makeData([inStep], true),
+      );
+
+      // The work that WAS in the list still happened — truncation is a
+      // reporting fact, not a reason to stop.
+      expect(inStep.close).toHaveBeenCalledTimes(1);
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.warnings.some((w) => /only the first 1 vacancies/i.test(w))).toBe(true);
+    });
+
+    it("an untruncated worklist says nothing about a cap", async () => {
+      const inStep = makeVacancy({ status: "FILLED", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([inStep]));
+
+      expect(outcome.status).toBe("SUCCESS");
+      expect(outcome.warnings.some((w) => /only the first/i.test(w))).toBe(false);
     });
 
     it("a sync given no vacancy worklist at all reports PARTIAL rather than fabricating a push that never happened", async () => {

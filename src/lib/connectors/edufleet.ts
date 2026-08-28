@@ -682,6 +682,18 @@ async function sync(
   let skipped = false;
   let acted = 0;
 
+  // L3. The worklist is bounded, so a school past the cap gets a PREFIX — and
+  // by the service's oldest-first ordering, the ones left out are its
+  // longest-lived adverts. Said as a warning and counted as a skip, because a
+  // run that reports SUCCESS over a set it never looked at is telling an
+  // admin "eduFleet is in step with IDAP" about vacancies it did not read.
+  if (data.vacanciesTruncated) {
+    skipped = true;
+    warnings.push(
+      `eduFleet: only the first ${vacancies.length} vacancies were reconciled — this school has more than that, and the rest were not looked at. Remove vacancies you no longer need, or close their adverts individually.`,
+    );
+  }
+
   for (const vacancy of vacancies) {
     const plan = planFor(vacancy);
     if (plan === "NONE") continue;

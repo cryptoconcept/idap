@@ -155,13 +155,32 @@ function PlatformCard({
   // `disconnect` and `listRuns` make no adapter call and load no credential
   // (connection.service.ts) — so run history is a read of what already
   // happened, independent of whether the platform is still CONNECTED. A
-  // ConnectorAuthError-driven sync failure flips status to ERROR
-  // (connection.service.ts:602-611) while leaving remoteInstitution/scopes
-  // and every prior SyncRun exactly where they were; that is precisely the
-  // moment an admin most needs to see them, not the moment to hide them.
-  // Deliberately NOT widened to DISCONNECTED — a disconnected card showing
-  // stale history is noise, not signal.
-  const hasConnectionHistory = status === "CONNECTED" || status === "ERROR";
+  // revocation is precisely the moment an admin most needs to see the run
+  // whose warnings name which adverts were left live on the platform, not the
+  // moment to hide them.
+  //
+  // **M3.** This used to be `CONNECTED || ERROR`, on the strength of a
+  // revocation flipping the row to `ERROR`. It no longer does: the eduFleet
+  // branch of this plan made a revoked grant land on `DISCONNECTED`
+  // everywhere it is detected, which is the right status (it is what spec §9
+  // asks for by name, it re-offers "Request connection", and unlike `ERROR`
+  // it is a state a later poll cannot undo). The consequence was that the
+  // panel disappeared at exactly the moment it was written to stay.
+  //
+  // Widening the condition is the fix taken, rather than reinstating `ERROR`
+  // as a status a revocation writes. One fact must not produce two states,
+  // and `DISCONNECTED` is the one that is true; a second status meaning
+  // "disconnected, but with history" would be a display concern encoded in
+  // the connection's own state, which is exactly the coupling that produced
+  // this bug.
+  //
+  // `hasHistory` is what answers the original objection that "a disconnected
+  // card showing stale history is noise". A row that never connected has no
+  // remote institution, no granted scopes and no sync — the three things this
+  // flag gates — so it shows nothing extra. A row that HAS all that keeps it.
+  const hasHistory = Boolean(entry.remoteInstitution || entry.scopes?.length || entry.lastSyncAt);
+  const hasConnectionHistory =
+    status === "CONNECTED" || status === "ERROR" || (status === "DISCONNECTED" && hasHistory);
   const isPendingApproval = status === "PENDING" || status === "AWAITING_APPROVAL";
   const showRequest = !status || status === "DISCONNECTED" || status === "REJECTED" || status === "ERROR";
   const canDisconnect = Boolean(status) && status !== "DISCONNECTED";
@@ -296,14 +315,17 @@ function PlatformCard({
   }
 
   // A grant only exists once `refresh` returns `kind: "CONNECTED"`
-  // (connection.service.ts:426-435) or a sync's `ConnectorAuthError` flips an
-  // already-CONNECTED row to ERROR — so only those two statuses have
-  // anything for the platform to revoke. Cancelling a PENDING/AWAITING_APPROVAL
-  // request, or clearing a REJECTED one, never issued access in the first
-  // place; telling that admin to go revoke something on {label}'s dashboard
-  // would send them after a grant that was never made. Matches the
-  // status-conditional dialog copy shape in `scholarship-actions.tsx`'s
-  // archive dialog.
+  // (connection.service.ts) — so `CONNECTED` is the status that has something
+  // for the platform to revoke, plus `ERROR` for the legacy rows described at
+  // `CONNECTION_STATUSES`. M3 corrected the old claim here that "a sync's
+  // `ConnectorAuthError` flips an already-CONNECTED row to ERROR": it flips
+  // it to DISCONNECTED and DROPS the ciphertext, so by the time that card is
+  // rendered there is nothing left to revoke and `canDisconnect` already
+  // excludes it. Cancelling a PENDING/AWAITING_APPROVAL request, or clearing
+  // a REJECTED one, never issued access in the first place; telling that
+  // admin to go revoke something on {label}'s dashboard would send them after
+  // a grant that was never made. Matches the status-conditional dialog copy
+  // shape in `scholarship-actions.tsx`'s archive dialog.
   const disconnectCopy = (() => {
     if (isPendingApproval) {
       return {

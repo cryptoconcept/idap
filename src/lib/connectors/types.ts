@@ -273,6 +273,18 @@ export type SyncSourceData = {
    * is the reconciler's worklist, not the push interface.
    */
   vacancies?: SyncVacancy[];
+  /**
+   * L3. True when the service had MORE vacancies than it was willing to load
+   * and the list above is a prefix rather than the whole set.
+   *
+   * It exists because a silent cap is the worst of the three options. A sweep
+   * that quietly reconciles the first N and reports SUCCESS tells an admin
+   * "eduFleet is in step with IDAP" about a set it never looked at — and the
+   * vacancies it skipped are, by the oldest-first ordering, the longest-lived
+   * adverts. An adapter that receives this must say so in its outcome and
+   * must not call the run a success.
+   */
+  vacanciesTruncated?: boolean;
 };
 
 /**

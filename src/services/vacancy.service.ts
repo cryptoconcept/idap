@@ -429,6 +429,14 @@ export const VacancyService = {
     // Awaited, not fired and forgotten: the response this call returns is what
     // the dashboard renders, and the school has to see whether the push landed
     // (the fresh `lastPushedAt`) or did not (a `blockedReason` on the card).
+    //
+    // L1: the latency this buys is bounded at roughly 90 SECONDS, not the
+    // connector's 15 s request timeout — `createConnectorHttp` retries a 429
+    // once after an honoured `Retry-After` of up to 60 s, so the worst case is
+    // 15 + 60 + 15. See `http.ts` for the arithmetic and for how that compares
+    // with the platform's own function timeout. The edit itself is already
+    // committed above, so a request cut off short loses the REPORT of the
+    // push, never the edit.
     // `pushEdit` cannot throw, so a failed push never turns a saved edit into
     // a failed request — but it does write to the listing, which is why the
     // record is re-read below rather than the pre-push copy being returned.

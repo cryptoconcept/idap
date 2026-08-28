@@ -451,6 +451,27 @@ export const PLATFORM_LABELS: Record<Platform, string> = {
   EDUFLEET: "eduFleet Exchange",
 };
 
+/**
+ * `"ERROR"` is **legacy-only and is written by nothing** — settled here (M3)
+ * rather than left as an open question, because it had already changed
+ * behaviour once by being read as a live status.
+ *
+ * It used to be what a sync wrote when a `ConnectorAuthError` proved the
+ * grant dead. That is now `DISCONNECTED` on every path that detects a
+ * revocation, and deliberately: `DISCONNECTED` is what spec §9 names, it is
+ * the status that re-offers "Request connection", and — unlike `ERROR` — it
+ * comes with dropping the ciphertext, so a later poll cannot resurrect the
+ * connection from a credential eduFleet has already refused. Giving `ERROR` a
+ * writer again would mean one fact producing two states, which is the shape
+ * that caused the regression M3 records.
+ *
+ * It stays in the enum because rows written before that change may hold it,
+ * and a value the schema rejects would make those rows unreadable. Readers
+ * that still name it (`connections-panel.tsx`) are keeping those rows
+ * working, not describing anything new code can produce. Do not add a writer;
+ * if a genuinely non-credential failure state is ever needed, give it its own
+ * value and its own reason for existing.
+ */
 export const CONNECTION_STATUSES = [
   "PENDING",
   "AWAITING_APPROVAL",
@@ -612,7 +633,11 @@ export const VACANCY_DESCRIPTION_MAX = 2000;
 
 /** Per-institution cap on how many vacancies exist at once — bounds the
  *  dashboard list and the eduFleet sync payload, same shape as
- *  `ALUMNI_MAX_RECORDS` / `ACHIEVEMENT_MAX_RECORDS`. */
+ *  `ALUMNI_MAX_RECORDS` / `ACHIEVEMENT_MAX_RECORDS`. Both readers really do
+ *  enforce it now (L3): `VacancyService.list` always did, and
+ *  `loadSyncVacancies` used to be an unbounded read that only `create`'s
+ *  non-atomic count kept small. The sync reader reports it when it truncates,
+ *  rather than quietly reconciling a prefix and calling the run a success. */
 export const VACANCY_MAX_RECORDS = 200;
 
 /** Which eduFleet contract created a listing. Contract One (platform key)

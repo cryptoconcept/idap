@@ -121,6 +121,23 @@ async function attempt(url: string, path: string, init: ConnectorRequestInit): P
  * retry on a 429: after `Retry-After` seconds when the header is present,
  * else after a flat 2 seconds. Not a retry loop — if the retry also comes
  * back 429, that second response is returned as-is.
+ *
+ * **The worst-case wall time of one call is ~90 s, not the 15 s timeout.**
+ * L1: worth stating here, at the constants, because every caller that
+ * `await`s a connector call inherits it and more than one has quoted 15 s.
+ * The arithmetic: the first attempt takes up to `REQUEST_TIMEOUT_MS` (15 s) —
+ * a timeout THROWS, so a 429 that reaches the retry arrived inside that
+ * window — plus an honoured `Retry-After` of up to `MAX_RETRY_AFTER_MS`
+ * (60 s; anything longer returns the 429 immediately rather than waiting),
+ * plus a second attempt of up to another 15 s.
+ *
+ * Check that against the serverless function timeout before adding a retry or
+ * raising either constant. No route in this app sets `maxDuration` except the
+ * cron (60 s), so the interactive routes run at the platform default — which
+ * on Vercel is 60 s unless raised, i.e. LESS than this bound. A request cut
+ * off there is not data loss for the vacancy PATCH path (the local edit is
+ * committed before the push runs), but the school loses the report of whether
+ * the push landed, which is the one failure that design exists to avoid.
  */
 export function createConnectorHttp(baseUrl: string): ConnectorHttp {
   return async function connectorHttp(path, init) {

@@ -15,7 +15,7 @@ import type {
 } from "@/lib/connectors/types";
 import { assertPlatform, ConnectionService } from "@/services/connection.service";
 import { AppError } from "@/lib/api/errors";
-import { SYNC_LOCK_STALE_MINUTES } from "@/lib/constants";
+import { SYNC_LOCK_STALE_MINUTES, VACANCY_MAX_RECORDS } from "@/lib/constants";
 
 const VALID_VAULT_KEY = Buffer.alloc(32, 7).toString("base64");
 const actor = { id: "6a8880f3446c577c470cd06c", name: "Institution Admin" };
@@ -1300,6 +1300,45 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  /**
+   * L3. `VACANCY_MAX_RECORDS`'s own docblock claimed to bound "the dashboard
+   * list AND the eduFleet sync payload", and this reader enforced nothing —
+   * an unbounded read feeding a sweep, kept small only by `create`'s own
+   * admittedly non-atomic count.
+   *
+   * **The label covers the REPORTING, not the query's `.limit()`, and the
+   * distinction is worth stating rather than glossing.** Removing
+   * `truncated`'s computation, or the adapter's warning, fails this test.
+   * Removing the `.limit()` alone does NOT: `rows.length > cap` is still true
+   * on an unbounded read, so the slice and the warning behave identically and
+   * the test passes — verified by running that mutation. The bound itself is
+   * a property about what crosses the wire from Mongo, which no behavioural
+   * assertion here can see; it is left uncovered rather than claimed.
+   */
+  it("MUTATION-DISTINGUISHING: a truncated sweep says so rather than reporting success over a set it never read", async () => {
+    await edufleetFixture();
+    await Vacancy.insertMany(
+      Array.from({ length: VACANCY_MAX_RECORDS + 1 }, (_, i) => ({
+        institutionId: "INS0001",
+        title: `Teacher ${i}`,
+        subject: "Mathematics",
+        description: "Teach Mathematics to Grades 8-10.",
+        status: "DRAFT",
+      })),
+    );
+    const fetchMock = stubFetch(jsonResponse(200, SCHOOL_OK));
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    // None of them is published, so the probe is still the only HTTP call —
+    // the bound is about what is READ, not about what is pushed.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.run.status).toBe("PARTIAL");
+    expect(
+      result.run.warnings?.some((w) => w.includes(`only the first ${VACANCY_MAX_RECORDS} vacancies`)),
+    ).toBe(true);
   });
 
   it("MUTATION-DISTINGUISHING: a spent daily write cap stops the sweep instead of hitting it once per vacancy", async () => {
