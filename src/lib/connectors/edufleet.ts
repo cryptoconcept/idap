@@ -75,6 +75,23 @@ function describeFailure(resp: { status: number; body: unknown }): string {
 }
 
 /**
+ * Bounds one remote-derived value spliced into an error message, applying the
+ * same policy `describeFailure` above states, at the sites that interpolate a
+ * remote value directly instead of going through it. Same reason: these
+ * messages become `lastError`, which is persisted with no `maxlength`
+ * (`PlatformConnection.ts:26`) and returned to the browser.
+ *
+ * Be honest about what this buys: against a well-behaved eduFleet every value
+ * it wraps is schema-constrained (`externalRef` and `remoteRequestId` are ids,
+ * `status` is an enum), so this is defence-in-depth consistency rather than a
+ * live hole. It exists because the file states a rule and two throw sites
+ * broke it, and the next person will copy whichever neighbour they land on.
+ */
+function clip(v: string): string {
+  return v.slice(0, 80);
+}
+
+/**
  * Shared "the state moved under us" detail (api-map §5: 409
  * `already_redeemed`, 409 `not_approved`, and reaching `"completed"` via
  * polling are all the same class). eduFleet's grant is returned exactly
@@ -96,7 +113,7 @@ const REDEEM_STATE_MOVED_DETAIL = "already redeemed (or no longer approved) — 
  * which an eduFleet admin sets at partner registration (default `["jobs:write"]`).
  * A partner registered without it is refused even with a well-formed body.
  */
-const REQUESTED_SCOPES = ["jobs:write"];
+const REQUESTED_SCOPES = ["jobs:write"] as const;
 
 function buildConnectionRequestBody(institution: InstitutionSummary): Rec {
   // api-map §1.2 step 1, contract 1.1.0: `externalRef` (IDAP's own
@@ -157,6 +174,14 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
 
   if (resp.status === 201) {
     const body = rec(resp.body) ?? {};
+    // The same presence check the 409 branch below makes, on the primary
+    // path, for the same reason: `String(undefined)` persists the literal
+    // "undefined" as `remoteRequestId`, and every later poll then requests
+    // `/api/partner/connection-requests/undefined` → 404 → a generic 502 with
+    // the real cause invisible.
+    if (body.requestId === undefined || body.requestId === null) {
+      throw new Error("eduFleet: the connection request was created but the 201 response carried no requestId");
+    }
     const remoteStatus = str(body.status) ?? "pending";
     return { remoteRequestId: String(body.requestId), remoteStatus, kind: initiateKind(remoteStatus) };
   }
@@ -228,7 +253,11 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
 // ---------------------------------------------------------------------------
 
 async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: string): Promise<Rec> {
-  const resp = await ctx.http(`/api/partner/connection-requests/${remoteRequestId}`, {
+  // `remoteRequestId` originated in a remote response. `joinUrl`
+  // (`http.ts:55-59`) only concatenates onto the configured base, so a hostile
+  // value cannot leave eduFleet's origin — but it could still steer the
+  // platform key at a different eduFleet path. Encode it.
+  const resp = await ctx.http(`/api/partner/connection-requests/${encodeURIComponent(remoteRequestId)}`, {
     method: "GET",
     token: ctx.platformKey,
   });
@@ -282,7 +311,8 @@ async function fetchRemoteInstitution(
 }
 
 async function redeem(ctx: AdapterContext, remoteRequestId: string): Promise<RefreshResult> {
-  const resp = await ctx.http(`/api/partner/connection-requests/${remoteRequestId}/redeem`, {
+  // Encoded for the same reason as the poll above.
+  const resp = await ctx.http(`/api/partner/connection-requests/${encodeURIComponent(remoteRequestId)}/redeem`, {
     method: "POST",
     token: ctx.platformKey,
   });
@@ -339,7 +369,7 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
   const polledRef = str(body.externalRef);
   if (polledRef !== undefined && polledRef !== connection.externalRef) {
     throw new Error(
-      `eduFleet: connection request ${connection.remoteRequestId} belongs to externalRef "${polledRef}", not "${connection.externalRef}" — refusing to act on it`,
+      `eduFleet: connection request ${clip(connection.remoteRequestId)} belongs to externalRef "${clip(polledRef)}", not "${connection.externalRef}" — refusing to act on it`,
     );
   }
 
@@ -374,7 +404,7 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
       }
       return { kind: "REJECTED", remoteStatus, detail: REDEEM_STATE_MOVED_DETAIL };
     default:
-      throw new Error(`eduFleet: connection request has an unrecognized status "${remoteStatus}"`);
+      throw new Error(`eduFleet: connection request has an unrecognized status "${clip(remoteStatus)}"`);
   }
 }
 

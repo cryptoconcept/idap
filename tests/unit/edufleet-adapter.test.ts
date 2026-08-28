@@ -117,6 +117,19 @@ describe("edufleetAdapter", () => {
       });
     });
 
+    it('MUTATION-DISTINGUISHING: a 201 with no requestId throws rather than persisting the string "undefined"', async () => {
+      // Unguarded, `String(undefined)` stores "undefined" as the
+      // remoteRequestId and every later poll requests
+      // `/api/partner/connection-requests/undefined` → 404 → a generic 502
+      // with the real cause invisible.
+      const http = vi.fn().mockResolvedValue({ status: 201, body: { status: "pending" } });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow(
+        /the 201 response carried no requestId/,
+      );
+    });
+
     it("throws on a 409 that carries no requestId to adopt", async () => {
       const http = vi.fn().mockResolvedValue({ status: 409, body: { error: "duplicate_open_request" } });
       const ctx = makeCtx(http);
@@ -268,6 +281,32 @@ describe("edufleetAdapter", () => {
       );
       // The poll, and nothing after it — no redeem was attempted.
       expect(http).toHaveBeenCalledTimes(1);
+    });
+
+    it("MUTATION-DISTINGUISHING: a 500-character externalRef from the remote side cannot flood lastError", async () => {
+      // The file's own policy (`describeFailure`/`clip`): remote-derived text
+      // reaching `lastError` is bounded, because `lastError` is persisted with
+      // no `maxlength` and returned to the browser.
+      const hostile = "z".repeat(500);
+      const http = vi.fn().mockResolvedValue({
+        status: 200,
+        body: { requestId: "req-abc", externalRef: hostile, status: "approved" },
+      });
+      const ctx = makeCtx(http);
+
+      let caught: unknown;
+      try {
+        await edufleetAdapter.refresh!(ctx, makeConnection());
+      } catch (error) {
+        caught = error;
+      }
+
+      const message = (caught as Error).message;
+      expect(message).toMatch(/refusing to act on it$/);
+      expect(message).not.toContain(hostile);
+      expect(message).toContain("z".repeat(80));
+      expect(message).not.toContain("z".repeat(81));
+      expect(message.length).toBeLessThan(200);
     });
 
     it("proceeds normally when the polled externalRef matches", async () => {
