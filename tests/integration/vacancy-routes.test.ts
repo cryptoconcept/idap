@@ -12,6 +12,7 @@ import {
 import { VacancyService } from "@/services/vacancy.service";
 import { Vacancy } from "@/models";
 import type { VacancyCreateInput } from "@/lib/validation/vacancy";
+import { PLATFORM_ADMIN_DENIED } from "@/lib/tenant";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -160,17 +161,46 @@ describe("POST /api/settings/vacancies", () => {
     expect(response.status).toBe(200);
     expect(payload.vacancy.id).not.toBe(SMUGGLED_ID);
 
-    const raw = await Vacancy.findById(payload.vacancy.id).lean();
-    expect(raw).not.toBeNull();
-    expect(String(raw?._id)).not.toBe(SMUGGLED_ID);
+    // Not `Vacancy.findById(payload.vacancy.id)`: that id is already proven
+    // to differ from `SMUGGLED_ID` by the assertion above, so re-fetching by
+    // it and checking `_id` again would be tautological. What actually
+    // matters is that no document exists under the id the caller tried to
+    // choose at all.
+    expect(await Vacancy.findById(SMUGGLED_ID).lean()).toBeNull();
   });
 
-  // Not a parse-pinning test: `status` is absent from `vacancyCreateSchema`
-  // entirely, and `VacancyService.create` never re-assigns it — a fresh
-  // vacancy gets the model's own `"DRAFT"` default regardless of whether
-  // this route parses at all. Kept because the behaviour itself matters (a
-  // vacancy must never be born already OPEN), not as a mutation-check pin.
-  it("still creates a DRAFT vacancy when the body carries status: OPEN", async () => {
+  // `createdAt` is parse-only exactly like `_id`: not in
+  // `vacancyCreateSchema`, never re-assigned by `VacancyService.create`, but
+  // a real Mongoose path (`timestamps: true`) that `list` sorts by (`{
+  // createdAt: -1 }`) — a smuggled value could pin a vacancy to the top of
+  // every listing indefinitely.
+  it("MUTATION-DISTINGUISHING: strips createdAt from the create body — the stored document gets a server-generated timestamp", async () => {
+    await signInWithCookie("INS0001");
+    const smuggledCreatedAt = "2099-01-01T00:00:00.000Z";
+
+    const response = await createVacancy(
+      jsonRequest({
+        body: { ...vacancyInput, createdAt: smuggledCreatedAt },
+        origin: "http://localhost",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+
+    const raw = await Vacancy.findById(payload.vacancy.id).lean();
+    expect(raw?.createdAt?.toISOString()).not.toBe(smuggledCreatedAt);
+  });
+
+  // A SECOND parse pin, stronger than the `_id` one above because it
+  // asserts the raw stored document. `status` is absent from
+  // `vacancyCreateSchema` entirely, AND `VacancyService.create` never
+  // re-assigns it after the spread — unlike `AchievementService.create`'s
+  // `{ ...input, institutionId, status: "ACTIVE" }`. A Mongoose `default`
+  // only fills in when the path is ABSENT, so without `.parse()` a smuggled
+  // `status: "OPEN"` would persist exactly as sent, skipping the DRAFT
+  // review step that exists to stop a half-written advert going live.
+  it("MUTATION-DISTINGUISHING: strips status from the create body — a vacancy is always born DRAFT", async () => {
     await signInWithCookie("INS0001");
 
     const response = await createVacancy(
@@ -247,6 +277,7 @@ describe("POST /api/settings/vacancies", () => {
     );
 
     expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toBe(PLATFORM_ADMIN_DENIED);
     expect(await Vacancy.countDocuments({})).toBe(0);
   });
 });
