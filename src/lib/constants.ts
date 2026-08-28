@@ -562,3 +562,49 @@ export const ALUMNI_MAX_RECORDS = 200;
  * contract — a certificate cap and a brochure cap are free to move apart.
  */
 export const SHOWCASE_MAX_PDF_BYTES = 20 * 1024 * 1024;
+
+/**
+ * eduFleet's 16 job subjects, transcribed from
+ * /Users/automicai/edufleet-exchange/web/src/lib/taxonomy.ts (JOB_CATEGORIES).
+ * eduFleet matches these by EXACT string, not fuzzily, so the literal spelling
+ * is the contract. Transcribed rather than fetched so creating a vacancy never
+ * depends on eduFleet being reachable.
+ */
+export const VACANCY_SUBJECTS = [
+  "Mathematics", "Physics", "Chemistry", "Biology",
+  "English", "Kannada", "Hindi", "Social Science",
+  "Principal", "Vice Principal", "Coordinator", "Administrator",
+  "Accountant", "Clerk", "Driver", "Librarian",
+] as const;
+export type VacancySubject = (typeof VACANCY_SUBJECTS)[number];
+
+/** eduFleet's subject groups, for grouping the picker. Same source file. */
+export const VACANCY_SUBJECT_GROUPS: Array<{ group: string; subjects: VacancySubject[] }> = [
+  { group: "Academic", subjects: ["Mathematics", "Physics", "Chemistry", "Biology", "English", "Kannada", "Hindi", "Social Science"] },
+  { group: "Administration", subjects: ["Principal", "Vice Principal", "Coordinator", "Administrator"] },
+  { group: "Support", subjects: ["Accountant", "Clerk", "Driver", "Librarian"] },
+];
+
+/**
+ * eduFleet's 11 employee benefits, transcribed from
+ * /Users/automicai/edufleet-exchange/web/src/lib/job-facilities.ts.
+ * Sent as literal label strings, not codes.
+ *
+ * eduFleet's sanitizeFacilities() SILENTLY DISCARDS anything not on this list
+ * — it is not a validation error and eduFleet never reports it. IDAP therefore
+ * validates against this list before any push (spec §5.1).
+ */
+export const VACANCY_BENEFITS = [
+  "Provident Fund (PF)", "ESI (medical insurance)", "Gratuity", "Health insurance",
+  "Staff accommodation", "Transport / bus facility", "Free / subsidised meals",
+  "Paid leave", "Annual / festival bonus", "Training & development",
+  "Maternity benefits",
+] as const;
+export type VacancyBenefit = (typeof VACANCY_BENEFITS)[number];
+
+/** DRAFT is never pushed to eduFleet. */
+export const VACANCY_STATUSES = ["DRAFT", "OPEN", "FILLED", "CLOSED"] as const;
+export type VacancyStatus = (typeof VACANCY_STATUSES)[number];
+
+export const VACANCY_TITLE_MAX = 120;
+export const VACANCY_DESCRIPTION_MAX = 2000;
