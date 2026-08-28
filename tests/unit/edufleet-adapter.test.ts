@@ -217,6 +217,31 @@ describe("edufleetAdapter", () => {
       expect((result as { detail?: string }).detail).toBeTruthy();
     });
 
+    it("MUTATION-DISTINGUISHING: polling a connection that already holds a grant keeps it CONNECTED", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "completed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(
+        ctx,
+        makeConnection({ grantToken: "ef_pgrant_live_abc", scopes: ["jobs:write"] }),
+      );
+
+      expect(result.kind).toBe("CONNECTED");
+      expect(result).toMatchObject({ grantToken: "ef_pgrant_live_abc", scopes: ["jobs:write"] });
+      // Exactly one call: the poll. Re-fetching the school would spend a grant call.
+      expect(http).toHaveBeenCalledTimes(1);
+    });
+
+    it("still reports REJECTED for a completed request when no grant was ever held", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "completed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result.kind).toBe("REJECTED");
+      expect(result).toMatchObject({ detail: expect.stringContaining("already redeemed") });
+    });
+
     describe("approved -> redeem", () => {
       function mockApprovedThenRedeem(
         http: ReturnType<typeof vi.fn>,

@@ -258,10 +258,25 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
     case "approved":
       return redeem(ctx, connection.remoteRequestId);
     case "completed":
-      // Defensive (mirrors PassPercent's `refresh`): reaching "completed" via
-      // polling means something else redeemed this request between polls,
-      // without IDAP's own redeem call ever succeeding. eduFleet's grant is
-      // returned exactly once, so there is no token to recover from here.
+      // Two very different situations reach "completed", and the grant IDAP
+      // already holds separates them. If there is one, this connection is the
+      // one that redeemed this request — eduFleet keeps the row queryable
+      // forever afterwards, so an ordinary poll of a healthy connection lands
+      // here, and reporting REJECTED would destroy a working connection.
+      // If there is none, the original meaning stands: something else redeemed
+      // it between polls, and eduFleet returns a grant exactly once, so there
+      // is nothing to recover.
+      if (connection.grantToken) {
+        return {
+          kind: "CONNECTED",
+          remoteStatus,
+          grantToken: connection.grantToken,
+          scopes: connection.scopes ?? [],
+          // No `remoteInstitution`: re-fetching it would spend a live grant
+          // call on a poll, and the service leaves the stored value alone
+          // when the field is absent.
+        };
+      }
       return { kind: "REJECTED", remoteStatus, detail: REDEEM_STATE_MOVED_DETAIL };
     default:
       throw new Error(`eduFleet: connection request has an unrecognized status "${remoteStatus}"`);
