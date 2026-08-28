@@ -608,3 +608,8 @@ export type VacancyStatus = (typeof VACANCY_STATUSES)[number];
 
 export const VACANCY_TITLE_MAX = 120;
 export const VACANCY_DESCRIPTION_MAX = 2000;
+
+/** Per-institution cap on how many vacancies exist at once — bounds the
+ *  dashboard list and the eduFleet sync payload, same shape as
+ *  `ALUMNI_MAX_RECORDS` / `ACHIEVEMENT_MAX_RECORDS`. */
+export const VACANCY_MAX_RECORDS = 200;

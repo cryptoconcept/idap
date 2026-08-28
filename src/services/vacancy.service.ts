@@ -2,7 +2,8 @@ import "server-only";
 import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Vacancy, type VacancyDoc } from "@/models";
-import { notFound } from "@/lib/api/errors";
+import { notFound, validationError } from "@/lib/api/errors";
+import { VACANCY_MAX_RECORDS } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
 
@@ -109,6 +110,12 @@ export const VacancyService = {
     await connectToDatabase();
     const rows = await Vacancy.find({ institutionId })
       .sort({ createdAt: -1 })
+      // `create` already refuses the record past `VACANCY_MAX_RECORDS`, so
+      // this is never what truncates a list built through the UI. It is
+      // here for a collection that somehow holds more anyway — a direct
+      // write, a future import, a cap lowered later — to bound the response
+      // size and keep the sort a top-K sort rather than an unbounded one.
+      .limit(VACANCY_MAX_RECORDS)
       .lean<VacancyDoc[]>();
     return rows.map(serialize);
   },
@@ -119,6 +126,22 @@ export const VacancyService = {
     actor: { id: string; name: string },
   ): Promise<VacancyDTO> {
     await connectToDatabase();
+
+    // A cap on records per institution. Same `countDocuments` + 400 shape as
+    // `AchievementService.create` / `AlumniService.create` /
+    // `OfferService.create` / `ScholarshipService.create` — this repo's
+    // existing answer for a per-institution whole-collection cap. The
+    // count-then-create window is non-atomic: two simultaneous creates at
+    // the boundary can both pass and land on `VACANCY_MAX_RECORDS + 1`
+    // records, matching those precedents. The cap exists to bound the
+    // dashboard list and the eduFleet sync payload to an order of
+    // magnitude, not to guarantee an exact ceiling.
+    const count = await Vacancy.countDocuments({ institutionId });
+    if (count >= VACANCY_MAX_RECORDS) {
+      throw validationError(
+        `You can keep up to ${VACANCY_MAX_RECORDS} vacancies. Delete one to add another.`,
+      );
+    }
 
     // `subject` is not re-validated here: the model's own enum constraint
     // (VACANCY_SUBJECTS) rejects an unrecognised value during
@@ -167,6 +190,33 @@ export const VacancyService = {
       const row = await Vacancy.findOne({ _id: objectId, institutionId }).lean<VacancyDoc>();
       if (!row) throw notFound("Vacancy not found");
       return serialize(row);
+    }
+
+    // `vacancyPatchSchema`'s `salaryOrder` refine only ever sees ONE patch
+    // payload — it cannot see a bound already stored from an earlier write.
+    // A patch that touches only one bound (raising `salaryMin` on a record
+    // whose `salaryMax` is already low, say) would otherwise write an
+    // inverted pair unchecked here, and eduFleet's own `assertValidNumbers`
+    // would then reject it at push time — a mysterious sync failure long
+    // after the edit that caused it. So this merges the patch over the
+    // STORED values (an explicit `null` clears a bound, same as the write
+    // below) and re-checks the effective pair. Only fetched when the patch
+    // can actually change either bound: every other patch (title, status,
+    // ...) pays nothing for this.
+    if (patch.salaryMin !== undefined || patch.salaryMax !== undefined) {
+      const stored = await Vacancy.findOne({ _id: objectId, institutionId })
+        .select("salaryMin salaryMax")
+        .lean<Pick<VacancyDoc, "salaryMin" | "salaryMax">>();
+      // A foreign or bad id: say nothing here, the write below 404s.
+      if (stored) {
+        const effectiveMin =
+          patch.salaryMin !== undefined ? (patch.salaryMin ?? undefined) : stored.salaryMin;
+        const effectiveMax =
+          patch.salaryMax !== undefined ? (patch.salaryMax ?? undefined) : stored.salaryMax;
+        if (effectiveMin != null && effectiveMax != null && effectiveMin > effectiveMax) {
+          throw validationError("salary: the minimum may not exceed the maximum");
+        }
+      }
     }
 
     const update: Record<string, unknown> = {};

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { Vacancy, Activity } from "@/models";
+import { VACANCY_MAX_RECORDS } from "@/lib/constants";
 import { VacancyService } from "@/services/vacancy.service";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 
@@ -76,6 +77,11 @@ describe("VacancyService round trip", () => {
       "Vacancy deleted",
     ]);
     expect(activityRows.every((row) => row.institutionId === "INS0001")).toBe(true);
+    // Same swallowed-error reasoning as above: a row written against the
+    // wrong entity is invisible at runtime, so `entityId` must be pinned
+    // too, not just `institutionId`/`entityType`/`action`. All three rows
+    // describe the same vacancy across its lifecycle.
+    expect(activityRows.every((row) => String(row.entityId) === created.id)).toBe(true);
   });
 
   it("defaults status to DRAFT when not supplied", async () => {
@@ -212,6 +218,20 @@ describe("VacancyService three-state patch: salaryMax", () => {
     expect(updated.salaryMax).toBe(55000);
   });
 
+  // Symmetric with `salaryMin`'s and `experienceRequired`'s zero cases: `0`
+  // is a legitimate salaryMax, and a `??`/truthiness bug would silently drop
+  // this update rather than storing it.
+  it("present replaces the stored salaryMax, including with a legitimate zero", async () => {
+    const created = await seed();
+
+    const updated = await VacancyService.update("INS0001", created.id, { salaryMax: 0 }, actor);
+
+    expect(updated.salaryMax).toBe(0);
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.salaryMax).toBe(0);
+  });
+
   it("explicit null clears the stored salaryMax entirely, not to a literal null", async () => {
     const created = await seed();
 
@@ -276,6 +296,162 @@ describe("VacancyService three-state patch: experienceRequired", () => {
 
     const raw = await Vacancy.findById(created.id).lean();
     expect(raw).not.toHaveProperty("experienceRequired");
+  });
+});
+
+describe("VacancyService salary-order validation on update", () => {
+  it("rejects a patch that raises salaryMin above an already-stored salaryMax", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "Teacher", subject: "Mathematics", description: "Grades 6-10", salaryMax: 40000 },
+      actor,
+    );
+
+    // The load-bearing assertion: `vacancyPatchSchema`'s `salaryOrder` refine
+    // only sees this ONE payload ({ salaryMin: 90000 }) and has no way to
+    // know a lower `salaryMax` is already stored — only the service, which
+    // can read the stored document, can catch this.
+    await expect(
+      VacancyService.update("INS0001", created.id, { salaryMin: 90000 }, actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.salaryMin).toBeUndefined();
+  });
+
+  it("accepts a patch that sets both bounds in the same call, correctly ordered", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "Teacher", subject: "Mathematics", description: "Grades 6-10" },
+      actor,
+    );
+
+    const updated = await VacancyService.update(
+      "INS0001",
+      created.id,
+      { salaryMin: 90000, salaryMax: 120000 },
+      actor,
+    );
+
+    expect(updated.salaryMin).toBe(90000);
+    expect(updated.salaryMax).toBe(120000);
+  });
+
+  it("accepts raising salaryMin above the stored salaryMax when that same patch clears salaryMax", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "Teacher", subject: "Mathematics", description: "Grades 6-10", salaryMax: 40000 },
+      actor,
+    );
+
+    const updated = await VacancyService.update(
+      "INS0001",
+      created.id,
+      { salaryMin: 90000, salaryMax: null },
+      actor,
+    );
+
+    expect(updated.salaryMin).toBe(90000);
+    expect(updated.salaryMax).toBeUndefined();
+  });
+
+  it("accepts clearing salaryMax alone on a record whose stored salaryMin is already high", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      {
+        title: "Teacher",
+        subject: "Mathematics",
+        description: "Grades 6-10",
+        salaryMin: 90000,
+        salaryMax: 150000,
+      },
+      actor,
+    );
+
+    const updated = await VacancyService.update(
+      "INS0001",
+      created.id,
+      { salaryMax: null },
+      actor,
+    );
+
+    expect(updated.salaryMin).toBe(90000);
+    expect(updated.salaryMax).toBeUndefined();
+  });
+
+  // Isolation for the pre-read this check adds: `update`'s salary-order
+  // check reads the stored record before the real write does, and that read
+  // is its own `{ _id, institutionId }` filter, separate from the ones
+  // already covered in the tenant-isolation block below. If it were not
+  // scoped by `institutionId`, a cross-tenant call whose id belongs to a
+  // DIFFERENT institution would read that institution's real salaryMax,
+  // find an (leaked) order violation, and throw VALIDATION_ERROR instead of
+  // NOT_FOUND — leaking the shape of a record the caller has no access to.
+  it("a cross-tenant update against a foreign vacancy 404s rather than leaking a validation error from its stored salary", async () => {
+    const foreign = await Vacancy.create({
+      institutionId: "INS0002",
+      title: "INS0002 original",
+      subject: "Clerk",
+      description: "Original",
+      salaryMax: 10000,
+    });
+    const before = await Vacancy.findById(foreign._id).lean();
+
+    await expect(
+      VacancyService.update("INS0001", String(foreign._id), { salaryMin: 90000 }, actor),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    const after = await Vacancy.findById(foreign._id).lean();
+    expect(after).toEqual(before);
+  });
+});
+
+describe("VacancyService update: previously-untested allow-listed fields", () => {
+  // `subject` and `facilities` were in `PATCHABLE_FIELDS` from the start but
+  // no test ever patched either — dropping one from the set would have been
+  // a silent no-op with a green suite. These pin both against the raw
+  // stored document.
+  it("patches subject", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "Teacher", subject: "Mathematics", description: "Grades 6-10" },
+      actor,
+    );
+
+    const updated = await VacancyService.update(
+      "INS0001",
+      created.id,
+      { subject: "Physics" },
+      actor,
+    );
+    expect(updated.subject).toBe("Physics");
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.subject).toBe("Physics");
+  });
+
+  it("patches facilities", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      {
+        title: "Teacher",
+        subject: "Mathematics",
+        description: "Grades 6-10",
+        facilities: ["Paid leave"],
+      },
+      actor,
+    );
+
+    const updated = await VacancyService.update(
+      "INS0001",
+      created.id,
+      { facilities: ["Health insurance", "Gratuity"] },
+      actor,
+    );
+    expect(updated.facilities).toEqual(["Health insurance", "Gratuity"]);
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.facilities).toEqual(["Health insurance", "Gratuity"]);
   });
 });
 
@@ -432,5 +608,77 @@ describe("VacancyService tenant isolation (mutation-checked)", () => {
 
     const after = await Vacancy.findById(foreign._id).lean();
     expect(after).toEqual(before);
+  });
+});
+
+describe("VacancyService per-institution record cap", () => {
+  /**
+   * Seeds `count` vacancies straight through the model, bypassing `create`.
+   * Deliberate for the read tests below — the whole point of `list`'s
+   * `.limit()` is to protect a collection that is already over the cap,
+   * which `create` by definition refuses to produce.
+   */
+  async function seed(institutionId: string, count: number) {
+    await Vacancy.insertMany(
+      Array.from({ length: count }, (_, i) => ({
+        institutionId,
+        title: `Vacancy ${String(i).padStart(4, "0")}`,
+        subject: "Clerk",
+        description: "Front office",
+      })),
+    );
+  }
+
+  it("refuses the record past the cap and stores nothing", async () => {
+    await seed("INS0001", VACANCY_MAX_RECORDS);
+
+    await expect(
+      VacancyService.create(
+        "INS0001",
+        { title: "One too many", subject: "Clerk", description: "Front office" },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(await Vacancy.countDocuments({ institutionId: "INS0001" })).toBe(VACANCY_MAX_RECORDS);
+  });
+
+  it("still accepts the record that lands exactly on the cap", async () => {
+    await seed("INS0001", VACANCY_MAX_RECORDS - 1);
+
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "The last one", subject: "Clerk", description: "Front office" },
+      actor,
+    );
+
+    expect(created.id).toBeDefined();
+    expect(await Vacancy.countDocuments({ institutionId: "INS0001" })).toBe(VACANCY_MAX_RECORDS);
+  });
+
+  // MUTATION-DISTINGUISHING: drop `institutionId` from the count and this is
+  // the one that fails — a full school next door must not consume this
+  // school's allowance.
+  it("counts only the caller's own records", async () => {
+    await seed("INS0002", VACANCY_MAX_RECORDS);
+
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "First of its own", subject: "Clerk", description: "Front office" },
+      actor,
+    );
+
+    expect(created.title).toBe("First of its own");
+    expect(await Vacancy.countDocuments({ institutionId: "INS0002" })).toBe(VACANCY_MAX_RECORDS);
+  });
+
+  // MUTATION-DISTINGUISHING: remove `.limit()` from `list` and this fails —
+  // a collection that is already over the cap must not come back whole.
+  it("caps what `list` returns even when the collection is already over the cap", async () => {
+    await seed("INS0001", VACANCY_MAX_RECORDS + 5);
+
+    const rows = await VacancyService.list("INS0001");
+
+    expect(rows).toHaveLength(VACANCY_MAX_RECORDS);
   });
 });
