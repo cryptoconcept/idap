@@ -5,7 +5,7 @@
 *"No. In neither repo does anything resembling a two-layer partner API...
 exist. There is no inbound integration surface at all in either codebase."*
 (its §4) — was correct when written and is **now false**. The API has since
-been built out completely: 12 route files, a self-describing contract module,
+been built out completely: 14 route files, a self-describing contract module,
 a full two-layer credential lifecycle, and a matching spec suite. This
 document replaces the old recon wholesale; nothing in the 27 Aug version
 should be relied on going forward.
@@ -18,9 +18,9 @@ connection at all. What changed, all reflected below: `POST
 (§1.2 step 1); eduFleet added **auto-remap**, so a re-connect can come back
 `awaiting_school` at 201 rather than `pending` (§1.2); the error catalog grew
 from 18 reasons to **20** (§5); the live contract version is **1.1.0**, not 1.0
-(§2.6, §7); `openapi.json` describes the connection-request body as a bare
-`{"type":"object"}`, which is how the `scopes` requirement came to be missed
-(§7); and partner onboarding has a **MongoDB replica-set prerequisite** (§1.1a).
+(§2.6, §7); `openapi.json` does not describe the connection-request **request
+body** at all, which is how the `scopes` requirement came to be missed (§7);
+and partner onboarding has a **MongoDB replica-set prerequisite** (§1.1a).
 
 Source of truth for everything below: `/Users/automicai/edufleet-exchange`
 (read-only for this recon — nothing in that repo was modified). All paths are
@@ -45,7 +45,7 @@ sellable/postable entities. Only one of them has a partner surface:
 
 | Entity | Partner API? | Where it lives instead |
 |---|---|---|
-| **Teacher jobs (vacancies)** | **Yes** — 5 of the 12 route files, both credential tiers | — |
+| **Teacher jobs (vacancies)** | **Yes** — 4 of the 14 route files, both credential tiers | — |
 | **Vehicles (bus/van/minibus)** | **No — zero API routes of any kind** | `web/src/lib/services/listings.ts`, called only from session-authenticated Server Actions off the school's own dashboard |
 | **Used assets/items (furniture, lab, computers, sports, other)** | **No — zero API routes**, and the feature itself is off | Same service, same Server Actions, gated behind `process.env.PHASE2_ASSETS === "true"` — currently unset, so asset listings 400 with *"Used-asset listings arrive in Phase 2 — vehicles only for now"* |
 
@@ -60,6 +60,18 @@ even retrofit an API key onto without eduFleet shipping new routes.
 **Vehicles and used items are not connector-reachable today, full stop.**
 Section 8 below has the full model/rules detail in case eduFleet ships a
 partner surface for them later.
+
+> **Correction, 2026-08-28 (branch fix wave) — this section is stale.** eduFleet
+> has since shipped exactly the partner surface the paragraph above says does
+> not exist: `POST`/`GET /api/partner/school/listings` and
+> `PATCH /api/partner/school/listings/{id}` (`partner-school-listings.ts`,
+> eduFleet commits `aa59e1a` / `6645363`). All three are grant-authenticated and
+> require the `listings:write` scope. **Nothing changes for IDAP:**
+> `REQUESTED_SCOPES` asks for `jobs:write` only, so an IDAP grant is refused on
+> those routes with `403 insufficient_scope`. Only the two "zero API routes"
+> claims above, and §8's grep result, are wrong — the vehicle/asset **model and
+> rules** detail in §8 was not re-verified in this pass and should be
+> re-checked before B2 relies on any of it.
 
 Everything from here on, up through Section 7, is about the one entity that
 **is** reachable: teacher jobs.
@@ -287,9 +299,11 @@ branch.
 
 ## 2. Every endpoint
 
-12 route files, 14 exported handlers, 11 distinct resource paths (the 12th
+14 route files, 17 exported handlers, 13 distinct resource paths (the 14th
 file, `openapi.json`, is the self-describing document generator, not a
-resource of its own).
+resource of its own). Counted 2026-08-28 in the branch fix wave:
+`find web/src/app/api/partner -name route.ts | wc -l` → 14, and one
+`export async function <VERB>` per handler → 17.
 
 | Path | Verb | Credential | Notes |
 |---|---|---|---|
@@ -307,8 +321,11 @@ resource of its own).
 | `/api/partner/school` | GET | grant | The linked school's snapshot + quota headroom |
 | `/api/partner/school/jobs` | POST | grant | Contract Two: post a vacancy as the linked school |
 | `/api/partner/school/jobs/{id}` | PATCH | grant | Update/close a Contract-Two vacancy (id is the Mongo `_id`, not `externalJobId`) |
+| `/api/partner/school/listings` | POST | grant (`listings:write`) | Post a vehicle/asset listing as the linked school — **out of IDAP's scope set**, see the §0 correction |
+| `/api/partner/school/listings` | GET | grant (`listings:write`) | List this partner's pushed listings for the linked school |
+| `/api/partner/school/listings/{id}` | PATCH | grant (`listings:write`) | Mark a pushed listing sold |
 
-By credential: **8 platform-key-only handlers, 3 grant-only handlers, 2
+By credential: **8 platform-key-only handlers, 6 grant-only handlers, 2
 dual-credential handlers (schema, whoami), 1 unauthenticated (openapi.json)**.
 
 ### 2.1 Contract One — `POST /api/partner/jobs` (platform key)
@@ -384,7 +401,7 @@ Required (per `SchoolJobInput`): `externalJobId`, `title`, `subject`,
 nothing to attribute.
 
 **Discrepancy worth flagging:** `partnerSchema().rules.required.schoolJob`
-(`partner-contract.ts:30`) lists only `["externalJobId", "title", "subject",
+(`partner-contract.ts:38`) lists only `["externalJobId", "title", "subject",
 "description"]` and never mentions `city` or `branchId` anywhere in the
 self-described contract. But the underlying `createJob()` throws
 `ValidationError("Job needs a location or branch")` if **neither** `city` nor
@@ -545,7 +562,7 @@ Two further wrinkles, both verified by spec:
 
 ## 5. Error catalog, verbatim
 
-From `errorCatalog()` (`partner-contract.ts:59-80`), also reachable live at
+From `errorCatalog()` (`partner-contract.ts:80-103`), also reachable live at
 `GET /api/partner/contract` (platform key). This document originally listed
 **18** reasons; the live contract at version **1.1.0** returns **20** — the two
 additions are at the bottom of the table and both belong to the
@@ -571,8 +588,15 @@ vehicle-listing API, not to the connection chain:
 | 500 | `corrupt_state` | A connection request's linked school reference is missing or invalid — contact support with the request id. |
 | 429 | `rate_limited` | Too many requests in the current minute (also used for a lost write-budget race — see §1.4). |
 | 429 | `write_cap_exceeded` | The daily write cap for this credential is spent. |
-| 409 | `duplicate_external_listing` | **Added in contract 1.1.0.** That listing's external ref already exists. Belongs to the **vehicle-listing** API — unreachable from the connection chain and from the job endpoints IDAP calls (§0: listings have no partner routes at all today). |
-| 409 | `listing_not_approved` | **Added in contract 1.1.0.** The listing has not cleared moderation. Also **vehicle-listing** only, for the same reason. |
+| 409 | `duplicate_external_listing` | That externalListingId already exists; the response carries listingId. |
+| 409 | `listing_not_approved` | Only an approved listing can be marked sold — this one is still pending review, or was rejected. |
+
+*Map's annotation, not part of the verbatim text: the last two rows were added
+in contract 1.1.0 and both belong to the **vehicle-listing** API — `POST`/`GET
+/api/partner/school/listings` and `PATCH /api/partner/school/listings/{id}`
+(see the §0 correction). All three require the `listings:write` scope, which
+IDAP does not request, so neither reason is reachable from the connection chain
+or from the job endpoints IDAP calls.*
 
 Two reasons exist in the code but are **not** in this catalog and are **not
 reachable from any partner route** — surfaced only by school-session/admin
@@ -641,15 +665,19 @@ values, and Contract Two's PATCH accepts only `"closed"` (§2.4).
 
 ## 7. The self-describing surfaces, and where they under-describe reality
 
-`GET /api/partner/schema` (`partnerSchema()`, `partner-contract.ts:13-57`)
+`GET /api/partner/schema` (`partnerSchema()`, `partner-contract.ts:18-78`)
 publishes `version` (**1.1.0** live), `credentials` (prefixes + header format), `enums`
 (subjects, facilities, districts, jobStatus, scopes), `rules` (required-field
 lists, dedupe prose, moderation prose, quota prose, location prose, salary
 prose, consent prose), and `jobShape` (a plain-English field-by-field
 description). `GET /api/partner/openapi.json` (`openApiDocument()`,
-`partner-contract.ts:84-131`) publishes a real OpenAPI 3.1 document covering
-all 14 handlers with generic per-status-code response descriptions (no
-per-field schemas — every response is typed `{type: "object"}`).
+`partner-contract.ts:107-161`) publishes a real OpenAPI 3.1 document covering
+**16 operations across 13 paths** with generic per-status-code response
+descriptions (no per-field schemas — every response is typed
+`{type: "object"}` by the `json()` helper). Counted 2026-08-28 in the branch
+fix wave, from the `paths` object itself. 16 of the repo's 17 exported
+handlers: the one it omits is its own `GET /api/partner/openapi.json`, the
+bullet below.
 
 Gaps between what's published and what's real, beyond the schoolJob
 required-list gap already covered in §2.3:
@@ -664,10 +692,14 @@ required-list gap already covered in §2.3:
   `partnerSchema()` or the OpenAPI doc's generic `{type: object}` responses;
   it's only knowable by reading `redeem/route.ts` directly, which is what this
   document did.
-- **The gap that actually cost something.** `openapi.json`'s
-  `POST /api/partner/connection-requests` types both its request body and its
-  responses as a bare `{"type": "object"}` — no properties, no `required`
-  list. The mandatory `scopes` array (§1.2 step 1) is therefore **invisible**
+- **The gap that actually cost something.** `openapi.json` describes no
+  request body for `POST /api/partner/connection-requests` — or for any other
+  route. `openApiDocument()` emits only `summary`, `security`, `parameters`
+  and `responses` per operation; `grep -c requestBody
+  web/src/lib/partner-contract.ts` returns **0**. (The *responses* are the bare
+  `{"type": "object"}`, via the `json()` helper — that is a separate, weaker
+  gap.) So the mandatory `scopes` array (§1.2 step 1) is not
+  under-described, it is **absent**, and therefore **invisible**
   to anyone generating a client from the OpenAPI document, which is exactly
   how IDAP's adapter came to be written without it and could not open a
   single connection. `GET /api/partner/schema` *does* carry it, in
@@ -900,7 +932,7 @@ and (2) is the one with no existing scaffolding to build from.
 
 - **`grant_race` (409)** is documented in the error catalog and pinned by its
   own spec test as *"reserved for a future concurrent-redeem scenario; not
-  currently emitted"* (`partner-contract.ts:75`,
+  currently emitted"* (`partner-contract.ts:98`,
   `partner-contract.spec.ts:36-41`). Left exactly as documented here — do not
   build connector logic that expects to see it; do not assume it will never
   appear either, since it is explicitly reserved for a scenario the code
