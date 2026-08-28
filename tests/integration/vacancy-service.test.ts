@@ -1,13 +1,88 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Types } from "mongoose";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { Vacancy, Activity } from "@/models";
+import { Vacancy, Activity, PlatformCredential, PlatformConnection } from "@/models";
 import { VACANCY_MAX_RECORDS } from "@/lib/constants";
 import { VacancyService } from "@/services/vacancy.service";
+import { encryptCredential } from "@/lib/security/credentials";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
+
+// ---------------------------------------------------------------------------
+// Task 5 fixtures — `remove` now closes a published listing through
+// `VacancyPublishService.pushClose` before it deletes, so these tests need
+// the same `fetch`-stubbing setup `vacancy-publish-service.test.ts` uses
+// (see that file's header comment for why: stubbing `fetch` keeps the real
+// adapter and the real URL/method construction in the path, so "no HTTP
+// call" means no HTTP call, not "no adapter call").
+// ---------------------------------------------------------------------------
+
+const PLATFORM_KEY = "ef_pkey_test_platform";
+const BASE_URL = "https://api.edufleet.test";
+const VALID_VAULT_KEY = Buffer.alloc(32, 9).toString("base64");
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Stubs `fetch` with one queued response per call, in order. */
+function stubFetch(...responses: Response[]) {
+  const mock = vi.fn();
+  for (const response of responses) mock.mockResolvedValueOnce(response);
+  vi.stubGlobal("fetch", mock);
+  return mock;
+}
+
+async function makeCredential() {
+  return PlatformCredential.create({
+    platform: "EDUFLEET",
+    keyEncrypted: encryptCredential(PLATFORM_KEY),
+    baseUrl: BASE_URL,
+    active: true,
+  });
+}
+
+/** A vacancy already carrying a `listing` block — the shape `remove` now has
+ *  to close before it may delete. `jobId`/`externalJobId` default to values
+ *  derived from the vacancy's own id, matching what a real first listing
+ *  looks like. */
+async function makeListedVacancy(
+  institutionId: string,
+  listingOverrides: Record<string, unknown> = {},
+  vacancyOverrides: Record<string, unknown> = {},
+) {
+  const vacancy = await Vacancy.create({
+    institutionId,
+    title: "Mathematics Teacher",
+    subject: "Mathematics",
+    description: "Teach Mathematics to Grades 8-10.",
+    status: "OPEN",
+    ...vacancyOverrides,
+  });
+  const updated = await Vacancy.findByIdAndUpdate(
+    vacancy._id,
+    {
+      $set: {
+        listing: {
+          jobId: `ef-job-${String(vacancy._id)}`,
+          externalJobId: String(vacancy._id),
+          contract: "AGGREGATED",
+          lastPushedAt: new Date(),
+          claimState: "unclaimed",
+          remoteStatus: "active",
+          ...listingOverrides,
+        },
+      },
+    },
+    { new: true, runValidators: true },
+  );
+  return updated!;
+}
 
 beforeAll(async () => {
   await startTestDatabase("vacancy-service");
@@ -18,6 +93,10 @@ beforeEach(async () => {
   await clearDatabase();
   await makeInstitution("INS0001");
   await makeInstitution("INS0002");
+  process.env.IDAP_CREDENTIAL_KEY = VALID_VAULT_KEY;
+});
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe("VacancyService round trip", () => {
@@ -788,5 +867,186 @@ describe("VacancyService per-institution record cap", () => {
     const rows = await VacancyService.list("INS0001");
 
     expect(rows).toHaveLength(VACANCY_MAX_RECORDS);
+  });
+});
+
+describe("VacancyService.remove closes the eduFleet listing before deleting (Task 5)", () => {
+  it("closes a published listing first, then deletes the vacancy", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(200, { jobId: `ef-job-${String(vacancy._id)}`, status: "closed" }),
+    );
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; body?: string }];
+    expect(String(url)).toBe(`${BASE_URL}/api/partner/jobs/${String(vacancy._id)}`);
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body ?? "{}")).toEqual({ status: "closed" });
+
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+
+    // The audit trail records both halves of what just happened, in order:
+    // the close eduFleet confirmed, then the delete IDAP performed.
+    const activityRows = await Activity.find({ institutionId: "INS0001", entityType: "VACANCY" })
+      .sort({ createdAt: 1 })
+      .lean();
+    expect(activityRows.map((row) => row.action)).toEqual([
+      "Vacancy closed on eduFleet",
+      "Vacancy deleted",
+    ]);
+  });
+
+  // MUTATION-DISTINGUISHING: `pushClose` never creates a listing, so a
+  // vacancy with none should delete with no HTTP call at all. This is the
+  // case that would catch `remove` reaching for the wrong method — `publish`
+  // or `repush` instead of `pushClose` — because either of those WOULD
+  // create a listing for an OPEN vacancy with none yet: the wrong call
+  // issues an HTTP POST here, where the right one issues nothing. (A DRAFT
+  // vacancy would not distinguish this: `publish` refuses a DRAFT before any
+  // HTTP call either, so the mutation would go unnoticed — OPEN is
+  // load-bearing.)
+  it("MUTATION-DISTINGUISHING: a vacancy with no listing block deletes without any HTTP call at all", async () => {
+    // A real, active credential IS present here — deliberately, unlike the
+    // other tests in this block that omit one. If `remove` ever reached for
+    // `publish`/`repush` instead of `pushClose`, this OPEN, fully-valid
+    // vacancy (title/subject/description/city all present) would clear
+    // `preflight` and actually reach `ctx.http`: the missing-credential
+    // shortcut that would otherwise mask that bug is removed on purpose.
+    await makeCredential();
+    const vacancy = await Vacancy.create({
+      institutionId: "INS0001",
+      title: "Never published",
+      subject: "Clerk",
+      description: "Front office",
+      status: "OPEN",
+    });
+    const fetchMock = stubFetch();
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+  });
+
+  it("refuses to delete when eduFleet blocks the close, and leaves the vacancy and its listing intact", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001");
+    const fetchMock = stubFetch(jsonResponse(403, { error: "claimed", reason: "claimed" }));
+
+    await expect(
+      VacancyService.remove("INS0001", String(vacancy._id), actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    // The single most valuable rule this plan produced: when a guard exists
+    // to prevent an action, assert the action did not happen — not merely
+    // that an error came back. A 403 has already been answered by the time
+    // this rejects; what matters is that the DELETE itself never landed.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const survived = await Vacancy.findById(vacancy._id).lean();
+    expect(survived).not.toBeNull();
+    expect(survived?.listing?.jobId).toBe(`ef-job-${String(vacancy._id)}`);
+  });
+
+  it("refuses to delete when eduFleet reports the id already belongs to another listing, and leaves the vacancy intact", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(409, {
+        error: "already exists",
+        reason: "duplicate_external_job",
+        jobId: "ef-job-elsewhere",
+        contract: "platform",
+      }),
+    );
+
+    await expect(
+      VacancyService.remove("INS0001", String(vacancy._id), actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await Vacancy.findById(vacancy._id).lean()).not.toBeNull();
+  });
+
+  // The trap this task exists to close: a SCHOOL_POSTED listing whose school
+  // has since disconnected from eduFleet is unreachable through IDAP (the
+  // grant is gone), and Contract One cannot rescue it (its PATCH filters
+  // `origin: "aggregated"`, and a school-posted job is not). Refusing the
+  // delete here is still correct — an orphaned public advert is worse than a
+  // vacancy that will not delete yet — but the refusal must name a way out,
+  // or it is a trap rather than a guard.
+  it("MUTATION-DISTINGUISHING: names both eduFleet Exchange routes when a disconnected school's listing cannot be closed", async () => {
+    await makeCredential();
+    // No PlatformConnection at all: exactly what "disconnected" looks like.
+    const vacancy = await makeListedVacancy("INS0001", { contract: "SCHOOL_POSTED" });
+    const fetchMock = stubFetch();
+
+    const error = await VacancyService.remove("INS0001", String(vacancy._id), actor).catch(
+      (e: unknown) => e as Error & { code?: string },
+    );
+
+    expect(error).toMatchObject({ code: "VALIDATION_ERROR" });
+    // No HTTP call: the refusal happens before eduFleet is even reached —
+    // there is no grant left to authenticate a close with.
+    expect(fetchMock).not.toHaveBeenCalled();
+    // Route one: fix IDAP's side of the connection.
+    expect(error?.message).toMatch(/reconnect/i);
+    // Route two: the job belongs to the school directly on eduFleet, so they
+    // are never stuck even if they never reconnect.
+    expect(error?.message).toMatch(/dashboard/i);
+
+    expect(await Vacancy.findById(vacancy._id).lean()).not.toBeNull();
+  });
+
+  it("closes a SCHOOL_POSTED listing (a reconnected school) addressed by eduFleet's own job id, not the vacancy id", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001", {
+      contract: "SCHOOL_POSTED",
+      jobId: "ef-school-job-9",
+    });
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "EDUFLEET",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("ef_pgrant_test"),
+      scopes: ["jobs:write"],
+    });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-school-job-9", status: "closed" }));
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(String(url)).toBe(`${BASE_URL}/api/partner/school/jobs/ef-school-job-9`);
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+  });
+
+  // MUTATION-DISTINGUISHING (tenant): the read `remove` performs purely to
+  // learn whether a listing exists is a SEPARATE filter from the delete
+  // below it — same reasoning as the update-side tenant tests above. If that
+  // read's `institutionId` filter were dropped, this call would read
+  // INS0002's listed vacancy under an INS0001 request and could push a close
+  // to eduFleet on INS0002's behalf, before the (still correctly scoped)
+  // delete below caught the mismatch and 404s. Without this test, that bug
+  // would surface only as the SAME plausible NOT_FOUND the correct code
+  // produces — exactly the failure mode the brief warns a later write filter
+  // can mask on a dropped read filter — while a foreign vacancy had already
+  // been pushed to.
+  it("MUTATION-DISTINGUISHING: removing INS0002's listed vacancy under INS0001 never reaches eduFleet and leaves the row untouched", async () => {
+    await makeCredential();
+    const foreign = await makeListedVacancy("INS0002");
+    const before = await Vacancy.findById(foreign._id).lean();
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "leak", status: "closed" }));
+
+    await expect(
+      VacancyService.remove("INS0001", String(foreign._id), actor),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const after = await Vacancy.findById(foreign._id).lean();
+    expect(after).toEqual(before);
   });
 });

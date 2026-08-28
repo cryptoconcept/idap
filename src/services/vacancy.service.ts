@@ -3,9 +3,10 @@ import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Vacancy, type VacancyDoc } from "@/models";
 import { notFound, validationError } from "@/lib/api/errors";
-import { VACANCY_MAX_RECORDS } from "@/lib/constants";
+import { PLATFORM_LABELS, VACANCY_MAX_RECORDS } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
+import { VacancyPublishService, type VacancyPublishOutcome } from "./vacancy-publish.service";
 
 export type VacancyDTO = {
   id: string;
@@ -103,6 +104,93 @@ function buildVacancyUpdate(patch: VacancyPatchInput): {
   }
 
   return { set, unset };
+}
+
+const EDUFLEET_LABEL = PLATFORM_LABELS.EDUFLEET;
+
+/**
+ * Turns a reason into a complete sentence, so it reads naturally whether it
+ * came from eduFleet's own wording (`blockedMessage`/`conflictMessage`,
+ * which already end in a period) or from a caught error's raw `.message`
+ * (`resolveTarget`'s refusal does not).
+ */
+function asSentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/**
+ * Task 5: once a vacancy is published, its own `_id` IS eduFleet's
+ * `externalJobId` — deleting it without closing the listing first would
+ * orphan a live, publicly visible advert with no id left to close it.
+ * Refusing the delete is still correct (an orphaned public advert is worse
+ * than a vacancy that will not delete yet), but the refusal must never be a
+ * dead end.
+ *
+ * A `SCHOOL_POSTED` listing is a job the school posted under its OWN
+ * eduFleet account, so it stays closable there directly even when IDAP's own
+ * route to it (its grant) is gone — the escape hatch that keeps this from
+ * trapping a school that has since disconnected from eduFleet between a live
+ * public advert and a row they cannot remove. An `AGGREGATED` listing was
+ * posted under IDAP's platform key, not the school's own account, so no such
+ * direct route is offered for it here; the only path is fixing whatever
+ * blocked the close and trying again.
+ */
+function deleteRefusedAfterFailedClose(
+  contract: string,
+  reason: string,
+): ReturnType<typeof validationError> {
+  const why = asSentence(reason);
+  const nextStep =
+    contract === "SCHOOL_POSTED"
+      ? `This listing was posted under your school's own ${EDUFLEET_LABEL} account, so you can also close it directly from your ${EDUFLEET_LABEL} dashboard — then delete this vacancy here.`
+      : `Close the listing on ${EDUFLEET_LABEL}, then delete this vacancy.`;
+  return validationError(
+    `This vacancy could not be deleted: its ${EDUFLEET_LABEL} listing could not be closed first, and deleting it now would leave that listing live with nothing left to close it. ${why} ${nextStep}`,
+  );
+}
+
+/**
+ * Closes a vacancy's eduFleet listing before `remove` is allowed to delete
+ * it. Resolves quietly when there is nothing to close (`NOT_LISTED`, no HTTP
+ * call at all) or the close just succeeded (`CLOSED`) — both mean it is safe
+ * to delete. Anything else — a `BLOCKED`/`CONFLICT` outcome, or an error
+ * `pushClose` itself threw (the disconnected-`SCHOOL_POSTED` case chief among
+ * them) — refuses the delete rather than risk an orphaned public advert.
+ */
+async function closeListingBeforeDelete(
+  institutionId: string,
+  vacancyId: string,
+  contract: string,
+  actor: { id: string; name: string },
+): Promise<void> {
+  let outcome: VacancyPublishOutcome;
+  try {
+    outcome = await VacancyPublishService.pushClose(institutionId, vacancyId, actor);
+  } catch (error) {
+    throw deleteRefusedAfterFailedClose(
+      contract,
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+
+  switch (outcome.status) {
+    case "CLOSED":
+    case "NOT_LISTED":
+      return;
+    case "BLOCKED":
+    case "CONFLICT":
+      throw deleteRefusedAfterFailedClose(contract, outcome.message);
+    case "PUSHED":
+      // `pushClose` never creates a listing, so this arm is unreachable in
+      // practice. Guarded so the switch stays exhaustive under TypeScript
+      // rather than a `default` that would silently swallow a future outcome
+      // kind this function has never seen.
+      throw deleteRefusedAfterFailedClose(
+        contract,
+        `${EDUFLEET_LABEL} did not confirm the listing was closed`,
+      );
+  }
 }
 
 export const VacancyService = {
@@ -250,6 +338,22 @@ export const VacancyService = {
   ): Promise<void> {
     await connectToDatabase();
     const objectId = toObjectId(vacancyId);
+
+    // Task 5: once published, this vacancy's own id IS eduFleet's
+    // `externalJobId` — deleting it out from under a live listing would
+    // orphan a public advert with no id left to close it. Read before the
+    // delete, tenant-scoped the same as the delete below, purely to learn
+    // whether a listing exists and (if it does) which contract it is under —
+    // `pushClose` itself is a no-op with no HTTP call when there is nothing
+    // published, so this only ever reaches eduFleet when a listing is real.
+    const existing = await Vacancy.findOne({ _id: objectId, institutionId })
+      .select("listing")
+      .lean<Pick<VacancyDoc, "listing">>();
+    if (!existing) throw notFound("Vacancy not found");
+
+    if (existing.listing) {
+      await closeListingBeforeDelete(institutionId, vacancyId, existing.listing.contract, actor);
+    }
 
     const removed = await Vacancy.findOneAndDelete({
       _id: objectId,
