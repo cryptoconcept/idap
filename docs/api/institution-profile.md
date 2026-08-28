@@ -466,6 +466,13 @@ fetched per request; both are **always present**, as `[]` when the institution h
 Only records with `status: "ACTIVE"` are returned — the status itself never appears in the
 payload, and a hidden record is dropped rather than marked.
 
+**Hiding a record is not immediate on the wire.** Both public profile routes send
+`Cache-Control: public, max-age=300`, so a record hidden a moment ago can still be served
+from a shared cache, a CDN or a browser for up to five minutes after the change. The same
+is true of a hidden `media` item, and of any other edit to the profile. Treat the
+`ACTIVE`-only guarantee as one about what IDAP serves, not about what every caller
+already holds.
+
 | `achievements[]` field | Notes |
 | --- | --- |
 | `id` | The achievement's own id. |

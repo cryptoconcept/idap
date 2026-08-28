@@ -92,11 +92,17 @@ const DOC = {
  * sorted, by the database. `status`, `createdAt` and `updatedAt` ride along on
  * those DTOs, and the assertions below pin that none of them survives the
  * projection's allow-list.
+ *
+ * `institutionId` is on neither DTO today, and is planted here deliberately:
+ * it is what a row would look like if someone widened `serialize`, and without
+ * it the `not.toHaveProperty("institutionId")` assertions below would be
+ * vacuous — passing whatever the projection did.
  */
 const SHOWCASE = {
   achievements: [
     {
       id: "ach-1",
+      institutionId: "INS0001",
       category: "SPORTS",
       title: "State Kabaddi Champions",
       description: "Under-16 team",
@@ -120,6 +126,7 @@ const SHOWCASE = {
   alumni: [
     {
       id: "alum-1",
+      institutionId: "INS0001",
       name: "Dr. Meera Iyer",
       batch: "2012-2015",
       category: "DOCTOR",

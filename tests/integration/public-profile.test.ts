@@ -335,6 +335,31 @@ describe("public profile API", () => {
     expect(alumnus).not.toHaveProperty("institutionId");
   });
 
+  // The slug route is a second entry point to the same payload. It is safe by
+  // construction today — both routes call `InstitutionService.getPublicProfile`
+  // — but that equivalence only holds as long as nobody changes one of them, so
+  // the new arrays are exercised through it at least once.
+  it("serves the same achievements and alumni through the slug route", async () => {
+    await makeInstitution("INS0001", { slug: "sunrise-academy", profileStatus: "PUBLISHED" });
+    await makeAchievement("INS0001", { category: "SPORTS", title: "State Kabaddi Champions" });
+    await makeAlumnus("INS0001", { name: "Dr. Meera Iyer", category: "DOCTOR" });
+
+    const bySlug = await callBySlug("sunrise-academy");
+    expect(bySlug.status).toBe(200);
+    const slugBody = await bySlug.json();
+    expect((slugBody.profile.achievements as { title: string }[]).map((row) => row.title)).toEqual([
+      "State Kabaddi Champions",
+    ]);
+    expect((slugBody.profile.alumni as { name: string }[]).map((row) => row.name)).toEqual([
+      "Dr. Meera Iyer",
+    ]);
+
+    // Identical to the id route's, which is the contract the docs promise.
+    const idBody = await (await callById("INS0001")).json();
+    expect(slugBody.profile.achievements).toEqual(idBody.profile.achievements);
+    expect(slugBody.profile.alumni).toEqual(idBody.profile.alumni);
+  });
+
   // Mutation check (see task-10-report.md): removing `status: "ACTIVE"` from
   // `AchievementService.listPublic`'s filter makes exactly this test fail — the
   // hidden achievement's title reappears in the response body.

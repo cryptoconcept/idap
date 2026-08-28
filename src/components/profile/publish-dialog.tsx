@@ -57,6 +57,16 @@ const GOES_PUBLIC: { label: string; detail: string }[] = [
     label: "Social links",
     detail: "Facebook, Instagram, YouTube, LinkedIn, X, and every extra link you added",
   },
+  {
+    label: "Achievements",
+    detail:
+      "Every achievement you have not hidden — its title, description, category, level, the date it happened, and its photos and certificates. This includes the full name and class of every student you have named on an achievement, and any student names printed inside the certificate files you upload. Hide an achievement if you do not want a student named publicly",
+  },
+  {
+    label: "Notable alumni",
+    detail:
+      "Every alumnus you have not hidden — their name, batch, category, current role, organisation, photo and the note you wrote about them",
+  },
 ];
 
 const STAYS_PRIVATE =
