@@ -149,6 +149,28 @@ describe("VacancyService round trip", () => {
   });
 });
 
+describe("Vacancy model: listing block", () => {
+  it("stores a listing block and returns it on the DTO", async () => {
+    const v = await Vacancy.create({
+      institutionId: "INS0001", title: "Maths Teacher", subject: "Mathematics",
+      description: "Teach maths", status: "OPEN",
+      listing: { jobId: "job-1", contract: "AGGREGATED", lastPushedAt: new Date(), claimState: "unclaimed" },
+    });
+    const found = await Vacancy.findById(v._id).lean();
+    expect(found?.listing?.jobId).toBe("job-1");
+    expect(found?.listing?.contract).toBe("AGGREGATED");
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects a listing contract outside the enum", async () => {
+    await expect(
+      Vacancy.create({
+        institutionId: "INS0001", title: "T", subject: "Mathematics", description: "d",
+        listing: { jobId: "j", contract: "NOT_A_CONTRACT", lastPushedAt: new Date() },
+      }),
+    ).rejects.toThrow(/contract/);
+  });
+});
+
 describe("VacancyService three-state patch: salaryMin", () => {
   async function seed() {
     return VacancyService.create(
@@ -504,6 +526,30 @@ describe("VacancyService PATCHABLE_FIELDS allow-list", () => {
     const raw = await Vacancy.findById(created.id).lean();
     expect(raw?.institutionId).toBe("INS0001");
     expect(raw?.title).toBe("Renamed");
+  });
+
+  // Create-side counterpart of the patch test above. Since `vacancyCreateSchema`
+  // gained `.strict()` (src/lib/validation/vacancy.ts), a route-level create
+  // carrying `institutionId` in the body now 400s before it ever reaches
+  // `VacancyService.create` — see tests/integration/vacancy-routes.test.ts's
+  // "rejects a create body naming another institution". That means the
+  // service's own defense-in-depth (`{ ...input, institutionId }` in
+  // `create`, re-assigning AFTER the spread) is no longer exercised by any
+  // route-level test. This proves it directly, the same way the patch test
+  // above bypasses `VacancyPatchInput`'s type to reach the service straight.
+  it("ignores an institutionId key smuggled into create input even if a caller-built input carries it", async () => {
+    const smuggledInput = {
+      title: "Own vacancy",
+      subject: "Clerk",
+      description: "Front office",
+      institutionId: "INS0002",
+    } as unknown as VacancyCreateInput;
+
+    const created = await VacancyService.create("INS0001", smuggledInput, actor);
+
+    expect(created.id).toBeDefined();
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.institutionId).toBe("INS0001");
   });
 });
 

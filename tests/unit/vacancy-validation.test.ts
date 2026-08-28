@@ -106,6 +106,21 @@ describe("vacancyCreateSchema", () => {
     });
     expect(result.facilities).toEqual(["Gratuity", "Paid leave"]);
   });
+
+  // MUTATION-DISTINGUISHING: `listing` (src/models/Vacancy.ts) records what
+  // eduFleet knows about a vacancy and is written only by the (future) push
+  // service — never by a client. `vacancyCreateSchema` has no `listing`
+  // field, so `.strict()` (src/lib/validation/vacancy.ts) is what turns that
+  // absence into an outright rejection rather than a silent strip. Remove
+  // `.strict()` and this passes straight through instead of throwing.
+  it("MUTATION-DISTINGUISHING: rejects a listing block on create", () => {
+    expect(() =>
+      vacancyCreateSchema.parse({
+        ...valid,
+        listing: { jobId: "job-1", contract: "AGGREGATED", lastPushedAt: new Date() },
+      }),
+    ).toThrow();
+  });
 });
 
 /**
@@ -157,6 +172,18 @@ describe("vacancyCreateSchema numeric messages", () => {
 describe("vacancyPatchSchema", () => {
   it("makes every field optional", () => {
     expect(vacancyPatchSchema.parse({})).toEqual({});
+  });
+
+  // Symmetric with the create-side test in the `vacancyCreateSchema`
+  // describe block above: `listing` is not a patchable field either
+  // (`PATCHABLE_FIELDS` in `vacancy.service.ts` omits it too), and
+  // `.strict()` is what makes an attempt to set it a hard rejection.
+  it("MUTATION-DISTINGUISHING: rejects a listing block on patch", () => {
+    expect(() =>
+      vacancyPatchSchema.parse({
+        listing: { jobId: "job-1", contract: "AGGREGATED", lastPushedAt: new Date() },
+      }),
+    ).toThrow();
   });
 
   it("distinguishes an explicit null from an absent key on salaryMin", () => {

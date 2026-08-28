@@ -614,3 +614,16 @@ export const VACANCY_DESCRIPTION_MAX = 2000;
  *  dashboard list and the eduFleet sync payload, same shape as
  *  `ALUMNI_MAX_RECORDS` / `ACHIEVEMENT_MAX_RECORDS`. */
 export const VACANCY_MAX_RECORDS = 200;
+
+/** Which eduFleet contract created a listing. Contract One (platform key)
+ *  produces an `aggregated` job the school may later claim; Contract Two
+ *  (school grant) produces a `school_posted` job it already owns. */
+export const VACANCY_LISTING_CONTRACTS = ["AGGREGATED", "SCHOOL_POSTED"] as const;
+export type VacancyListingContract = (typeof VACANCY_LISTING_CONTRACTS)[number];
+
+/** eduFleet's claim states, as far as IDAP can observe them. `claim_pending`
+ *  is NOT terminal — an admin rejecting the claim returns the job to
+ *  `unclaimed` (jobs-reverification S4), so IDAP must never treat a 403 as a
+ *  permanent retirement. */
+export const VACANCY_CLAIM_STATES = ["unclaimed", "claim_pending", "claimed"] as const;
+export type VacancyClaimState = (typeof VACANCY_CLAIM_STATES)[number];

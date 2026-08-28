@@ -146,11 +146,16 @@ describe("POST /api/settings/vacancies", () => {
   // This is the test that pins the route's `.parse()`. `_id` is a real
   // Mongoose path with no re-assignment in `VacancyService.create` (only
   // `institutionId` is re-assigned after the spread — verified by reading
-  // `vacancy.service.ts` before writing this test). Without `.parse()`, a
-  // caller-chosen `_id` in the raw body would flow straight into
-  // `Vacancy.create` and become the document's actual id, since `_id` is not
-  // in `vacancyCreateSchema` and nothing else strips it.
-  it("MUTATION-DISTINGUISHING: strips _id from the create body — the stored document gets a server-generated id", async () => {
+  // `vacancy.service.ts` before writing this test) and is not declared on
+  // `vacancyCreateSchema`. Before `vacancyCreateSchema` gained `.strict()`
+  // (Task 1, to keep the new `listing` block out of client input), an
+  // undeclared `_id` was silently stripped and the create still succeeded
+  // with a server-generated id; `.strict()` now rejects the whole request
+  // instead. Either way a caller-chosen `_id` never reaches `Vacancy.create`
+  // — but the response changed from 200 to 400, so this test had to change
+  // with it. Without `.parse()` at all, this smuggled `_id` would flow
+  // straight through and become the document's actual id.
+  it("MUTATION-DISTINGUISHING: rejects a create body carrying an unrecognised _id key, and stores nothing", async () => {
     await signInWithCookie("INS0001");
 
     const response = await createVacancy(
@@ -158,23 +163,19 @@ describe("POST /api/settings/vacancies", () => {
     );
     const payload = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(payload.vacancy.id).not.toBe(SMUGGLED_ID);
-
-    // Not `Vacancy.findById(payload.vacancy.id)`: that id is already proven
-    // to differ from `SMUGGLED_ID` by the assertion above, so re-fetching by
-    // it and checking `_id` again would be tautological. What actually
-    // matters is that no document exists under the id the caller tried to
-    // choose at all.
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
     expect(await Vacancy.findById(SMUGGLED_ID).lean()).toBeNull();
+    expect(await Vacancy.countDocuments({})).toBe(0);
   });
 
   // `createdAt` is parse-only exactly like `_id`: not in
   // `vacancyCreateSchema`, never re-assigned by `VacancyService.create`, but
   // a real Mongoose path (`timestamps: true`) that `list` sorts by (`{
   // createdAt: -1 }`) — a smuggled value could pin a vacancy to the top of
-  // every listing indefinitely.
-  it("MUTATION-DISTINGUISHING: strips createdAt from the create body — the stored document gets a server-generated timestamp", async () => {
+  // every listing indefinitely. Same `.strict()`-driven change as the `_id`
+  // test above: rejected outright now, rather than silently stripped.
+  it("MUTATION-DISTINGUISHING: rejects a create body carrying an unrecognised createdAt key, and stores nothing", async () => {
     await signInWithCookie("INS0001");
     const smuggledCreatedAt = "2099-01-01T00:00:00.000Z";
 
@@ -186,21 +187,20 @@ describe("POST /api/settings/vacancies", () => {
     );
     const payload = await response.json();
 
-    expect(response.status).toBe(200);
-
-    const raw = await Vacancy.findById(payload.vacancy.id).lean();
-    expect(raw?.createdAt?.toISOString()).not.toBe(smuggledCreatedAt);
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+    expect(await Vacancy.countDocuments({})).toBe(0);
   });
 
-  // A SECOND parse pin, stronger than the `_id` one above because it
-  // asserts the raw stored document. `status` is absent from
-  // `vacancyCreateSchema` entirely, AND `VacancyService.create` never
+  // A SECOND parse pin, alongside the `_id` one above. `status` is absent
+  // from `vacancyCreateSchema` entirely, AND `VacancyService.create` never
   // re-assigns it after the spread — unlike `AchievementService.create`'s
   // `{ ...input, institutionId, status: "ACTIVE" }`. A Mongoose `default`
   // only fills in when the path is ABSENT, so without `.parse()` a smuggled
   // `status: "OPEN"` would persist exactly as sent, skipping the DRAFT
-  // review step that exists to stop a half-written advert going live.
-  it("MUTATION-DISTINGUISHING: strips status from the create body — a vacancy is always born DRAFT", async () => {
+  // review step that exists to stop a half-written advert going live. Same
+  // `.strict()`-driven change as above: rejected outright now.
+  it("MUTATION-DISTINGUISHING: rejects a create body carrying an unrecognised status key, and stores nothing", async () => {
     await signInWithCookie("INS0001");
 
     const response = await createVacancy(
@@ -211,19 +211,26 @@ describe("POST /api/settings/vacancies", () => {
     );
     const payload = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(payload.vacancy.status).toBe("DRAFT");
-
-    const raw = await Vacancy.findById(payload.vacancy.id).lean();
-    expect(raw?.status).toBe("DRAFT");
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+    expect(await Vacancy.countDocuments({})).toBe(0);
   });
 
   // Tenant scoping: institutionId comes from requireInstitution() and
-  // nowhere else. This does not pin the route's `.parse()` — `create`
-  // re-assigns `institutionId` after the spread regardless of what the body
-  // carries — but the behaviour is still a binding requirement and needs its
-  // own coverage.
-  it("creates the record under the caller's institution even when the body names another institution, and leaves that institution's own record untouched", async () => {
+  // nowhere else. Before `.strict()`, `institutionId` in the body was
+  // silently stripped and `VacancyService.create` still re-assigned the
+  // session's institutionId after the spread, so this request used to
+  // succeed (200) under the caller's own institution regardless of what the
+  // body claimed — and did NOT pin the route's `.parse()`, since the service
+  // reassignment alone was already enough to protect it. `.strict()` now
+  // rejects the body outright before that re-assignment is ever reached, so
+  // this DOES now pin `.parse()`: without it, the smuggled `institutionId`
+  // would flow through unrejected and the request would 200 again (still
+  // correctly scoped, by the service's re-assignment). The service-level
+  // re-assignment itself stays directly covered in
+  // tests/integration/vacancy-service.test.ts's "ignores an institutionId key
+  // smuggled into create input".
+  it("MUTATION-DISTINGUISHING: rejects a create body naming another institution, and leaves both institutions' records untouched", async () => {
     const foreign = await makeVacancy("INS0002", { title: "INS0002 original" });
     const before = await Vacancy.findById(foreign.id).lean();
     await signInWithCookie("INS0001");
@@ -236,13 +243,12 @@ describe("POST /api/settings/vacancies", () => {
     );
     const payload = await response.json();
 
-    expect(response.status).toBe(200);
-
-    const raw = await Vacancy.findById(payload.vacancy.id).lean();
-    expect(raw?.institutionId).toBe("INS0001");
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
 
     const after = await Vacancy.findById(foreign.id).lean();
     expect(after).toEqual(before);
+    expect(await Vacancy.countDocuments({ institutionId: "INS0001" })).toBe(0);
   });
 
   it("MUTATION-DISTINGUISHING: rejects a cross-origin create and creates nothing", async () => {

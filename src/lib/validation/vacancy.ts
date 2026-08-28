@@ -66,7 +66,16 @@ const salaryOrder = (v: { salaryMin?: number | null; salaryMax?: number | null }
   v.salaryMin == null || v.salaryMax == null || v.salaryMin <= v.salaryMax;
 const salaryOrderMessage = { message: "salary: the minimum may not exceed the maximum", path: ["salaryMin"] };
 
-export const vacancyCreateSchema = z.object(vacancyFields).refine(salaryOrder, salaryOrderMessage);
+// `.strict()`, not the default strip mode: `listing` (the eduFleet sync
+// state written only by the push service — see `src/models/Vacancy.ts`) must
+// never be settable by a client, and a schema that silently stripped it would
+// give a caller no signal that their `listing` was ignored rather than
+// stored. `.strict()` must sit before `.refine()` — `.refine()` returns a
+// `ZodEffects` that no longer exposes `.strict()`.
+export const vacancyCreateSchema = z
+  .object(vacancyFields)
+  .strict()
+  .refine(salaryOrder, salaryOrderMessage);
 
 export const vacancyPatchSchema = z
   .object({
@@ -79,6 +88,7 @@ export const vacancyPatchSchema = z
     facilities: facilities.optional(),
     status: z.enum(VACANCY_STATUSES).optional(),
   })
+  .strict()
   .refine(salaryOrder, salaryOrderMessage);
 
 export type VacancyCreateInput = z.infer<typeof vacancyCreateSchema>;
