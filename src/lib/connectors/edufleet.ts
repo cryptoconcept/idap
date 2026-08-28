@@ -419,6 +419,21 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
           // No `remoteInstitution`: re-fetching it would spend a live grant
           // call on a poll, and the service leaves the stored value alone
           // when the field is absent.
+          //
+          // The cost of that short-circuit is large enough to write down.
+          // Returning here means **no code path in this plan (B1) makes a
+          // grant-authenticated call for an established connection at all**:
+          // `refresh` stops short of `fetchRemoteInstitution`, and `sync` is
+          // the placeholder above. So a school can revoke its grant and IDAP
+          // will keep showing Connected indefinitely — `refresh`'s
+          // `ConnectorAuthError` branch only ever fires in the narrow
+          // mid-redeem window, never for a connection already established.
+          //
+          // Plan B2's `sync` — the vacancy push — is the thing that closes
+          // this: it is the first and only path that will exercise a stored
+          // grant, which makes it the sole revocation detector. See the
+          // Task 4 amendment in
+          // `docs/superpowers/plans/2026-08-28-edufleet-connection.md`.
         };
       }
       return { kind: "REJECTED", remoteStatus, detail: REDEEM_STATE_MOVED_DETAIL };

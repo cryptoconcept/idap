@@ -238,3 +238,22 @@ adapter.
    the 20-reason catalog, contract 1.1.0, the `openapi.json` gap that hid the
    `scopes` requirement, and the MongoDB replica-set prerequisite for partner
    onboarding).
+
+### Explicit input to Plan B2
+
+Two properties B1 leaves open by design. Neither is reachable in B1, and both
+become live the moment B2's push exists — they are recorded here so B2 starts
+holding them rather than discovering them.
+
+> **Plan B2 obligation — `sync` is the sole revocation detector.** No path in
+> B1 makes a grant-authenticated call for an established connection, so a
+> school's revocation is invisible until B2's push runs. B2's `sync` must treat
+> a `401 revoked` as authoritative and route it through the
+> `ConnectorAuthError` branch.
+
+> **Plan B2 obligation — do not resurrect a dead grant.** Once B2's `sync` can
+> raise `ConnectorAuthError`, `syncNow`'s `ERROR` path leaves a known-dead
+> ciphertext on the row while `refresh`'s `completed`-with-grant branch returns
+> `CONNECTED` on the strength of that ciphertext alone. Resolve the
+> `ERROR`-vs-`DISCONNECTED` asymmetry, or have the `completed` branch consider
+> the stored status, before the push ships.
