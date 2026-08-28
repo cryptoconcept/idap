@@ -6,7 +6,12 @@ import { notFound, validationError } from "@/lib/api/errors";
 import { PLATFORM_LABELS, VACANCY_MAX_RECORDS } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
-import { VacancyPublishService, type VacancyPublishOutcome } from "./vacancy-publish.service";
+import {
+  VacancyPublishService,
+  toListingDTO,
+  type VacancyListingDTO,
+  type VacancyPublishOutcome,
+} from "./vacancy-publish.service";
 
 export type VacancyDTO = {
   id: string;
@@ -20,6 +25,15 @@ export type VacancyDTO = {
   status: string;
   createdAt?: string;
   updatedAt?: string;
+  /**
+   * What eduFleet knows about this vacancy, absent until it is published.
+   * The dashboard cannot show a school whether its advert is live, where to
+   * read it, why the last push was refused, or that a cleared salary will not
+   * propagate without this — every one of those is a fact about the LISTING,
+   * not about the vacancy record, and the section that renders the card has no
+   * other source for any of them.
+   */
+  listing?: VacancyListingDTO;
 };
 
 /** A malformed id must read as "no such vacancy", not as a cast error. */
@@ -44,6 +58,10 @@ function serialize(row: VacancyDoc): VacancyDTO {
     experienceRequired: row.experienceRequired ?? undefined,
     facilities: row.facilities?.length ? row.facilities : undefined,
     status: row.status ?? "DRAFT",
+    // Built by `vacancy-publish.service.ts`'s own `toListingDTO` rather than
+    // re-mapped here, so the listing a school reads on its dashboard and the
+    // one a push hands back are the same shape by construction.
+    listing: row.listing ? toListingDTO(row.listing) : undefined,
     createdAt: (row as VacancyDoc & { createdAt?: Date }).createdAt?.toISOString(),
     updatedAt: (row as VacancyDoc & { updatedAt?: Date }).updatedAt?.toISOString(),
   };

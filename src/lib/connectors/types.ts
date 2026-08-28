@@ -104,7 +104,20 @@ export type AdapterContext = { baseUrl: string; platformKey: string; http: Conne
  * why the adapter methods that produce this type never retry on their own.
  */
 export type JobPushResult =
-  | { kind: "OK"; jobId: string; claimState?: string }
+  /**
+   * `publicUrl` is the advert's own page on the remote platform, and it is
+   * only ever offered on a CREATE — eduFleet's two PATCH routes answer with
+   * neither the URL nor the slug it is built from, so a caller that does not
+   * keep the one it was handed can never reconstruct it. It cannot be derived
+   * either: the path is `/jobs/{slug}/{id}`, the slug is minted remotely and
+   * never sent again, and the credential's `baseUrl` is the API host, which is
+   * not necessarily the public site origin. Optional because a PATCH, a
+   * conflict-adopted listing, and any future platform all legitimately have
+   * none. Adapters must only ever put an absolute `http(s)` URL here — this
+   * value is rendered as a link, so a `javascript:`/`data:` scheme reaching it
+   * would be stored XSS.
+   */
+  | { kind: "OK"; jobId: string; claimState?: string; publicUrl?: string }
   | { kind: "BLOCKED"; reason: string; detail: string }
   | { kind: "CONFLICT"; ownedByContract: string; jobId?: string; detail: string };
 

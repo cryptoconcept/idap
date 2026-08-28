@@ -49,6 +49,18 @@ const VacancySchema = new Schema(
         // be rejected. Absent means eduFleet holds no bound.
         remoteSalaryMin: { type: Number, min: 0 },
         remoteSalaryMax: { type: Number, min: 0 },
+        // The advert's own page on eduFleet, exactly as eduFleet reported it
+        // when the listing was created. Stored rather than derived because it
+        // cannot be derived: the path is `/jobs/{slug}/{id}`, the slug is
+        // minted remotely and returned only on the create, and the
+        // credential's `baseUrl` is the API host, not necessarily the public
+        // site origin. Optional — a listing adopted from a 409 never saw a
+        // create response, and no PATCH ever repeats the URL — so every reader
+        // must cope with its absence rather than assume a published listing
+        // has one. Only ever written from `safePublicUrl` (`edufleet.ts`),
+        // which is what keeps a non-http(s) scheme out of a stored value that
+        // is rendered as a link.
+        publicUrl: { type: String, trim: true },
         // Why a push is currently refused, when eduFleet answers 403. Free
         // text because two of the four triggers are reversible and IDAP
         // re-checks rather than latching — see the Global Constraints.

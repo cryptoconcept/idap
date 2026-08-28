@@ -667,7 +667,17 @@ describe("edufleetAdapter", () => {
 
       const result = await edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED");
 
-      expect(result).toEqual({ kind: "OK", jobId: "job-1", claimState: "unclaimed" });
+      // `publicUrl` is kept, not discarded: it is the only place eduFleet ever
+      // reports the advert's own page, and the school's dashboard renders it
+      // as a link. Neither PATCH route repeats it, and it cannot be rebuilt
+      // (the slug is minted remotely and `ctx.baseUrl` is the API host), so a
+      // create that drops it loses it permanently.
+      expect(result).toEqual({
+        kind: "OK",
+        jobId: "job-1",
+        claimState: "unclaimed",
+        publicUrl: "https://edufleet.example/jobs/maths-teacher/job-1",
+      });
       expect(http).toHaveBeenCalledTimes(1);
       const [path, init] = http.mock.calls[0];
       expect(path).toBe("/api/partner/jobs");
@@ -696,13 +706,53 @@ describe("edufleetAdapter", () => {
         "SCHOOL_POSTED",
       );
 
-      expect(result).toEqual({ kind: "OK", jobId: "job-2" });
+      expect(result).toEqual({
+        kind: "OK",
+        jobId: "job-2",
+        publicUrl: "https://edufleet.example/jobs/maths-teacher/job-2",
+      });
       expect("claimState" in (result as object)).toBe(false);
       const [path, init] = http.mock.calls[0];
       expect(path).toBe("/api/partner/school/jobs");
       expect(init.method).toBe("POST");
       expect(init.token).toBe(GRANT_TOKEN);
       expect(init.body).toEqual(SCHOOL_BODY);
+    });
+
+    /**
+     * `publicUrl` is persisted and then rendered as an `<a href>` in the
+     * school's dashboard, which makes it the one field on this response that
+     * is dangerous to trust. A `javascript:`/`data:` URL from a compromised or
+     * misconfigured partner host would be stored XSS the first time somebody
+     * clicked the listing.
+     *
+     * MUTATION CHECK: delete the protocol test in `safePublicUrl` (return
+     * `parsed.toString()` unconditionally) and this test fails — the
+     * `javascript:` URL is carried straight through onto the result. The push
+     * itself must still succeed: the advert IS live on eduFleet by then, and
+     * discarding a real `jobId` over a bad convenience link would leave a
+     * public listing IDAP could never close.
+     */
+    it("MUTATION-DISTINGUISHING: drops a publicUrl that is not an http(s) URL, and still returns OK", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 201,
+        body: {
+          jobId: "job-3",
+          externalJobId: "vac-1",
+          status: "active",
+          publicUrl: "javascript:alert(document.cookie)",
+        },
+      });
+
+      const result = await edufleetAdapter.createJob!(
+        makeCtx(http),
+        makeConnection(),
+        AGGREGATED_BODY,
+        "AGGREGATED",
+      );
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-3" });
+      expect("publicUrl" in (result as object)).toBe(false);
     });
 
     it("throws when SCHOOL_POSTED is called on a connection with no grant token", async () => {
@@ -889,6 +939,10 @@ describe("edufleetAdapter", () => {
         "AGGREGATED",
       );
 
+      // No `publicUrl`: eduFleet's PATCH routes never report one, so this
+      // response has none to carry. The URL recorded at create time survives
+      // untouched because the publish service's patch branch writes named
+      // paths only.
       expect(result).toEqual({ kind: "OK", jobId: "job-1", claimState: "unclaimed" });
       const [path, init] = http.mock.calls[0];
       expect(path).toBe(`/api/partner/jobs/${encodeURIComponent("vac 1/x")}`);
@@ -1026,6 +1080,10 @@ describe("edufleetAdapter", () => {
 
       const result = await edufleetAdapter.closeJob!(ctx, makeConnection(), "vac-1", "AGGREGATED");
 
+      // No `publicUrl`: eduFleet's PATCH routes never report one, so this
+      // response has none to carry. The URL recorded at create time survives
+      // untouched because the publish service's patch branch writes named
+      // paths only.
       expect(result).toEqual({ kind: "OK", jobId: "job-1", claimState: "unclaimed" });
       const [path, init] = http.mock.calls[0];
       expect(path).toBe("/api/partner/jobs/vac-1");

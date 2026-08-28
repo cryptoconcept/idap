@@ -75,6 +75,18 @@ export type VacancyListingDTO = {
   remoteStatus: VacancyListingRemoteStatus;
   claimState?: VacancyClaimState;
   blockedReason?: string;
+  /** The advert's public page, when eduFleet gave one (creates only). */
+  publicUrl?: string;
+  /**
+   * What eduFleet still holds for each bound. Surfaced — not just used
+   * internally by `preflightPatch` — because it is the only honest way to
+   * warn a school that clearing a salary here will NOT clear it there: an
+   * update can change a bound but has no value that means "remove" it, so the
+   * figure below is what the public advert keeps showing until the listing is
+   * closed and republished.
+   */
+  remoteSalaryMin?: number;
+  remoteSalaryMax?: number;
 };
 
 /**
@@ -517,7 +529,18 @@ function toClaimState(value: string | undefined): VacancyClaimState | undefined 
     : undefined;
 }
 
-function toListingDTO(listing: NonNullable<VacancyDoc["listing"]>): VacancyListingDTO {
+/**
+ * Exported for `vacancy.service.ts`'s `serialize`, so the listing a school
+ * sees on its dashboard is built by the same function as the one a push
+ * returns — one shape, not two that drift. The dependency runs
+ * `vacancy.service → vacancy-publish.service` only, which is the direction
+ * that already exists (Task 5's `remove` calls `pushClose`); this file still
+ * imports nothing back.
+ *
+ * `?? undefined` on the numbers, never `||`: a stored bound of `0` is a real
+ * figure eduFleet holds and must not read as "no bound".
+ */
+export function toListingDTO(listing: NonNullable<VacancyDoc["listing"]>): VacancyListingDTO {
   return {
     jobId: listing.jobId,
     externalJobId: listing.externalJobId,
@@ -526,6 +549,9 @@ function toListingDTO(listing: NonNullable<VacancyDoc["listing"]>): VacancyListi
     remoteStatus: (listing.remoteStatus as VacancyListingRemoteStatus | undefined) ?? "active",
     claimState: (listing.claimState as VacancyClaimState | undefined) ?? undefined,
     blockedReason: listing.blockedReason ?? undefined,
+    publicUrl: listing.publicUrl ?? undefined,
+    remoteSalaryMin: listing.remoteSalaryMin ?? undefined,
+    remoteSalaryMax: listing.remoteSalaryMax ?? undefined,
   };
 }
 
@@ -681,6 +707,15 @@ async function recordSuccess(
             lastPushedAt: now,
             remoteStatus,
             claimState: claimState ?? "unclaimed",
+            // Only a create ever carries one, which is exactly why it is
+            // recorded here and nowhere else: the patch branch below touches
+            // named paths only, so the URL minted with the listing survives
+            // every later push untouched. A create that somehow answered
+            // without one leaves the field absent rather than stale — this
+            // branch replaces the whole sub-document, so there is no previous
+            // URL to carry over, and any there was described a different,
+            // now-closed advert.
+            publicUrl: result.publicUrl,
             remoteSalaryMin: shape.remoteSalary?.salaryMin,
             remoteSalaryMax: shape.remoteSalary?.salaryMax,
           },

@@ -524,6 +524,32 @@ function tokenFor(ctx: AdapterContext, connection: ConnectionState, contract: Va
  * `partner_inactive`) throws a plain `Error` — those are not "reconnect this
  * school" signals in the way `revoked` is.
  */
+/**
+ * The advert's public page, as eduFleet reports it on a create
+ * (`publicUrl: `${SITE_ORIGIN}/jobs/{slug}/{id}``, both create routes). It is
+ * stored and later rendered as a clickable link in the school's dashboard, so
+ * it is scheme-guarded HERE — at the boundary where the remote body is first
+ * read — rather than at the point of render. A `javascript:` or `data:` URL
+ * from a compromised or misconfigured partner host would otherwise be
+ * persisted and become stored XSS the first time someone clicks it; the same
+ * hazard eduFleet's own `safeHttpUrl` exists for on the values IDAP sends it.
+ *
+ * Anything that is not an absolute `http`/`https` URL is dropped rather than
+ * repaired. `publicUrl` is a convenience — a link the school can open — and a
+ * push that succeeded must never fail over one, so a missing or unusable URL
+ * simply means the listing shows no link.
+ */
+function safePublicUrl(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return undefined;
+  }
+  return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : undefined;
+}
+
 function classifyJobPush(resp: { status: number; body: unknown }): JobPushResult {
   if (resp.status === 200 || resp.status === 201) {
     const body = rec(resp.body) ?? {};
@@ -532,7 +558,13 @@ function classifyJobPush(resp: { status: number; body: unknown }): JobPushResult
       throw new Error(`eduFleet: job push succeeded (status ${resp.status}) but the response carried no jobId`);
     }
     const claimState = str(body.claimStatus);
-    return claimState !== undefined ? { kind: "OK", jobId, claimState } : { kind: "OK", jobId };
+    const publicUrl = safePublicUrl(str(body.publicUrl));
+    return {
+      kind: "OK",
+      jobId,
+      ...(claimState !== undefined ? { claimState } : {}),
+      ...(publicUrl !== undefined ? { publicUrl } : {}),
+    };
   }
 
   if (resp.status === 401) {
