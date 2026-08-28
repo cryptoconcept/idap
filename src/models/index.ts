@@ -20,3 +20,4 @@ export { PlatformConnection, type PlatformConnectionDoc } from "./PlatformConnec
 export { SyncRun, type SyncRunDoc } from "./SyncRun";
 export { Achievement, type AchievementDoc } from "./Achievement";
 export { Alumnus, type AlumnusDoc } from "./Alumnus";
+export { Vacancy, type VacancyDoc } from "./Vacancy";
