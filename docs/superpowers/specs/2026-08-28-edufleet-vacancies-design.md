@@ -165,6 +165,26 @@ created it (`AGGREGATED` | `SCHOOL_POSTED`), the last push time, and a
 
 ### 7.1 The claim transition is a one-way door
 
+> **Correction, 2026-08-29 (Task 8, vacancy-push plan) — this heading and the
+> "single irreversible transition" claim below are wrong.** eduFleet's
+> `403 claimed` has four triggers, and only two are terminal. `claim_pending`
+> reverts to `unclaimed` when an eduFleet admin rejects the claim
+> (`claim-review.ts:45`, `rejectClaim`); `hiddenPendingReview` clears back to
+> `false` when an admin restores a takedown (`takedowns.ts:46`,
+> `resolveTakedown(..., "restore")`). Only `claimed` itself and `withdrawn`
+> never reverse. Full re-verification, including the enumeration of every
+> write site to `claimStatus`/`hiddenPendingReview`, is
+> `docs/integrations/edufleet-jobs-reverification.md` finding S4, folded into
+> `docs/integrations/edufleet-api-map.md` §2.2. **The implementation plan
+> already overrides this section** — see that plan's Global Constraints:
+> "`403 claimed` is NOT terminal. ... Never permanently retire a vacancy on a
+> 403." This note documents the correction rather than silently rewriting the
+> paragraph below; treat the paragraph as historical context for why approach
+> A was chosen, not as current guidance on read-only behaviour.
+
+The text below is the original, uncorrected 2026-08-28 reasoning — kept for
+the historical record; see the correction above for what is actually true.
+
 A school may claim an `aggregated` listing in eduFleet. Once claimed, IDAP's
 platform key **can no longer edit it** — further writes return
 `403 claimed`.
@@ -173,6 +193,12 @@ IDAP records the claim and renders that vacancy **read-only with a visible
 reason**, rather than letting an admin edit a field and meet a 403. This is the
 single irreversible transition in the contract and the main reason approach A
 was chosen over auto-sync.
+
+*(As corrected above: `claimed` and `withdrawn` are the only terminal states.
+`claim_pending` and `hiddenPendingReview` are pending admin decisions that can
+resolve either way, and the `403` body carries no field to distinguish which
+of the four triggered it — so IDAP must keep the row and re-attempt rather
+than latching it read-only forever on the first `403`.)*
 
 ### 7.2 The shared id-space
 

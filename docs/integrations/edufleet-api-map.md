@@ -33,6 +33,22 @@ test partner as `{ name: "IDAP", slug: "idap" }`. `Partner.ts`'s own doc
 comment reads *"A registered external platform (IDAP is the first)."* eduFleet
 built this API with IDAP as the intended (and only named) caller.
 
+> **Correction, 2026-08-29 (Task 8, vacancy-push plan) — 11 findings folded
+> in.** `docs/integrations/edufleet-jobs-reverification.md` re-checked this
+> map's job-push sections (§1–§6) against eduFleet at commit `e580f17` and
+> found 11 STALE claims (S1–S11), all now corrected in place below and marked
+> with this date. Headline: **no scope change is needed** — a `jobs:write`
+> grant still satisfies every job endpoint, because none of the 12 commits
+> between this map's authorship and `e580f17` touched the job-push core
+> (`partner-jobs.ts`, `partner-school-jobs.ts`, `models/Job.ts`,
+> `app/api/partner/jobs/**`, `app/api/partner/school/jobs/**`). Everything
+> stale is either a claim this map got wrong on the day, or drift in the
+> shared layers the job routes call into (`partner-auth.ts`,
+> `partner-contract.ts`, `app/api/partner/school/route.ts`). Also folded in
+> below: five behaviours the connector implementation itself discovered
+> (marked **Implementation note, 2026-08-29**) that are not in the
+> reverification report.
+
 ---
 
 ## 0. Answer to the operative question: what can a connector push today?
@@ -82,7 +98,9 @@ Everything from here on, up through Section 7, is about the one entity that
 
 Two independent credential tiers, both bearer tokens sent as either
 `Authorization: Bearer <token>` or `x-api-key: <token>` (`readBearer()`,
-`partner-auth.ts:36-44`):
+`partner-auth.ts:53-62` — **corrected 2026-08-29 (S10):** cited `:36-44`
+against an earlier revision; `mongooseValidationError()` was inserted at
+`:46` by commit `6645363`, shifting everything below it +18 lines):
 
 | | Platform key ("Contract One") | School grant ("Contract Two") |
 |---|---|---|
@@ -266,16 +284,31 @@ fixed), never stranded mid-flight.
   — the grant row itself is untouched, so it resumes working automatically if
   the school's status recovers.
 
+> **Implementation note, 2026-08-29 (item 3) — the two `revoked` bodies above
+> are byte-identical, not just the same shape.** `PartnerKey.revokedAt`
+> (`partner-auth.ts:100`) and `PartnerGrant.revokedAt` (`:121`) both produce
+> exactly `{"error": "...", "reason": "revoked"}` — a dead platform key and a
+> dead school grant cannot be told apart by reading the response. **The only
+> discriminator is which credential the caller sent.** A connector that
+> conflates the two will treat a platform-wide fault (IDAP's own key revoked)
+> as a per-school one and disconnect every connected school over a problem
+> none of them caused and none of them can fix by reconnecting. Decide which
+> credential a given call used *before* dispatching it, and carry that
+> decision to the response handler rather than re-deriving it from the body.
+
 ### 1.4 Rate limiting — two independent layers
 
 1. **Per-minute burst guard** — in-memory, per-serverless-instance sliding
    window, 60 req/min per credential id (`RATE_LIMIT_PER_MIN`,
-   `partner-auth.ts:55-67`). Explicitly documented as best-effort only
-   ("serverless means this is best-effort burst protection only").
+   `partner-auth.ts:73-85` — **corrected 2026-08-29 (S10):** cited `:55-67`
+   against an earlier revision; see the +18-line note in §1). Explicitly
+   documented as best-effort only ("serverless means this is best-effort
+   burst protection only").
 2. **Daily write budget** — the enforced one, shared across all instances via
    Mongo. `nextWriteBudget()` (`partner-token-logic.ts:38-47`) computes
    against the **India-calendar day** (`dayKeyIST`), the same bucket job views
-   use. `spendWrite()` (`partner-auth.ts:131-160`) applies it via a
+   use. `spendWrite()` (`partner-auth.ts:155-185` — **corrected 2026-08-29
+   (S10):** cited `:131-160`, same +18-line drift) applies it via a
    conditional `updateOne` keyed on the in-memory doc's own
    `{writesDay, writesToday}` values, so two racing writes can't both claim
    the last unit. **Load-bearing detail:** the CAS filter also requires the
@@ -287,6 +320,17 @@ fixed), never stranded mid-flight.
    stale in-memory doc.
    Only **write** routes call `spendWrite` (POST/PATCH); reads (GET) never
    touch the daily cap.
+
+> **Correction, 2026-08-29 (S3) — ordering, not just which routes.** All four
+> job routes call `spendWrite` **before any field validation and before the
+> dedupe check** — `app/api/partner/jobs/route.ts:21`,
+> `jobs/[externalJobId]/route.ts:22`, `school/jobs/route.ts:22`,
+> `school/jobs/[id]/route.ts:20`, each ahead of the `try` block that calls the
+> service function. Every `400 validation_failed` and every
+> `409 duplicate_external_job` on these routes therefore permanently consumes
+> a unit of the daily write cap — a connector that retries either without
+> fixing the body burns its budget without ever creating or updating a job.
+> Never retry a 400 or a 409; validate locally first.
 
 **429 responses never set a `Retry-After` header** — `jsonError()` is a bare
 `Response.json(status)` call with no headers anywhere in the partner-auth
@@ -318,7 +362,7 @@ resource of its own). Counted 2026-08-28 in the branch fix wave:
 | `/api/partner/connection-requests` | GET | platform key | List this partner's requests (most-recent 200) |
 | `/api/partner/connection-requests/{id}` | GET | platform key | Direct `_id` lookup — reachable regardless of the 200-row cap on the list endpoint |
 | `/api/partner/connection-requests/{id}/redeem` | POST | platform key | Step 4 — exchange an approved request for a grant, once |
-| `/api/partner/school` | GET | grant | The linked school's snapshot + quota headroom |
+| `/api/partner/school` | GET | grant, `["jobs:write","listings:write"]` OR-scoped — **corrected 2026-08-29 (S7)**, was plain "grant" | The linked school's snapshot + quota headroom; response is now assembled per-scope (§2.5) |
 | `/api/partner/school/jobs` | POST | grant | Contract Two: post a vacancy as the linked school |
 | `/api/partner/school/jobs/{id}` | PATCH | grant | Update/close a Contract-Two vacancy (id is the Mongo `_id`, not `externalJobId`) |
 | `/api/partner/school/listings` | POST | grant (`listings:write`) | Post a vehicle/asset listing as the linked school — **out of IDAP's scope set**, see the §0 correction |
@@ -364,6 +408,20 @@ Success (201):
 teacher-match alert fan-out a school's own posting gets (failure-isolated —
 an alert error never fails the push).
 
+> **Implementation note, 2026-08-29 — `jobId` is not the PATCH key here.**
+> The 201 body's `jobId` is eduFleet's own Mongo `_id`. Storing it and reusing
+> it as the identifier for every later PATCH is the obvious implementation
+> and it is wrong for this contract: §2.2's `updatePartnerJob` addresses a job
+> by `externalJobId` (the id IDAP itself minted), not by `jobId` — sending
+> `jobId` where `externalJobId` is expected 404s. `jobId` is the correct PATCH
+> key only for Contract Two (§2.4), which is exactly the reverse. The two
+> contracts address the same underlying job in opposite ways; see §4's note on
+> this and §10 for the adapter-level consequence.
+>
+> **Implementation note, 2026-08-29 — every `400`/`409` from this route has
+> already spent a write unit.** See the S3 correction in §1.4: `spendWrite`
+> runs before `createPartnerJob` is ever called.
+
 ### 2.2 Contract One update — `PATCH /api/partner/jobs/{externalJobId}` (platform key)
 
 `updatePartnerJob()` (`partner-jobs.ts:196-251`). Looks the job up by
@@ -383,7 +441,25 @@ Refused with `403 claimed` if `claimStatus` is `"claimed"`,
 specifically: `claimStatus` can still read `"unclaimed"` while the listing is
 untouchable, because `hiddenPendingReview` is an independent flag.
 
+> **Correction, 2026-08-29 (S4) — this 403 is not a one-way door.** Of the
+> four triggers, only **`claimed` and `withdrawn` are terminal**. The other
+> two resolve on their own: `claim_pending` reverts to `unclaimed` when an
+> eduFleet admin rejects the claim (`claim-review.ts:45`, inside
+> `rejectClaim`, doc comment *"free the listing to be claimed again"*), and
+> `hiddenPendingReview` clears back to `false` when an admin restores a
+> takedown (`takedowns.ts:46`, `resolveTakedown(..., "restore")`). The 403
+> body carries no discriminator between the four cases — the route emits only
+> `{error, reason: "claimed"}` — so a caller cannot tell a terminal claim from
+> a pending one from the response alone. **A connector must not permanently
+> retire a vacancy on this 403**; keep the row and re-attempt later. This
+> corrects `docs/superpowers/specs/2026-08-28-edufleet-vacancies-design.md`
+> §7.1, which calls the transition one-way; that spec now carries a matching
+> dated correction.
+
 Success (200): `{ jobId, externalJobId, title, status, claimStatus }`.
+
+> **Implementation note, 2026-08-29 — every `400`/`403`/`409` from this route
+> has already spent a write unit** (S3, §1.4).
 
 ### 2.3 Contract Two — `POST /api/partner/school/jobs` (grant)
 
@@ -394,11 +470,29 @@ Pro featuring, and the teacher-alert fan-out all apply identically. *"Delegation
 is a subset of the school's own rights by construction, not by a parallel
 implementation that could drift."*
 
-Required (per `SchoolJobInput`): `externalJobId`, `title`, `subject`,
-`description`. Optional: `city`, `branchId`, `salaryMin`, `salaryMax`,
-`experienceRequired`, `facilities[]`. **No `institutionName`, no
+Required (per `SchoolJobInput` as a **type**): `externalJobId`, `title`,
+`subject`, `description`. Optional: `city`, `branchId`, `salaryMin`,
+`salaryMax`, `experienceRequired`, `facilities[]`. **No `institutionName`, no
 `sourceUrl`** — the grant already identifies exactly one school, so there is
-nothing to attribute.
+nothing to attribute (silently ignored if sent, not rejected).
+
+> **Correction, 2026-08-29 (S1) — only two of those four fields actually
+> produce the documented `400`.** Tracing each to the refusal it produces:
+> `externalJobId` (`partner-school-jobs.ts:64`) and `subject`
+> (`services/jobs.ts:33-35`, `isValidJobSubject`) reach a clean
+> `400 validation_failed`. `title` and `description` are enforced **nowhere in
+> the service layer** — only by `models/Job.ts`'s schema `required: true`
+> (`:31`, `:35`). Omitting either reaches `Job.create()`, which throws a
+> Mongoose `ValidationError` the route's catch chain
+> (`app/api/partner/school/jobs/route.ts:39-52`, branching on `UpgradeError`,
+> `PartnerJobError`, `@/lib/authz`'s `ValidationError`, then `throw e`) has no
+> branch for — it escapes as an **uncataloged 500 with no `reason`**, after
+> `spendWrite` has already consumed a daily write unit. The fix exists
+> (`mongooseValidationError()`, `partner-auth.ts:46-51`) but is wired into
+> only the two listings routes, not either job route. **IDAP must validate
+> `title` and `description` non-empty before pushing**, and must treat a bare
+> 500 from this route as a non-retryable request defect, not a transient
+> server fault.
 
 **Discrepancy worth flagging:** `partnerSchema().rules.required.schoolJob`
 (`partner-contract.ts:38`) lists only `["externalJobId", "title", "subject",
@@ -422,13 +516,20 @@ Free-plan cap: `UpgradeError` → `403 { reason: "upgrade_required" }` at 3
 active jobs (`FREE_ACTIVE_JOB_LIMIT`), the same cap the school's own dashboard
 enforces.
 
+> **Implementation note, 2026-08-29 — every `400`/`403`/`409` from this route
+> has already spent a write unit** (S3, §1.4). Also: the dedupe pre-check on
+> this route runs **before** subject/location validation, the mirror image of
+> Contract One where dedupe runs last — a body that is both a duplicate and
+> otherwise invalid returns `409` here and `400` on Contract One.
+
 ### 2.4 Contract Two update — `PATCH /api/partner/school/jobs/{id}` (grant)
 
 `updateSchoolJob()` (`partner-school-jobs.ts:133-168`). `{id}` here is the
 Mongo `_id`, **not** `externalJobId` — asymmetric with the Contract-One PATCH
 route, which addresses by `externalJobId`. Scoped to
 `{_id, schoolId, partnerId}` so a grant can only touch what it posted for
-that specific school.
+that specific school. See the implementation note under §2.1 for the trap
+this asymmetry sets for a naive connector.
 
 Patchable: `title`, `description`, `salaryMin`, `salaryMax`,
 `experienceRequired`, `facilities[]`, `status` — **and `status` accepts only
@@ -437,6 +538,35 @@ own dashboard has no reopen action either (only closeJobAction → closeJob),
 so a delegated grant may only ever be a subset of the school's own rights,
 never a superset."* Sending `"active"` (or any other string) is a
 `ValidationError`, verified directly by spec.
+
+> **Correction, 2026-08-29 (S8) — `status` is not co-patchable; it
+> short-circuits.** `partner-school-jobs.ts:147-152`:
+> ```ts
+> if (patch.status !== undefined) {
+>   if (patch.status !== "closed") {
+>     throw new ValidationError('status may only be set to "closed"');
+>   }
+>   return closeJob(school.userId.toString(), job.id);
+> }
+> ```
+> The `return` precedes every other field assignment, so
+> `PATCH {status: "closed", title: "New title"}` closes the job and
+> **silently discards the title** — the 200 body reports the pre-patch title
+> as though it had been accepted. `status` is mutually exclusive with every
+> other patchable field on this route. **To close a job and change a field,
+> send two PATCHes, field-change first.** (Contract One's `updatePartnerJob`
+> has no such short-circuit — every field sent, including `status`, is
+> applied in the same call.)
+
+> **Implementation note, 2026-08-29 (item 4) — a PATCH can never clear a
+> value on either contract.** `PartnerJobPatch`/`SchoolJobPatch` both declare
+> `salaryMin?`/`salaryMax`/`experienceRequired` as `number`, never `null`, and
+> both `updatePartnerJob` and `updateSchoolJob` gate every field assignment on
+> `!== undefined`. An **omitted** field means "leave unchanged"; there is no
+> value that means "remove". A salary bound (or any other optional field)
+> cleared in IDAP therefore stays on eduFleet's copy permanently until the
+> listing is closed and republished under a fresh `externalJobId` — which,
+> per the correction below, does not free the old id either.
 
 Success (200): `{ jobId, title, status }`. **Note: no `externalJobId` in the
 response**, unlike the Contract-One PATCH response — a minor asymmetry a
@@ -455,6 +585,17 @@ connector implementer should not assume away.
 `freeSlotsRemaining` is `null` on Pro (unlimited). This is the only partner
 route that returns the school's name and city — the redeem response (§1.2)
 does not.
+
+> **Correction, 2026-08-29 (S7) — the route is now OR-scoped and the response
+> is assembled per-scope.** `app/api/partner/school/route.ts:9` calls
+> `requireGrant(req, ["jobs:write", "listings:write"])`, and the handler
+> builds the body conditionally (`:13-21`): `schoolId`/`schoolName`/`city`
+> are always present; the job snapshot above (`schoolSnapshot()`) is included
+> only if the grant's scopes include `jobs:write`; a `listings` key
+> (`listSchoolListings()`) is included only if they include
+> `listings:write`. IDAP's grant holds `jobs:write` only, so in practice this
+> route always returns the job snapshot and never the `listings` key — but a
+> connector should read this response as scope-conditional, not fixed-shape.
 
 ### 2.6 `GET /api/partner/whoami`, `GET /api/partner/schema`, `GET /api/partner/contract`
 
@@ -488,13 +629,14 @@ live grant for), the exact field delta matters:
 
 | Field | Contract One (platform key) | Contract Two (grant) |
 |---|---|---|
-| `externalJobId` | required | required |
-| `title` | required | required |
-| `subject` | required | required |
-| `description` | required | required |
+| `externalJobId` | required, enforced into `400` | required, enforced into `400` |
+| `title` | required, enforced into `400` | required by type, but **not enforced into `400`** — omit it and eduFleet answers an uncataloged `500` after spending a write unit (S1, §2.3) |
+| `subject` | required, enforced into `400` | required, enforced into `400` |
+| `description` | required, enforced into `400` | same as `title` — required by type, only enforced by the schema layer as an unhandled `500` (S1) |
 | `institutionName` | **required** | not accepted — the grant already names the school |
 | `city` | **required** | optional, but a location is still needed: **either `city` or `branchId`, or the write 400s** (undocumented in the schema — see §2.3) |
-| `district` / `taluk` / `state` | optional, Karnataka-validated | not in `SchoolJobInput` at all |
+| `district` / `taluk` | optional, Karnataka-validated | not in `SchoolJobInput` at all |
+| `state` | optional, **defaults to `"Karnataka"`** — see the S6 correction below | **not in `SchoolJobInput` at all; never written, no schema default** — a Contract-Two job's `state` is `undefined`, not `"Karnataka"` (S6) |
 | `salaryMin` / `salaryMax` / `experienceRequired` | optional | optional |
 | `facilities[]` | optional | optional |
 | `sourceUrl` | **platform-key only** — where the vacancy was advertised | not accepted |
@@ -504,6 +646,14 @@ live grant for), the exact field delta matters:
 | Free-plan cap applies? | No (not tied to a school's own quota) | **Yes** — same 3-active-job cap the school's dashboard enforces |
 | `featured` on Pro plan | Not applicable (no `schoolId` yet) | Yes, automatic |
 
+> **Correction, 2026-08-29 (S6) — `state`'s Karnataka default is Contract One
+> only, not both.** `partner-jobs.ts:110` — `input.state?.trim() || "Karnataka"`
+> — applies on Contract One. Contract Two's `createJob()` (`services/jobs.ts:71-88`)
+> never writes `state` at all, and `models/Job.ts:57` declares
+> `{ type: String, trim: true }` with no schema default. If IDAP round-trips
+> a job's `state`, it will read back empty for every Contract-Two push —
+> Karnataka reference data (§6.3) is entirely irrelevant to that contract.
+
 ---
 
 ## 4. The dedupe and ownership rule — read this twice
@@ -512,8 +662,23 @@ live grant for), the exact field delta matters:
 thing to implement wrongly — **that id-space is shared across both
 contracts.** The uniqueness index is on `(partnerId, partnerExternalJobId)`
 regardless of which route created the row (`Job.ts` compound partial unique
-index, `partner-jobs.ts:83-88` referenced from both `createPartnerJob` and
-`postSchoolJob`).
+index, `models/Job.ts:82-91` — **corrected 2026-08-29 (S11):** cited
+`partner-jobs.ts:83-88`, which is the middle of an unrelated function,
+`assertValidNumbers`, in the current source). The dedupe pre-check that reads
+this index before every create is `partner-jobs.ts:126` (`createPartnerJob`)
+and `partner-school-jobs.ts:67` (`postSchoolJob`).
+
+> **Implementation note, 2026-08-29 (item 2) — a closed job keeps its
+> `externalJobId` forever; nothing frees it for reuse.** The dedupe pre-check
+> above is `Job.findOne({ partnerId, partnerExternalJobId })` with **no
+> status filter** (`partner-jobs.ts:126`; `partner-school-jobs.ts:67`), and
+> the unique index itself (`models/Job.ts:82-91`) carries no status condition
+> either — only that `partnerId` is an ObjectId and `partnerExternalJobId` is
+> a string. Closing a job (`status: "closed"`) does not clear
+> `partnerExternalJobId`, so a **re-publish under the same id after a close
+> always 409s**, indistinguishable at that point from re-publishing a still-open
+> duplicate. A connector that wants to "republish" a closed vacancy must mint
+> a **new** `externalJobId` — it cannot reuse the old one, ever.
 
 A re-post of an existing `externalJobId` — from **either** contract — always
 returns `409 duplicate_external_job` carrying:
@@ -568,6 +733,19 @@ From `errorCatalog()` (`partner-contract.ts:80-103`), also reachable live at
 additions are at the bottom of the table and both belong to the
 vehicle-listing API, not to the connection chain:
 
+> **Correction, 2026-08-29 (S9, presentational) — the table below is not the
+> live order, despite being called "verbatim."** The live sequence
+> (`partner-contract.ts:82-101`, re-counted 2026-08-29) puts
+> `duplicate_external_job` 10th, `duplicate_external_listing` **11th**,
+> `duplicate_open_request` 12th, ... `listing_not_approved` **15th**,
+> `already_redeemed` 16th — this table instead groups the two listing-only
+> reasons at the bottom for readability. The `meaning` strings for
+> `duplicate_external_job` and `rate_limited` below also carry parentheticals
+> this map added (the `contract` field pointer and the write-budget-race
+> note) that are **not in the live code's `meaning` text** — both additions
+> are factually correct, they just will not match a live diff against
+> `GET /api/partner/contract`.
+
 | Status | Reason | Meaning |
 |---|---|---|
 | 400 | `validation_failed` | One or more fields are invalid; see `details[]`. |
@@ -605,11 +783,38 @@ connector handling for: `403 forbidden` ("this request/grant belongs to a
 different school/school"). Listed here only so their absence from the table
 above isn't mistaken for an omission.
 
+> **Correction, 2026-08-29 (S2) — two more failure modes are reachable from
+> the four job routes and are absent from this catalog entirely, not just
+> presented differently.**
+>
+> **(a) Any Mongoose validation/cast failure on a job route escapes as a bare
+> `500` with no `reason`.** Covered in detail at S1 (§2.3) for the missing
+> `title`/`description` case; the same gap also covers a non-numeric
+> `salaryMin`/`salaryMax`/`experienceRequired` — `assertValidNumbers`
+> (`partner-jobs.ts:81-90`) only compares (`"abc" < 0` is `false`), so a
+> string value reaches `Job.create()`/`job.save()` and Mongoose casts it,
+> throwing a `ValidationError` neither job route's catch chain handles.
+>
+> **(b) A `401` for a missing, malformed, or unknown credential carries no
+> `reason` field at all.** Re-counted 2026-08-29 against `partner-auth.ts`:
+> eight distinct 401 sites — `:95` (missing partner key), `:96` (wrong key
+> prefix), `:99` (key hash not found), `:102` (orphaned key), `:116` (missing
+> grant token), `:117` (wrong grant prefix), `:120` (grant hash not found),
+> `:123` (orphaned grant) — every one returns `jsonError(401, "...")` with no
+> `reason`, only `hint` on the two "missing" cases. Only revocation
+> (`:100`/`:121`, `reason: "revoked"`) and the two partner-state checks
+> (`reason: "partner_revoked"`/`"partner_inactive"`) carry a `reason`. The
+> catalog's three `401` rows above cover only those — the far more common
+> "bad or absent token" 401 is undocumented. **A connector that switches on
+> `reason` must treat `undefined` on a `401` as "credential rejected, do not
+> retry," not as an unrecognized case to fall through on.**
+
 ---
 
 ## 6. Reference-data constraints
 
-### 6.1 Subject enum (`JOB_CATEGORIES`, `taxonomy.ts:20-28`)
+### 6.1 Subject enum (`JOB_CATEGORIES`, `taxonomy.ts:21-29` — **corrected
+2026-08-29 (S11)**, cited `:20-28`, off by one)
 
 16 fixed subjects, each with a `group`:
 - **academic:** Mathematics, Physics, Chemistry, Biology, English, Kannada,
@@ -640,12 +845,32 @@ since eduFleet will never tell you it dropped something.
 keys like `"constructor"`). `taluk` is validated only if sent, and only
 against the specific `district` sent alongside it
 (`isValidKarnatakaTaluk(district, taluk)`) — a taluk is meaningless without
-its district. Both checks are **skipped entirely** if `state` (defaulting to
-`"Karnataka"`) resolves to anything else — no reference data exists for other
-states, so anything outside Karnataka passes through unvalidated. The full
-29-district → taluk table is hand-maintained in `karnataka-taxonomy.ts` and
-is out of scope to reproduce here; use `districtsForState("Karnataka")` /
-`taluksForDistrict()` live, or read the file directly.
+its district; note sending a taluk **without** a district is itself a `400`
+(`partner-jobs.ts:121` — `if (isKarnataka && taluk && (!district || ...))`).
+Both checks are **skipped entirely** if `state` (defaulting to `"Karnataka"`
+**on Contract One only** — see the S6 correction in §3/§6.5) resolves to
+anything else — no reference data exists for other states, so anything
+outside Karnataka passes through unvalidated.
+
+> **Correction, 2026-08-29 (S5) — there are 31 districts, not 29.** Directly
+> re-counted from `karnataka-taxonomy.ts:7-39` (`KARNATAKA_DISTRICTS`, 31 keys)
+> by both a manual count of the object's keys and `districtsForState("Karnataka").length`'s
+> own logic (`Object.keys(KARNATAKA_DISTRICTS).sort()`). Verbatim, sorted:
+>
+> `Bagalkot`, `Ballari`, `Belagavi`, `Bengaluru Rural`, `Bengaluru Urban`,
+> `Bidar`, `Chamarajanagar`, `Chikkaballapur`, `Chikkamagaluru`,
+> `Chitradurga`, `Dakshina Kannada`, `Davanagere`, `Dharwad`, `Gadag`,
+> `Hassan`, `Haveri`, `Kalaburagi`, `Kodagu`, `Kolar`, `Koppal`, `Mandya`,
+> `Mysuru`, `Raichur`, `Ramanagara`, `Shivamogga`, `Tumakuru`, `Udupi`,
+> `Uttara Kannada`, `Vijayapura`, `Vijayanagara`, `Yadgir`.
+>
+> Two traps for a mapping layer: there is no district named `"Bengaluru"`
+> (only `Bengaluru Urban` / `Bengaluru Rural`), and `Mangaluru` is a *taluk*
+> of `Dakshina Kannada`, not a district. Matching is exact and
+> case-sensitive — `KARNATAKA_DISTRICTS` is keyed by the display string. This
+> list is transcribed here specifically so it stops needing to be re-counted;
+> re-verify against `karnataka-taxonomy.ts` if eduFleet ships a taluk
+> boundary change (its own doc comment invites exactly that maintenance).
 
 ### 6.4 Salary and experience rules
 
@@ -657,9 +882,12 @@ is out of scope to reproduce here; use `districtsForState("Karnataka")` /
 
 ### 6.5 Defaults
 
-`state` defaults to `"Karnataka"` when omitted (both contracts). `status`
-defaults to `"active"` on create; only `"active"`/`"closed"` are ever legal
-values, and Contract Two's PATCH accepts only `"closed"` (§2.4).
+`state` defaults to `"Karnataka"` when omitted on **Contract One only** —
+**corrected 2026-08-29 (S6)**, this previously read "both contracts." See the
+§3 table row and the correction after it for the source citations. `status`
+defaults to `"active"` on create (both contracts); only `"active"`/`"closed"`
+are ever legal values, and Contract Two's PATCH accepts only `"closed"`
+(§2.4).
 
 ---
 
