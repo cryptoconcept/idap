@@ -313,7 +313,34 @@ describe("VacancyService salary-order validation on update", () => {
     // can read the stored document, can catch this.
     await expect(
       VacancyService.update("INS0001", created.id, { salaryMin: 90000 }, actor),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "salary: the minimum may not exceed the maximum",
+    });
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.salaryMin).toBeUndefined();
+  });
+
+  // The load-bearing zero: `0` is a legitimate `salaryMax`, and a `!= null`
+  // -> truthiness regression (`if (effectiveMin && effectiveMax && ...)`)
+  // would treat a stored `0` as absent and silently accept this patch
+  // instead of rejecting it — exactly the hazard `serialize` already guards
+  // against, now on the comparison side, and unreached by every other test
+  // in this block (none of them put a `0` on either side of the merge).
+  it("rejects a patch that raises salaryMin above a stored salaryMax of zero", async () => {
+    const created = await VacancyService.create(
+      "INS0001",
+      { title: "Teacher", subject: "Mathematics", description: "Grades 6-10", salaryMax: 0 },
+      actor,
+    );
+
+    await expect(
+      VacancyService.update("INS0001", created.id, { salaryMin: 100 }, actor),
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "salary: the minimum may not exceed the maximum",
+    });
 
     const raw = await Vacancy.findById(created.id).lean();
     expect(raw?.salaryMin).toBeUndefined();
@@ -638,7 +665,10 @@ describe("VacancyService per-institution record cap", () => {
         { title: "One too many", subject: "Clerk", description: "Front office" },
         actor,
       ),
-    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    ).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: `You can keep up to ${VACANCY_MAX_RECORDS} vacancies. Delete one to add another.`,
+    });
 
     expect(await Vacancy.countDocuments({ institutionId: "INS0001" })).toBe(VACANCY_MAX_RECORDS);
   });
