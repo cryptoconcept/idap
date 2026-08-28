@@ -417,13 +417,25 @@ export const ConnectionService = {
     } catch (error) {
       const message = messageOf(error);
       if (error instanceof ConnectorAuthError) {
-        // The grant this connection holds (or, mid-redeem, just received) is
-        // revoked — the school withdrew consent. That is not a transient
-        // upstream failure, so it must not be reported as one: DISCONNECTED is
-        // the truth, and it is the state that re-offers "Request connection"
-        // (`connections-panel.tsx:166`). Leaving the status alone would strand
-        // the row at PENDING forever, since every later poll finds the request
-        // already `completed`.
+        // The grant this connection just received mid-redeem is already
+        // revoked — the school withdrew consent. (Mid-redeem is the only way
+        // to reach this today: eduFleet raises `ConnectorAuthError` from
+        // `fetchRemoteInstitution` alone, i.e. before any grant has been
+        // stored, and PassPercent raises it only from `sync`. The `$unset`
+        // below is written to be right for a future adapter that raises it
+        // holding a stored grant too.)
+        //
+        // That is not a transient upstream failure, so it must not be reported
+        // as one: DISCONNECTED is the truth, and it is the state that
+        // re-offers "Request connection" (`connections-panel.tsx:166`).
+        //
+        // Leaving the status alone would not strand the row — the next poll
+        // finds the request `completed` with no stored grant and eduFleet
+        // returns REJECTED, which `showRequest` does include. The harm is that
+        // REJECTED reads as "eduFleet turned this down" when what actually
+        // happened is that the school withdrew consent, and the row would keep
+        // a ciphertext already known to be dead. DISCONNECTED says what
+        // happened and drops the credential.
         await PlatformConnection.updateOne(
           { institutionId, platform },
           { $set: { status: "DISCONNECTED", lastError: message }, $unset: { grantTokenEncrypted: "" } },

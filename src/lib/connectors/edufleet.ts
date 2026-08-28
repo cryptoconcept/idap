@@ -280,9 +280,28 @@ async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: strin
  * 401 with body reason `revoked` (api-map §1.3): that is not a cosmetic
  * failure, it means the credential IDAP just received is already dead, which
  * is worth surfacing distinctly via `ConnectorAuthError` rather than quietly
- * handing back a token that will never work. Any other 401 reason (e.g. a
- * partner-wide pause) is not that signal and is swallowed like everything
- * else.
+ * handing back a token that will never work. `revoked` is matched exactly, not
+ * by substring: `partner_revoked` is a different fact (the partner
+ * registration was pulled, nothing a school can act on) that happens to
+ * contain the word.
+ *
+ * **That split is not exhaustive, and the remainder is a known gap.** This
+ * call can be answered 401 with five distinct bodies — `requireGrant`
+ * (eduFleet `partner-auth.ts:116-123`) plus `partnerState` (`:88-89`) — and
+ * only three carry a `reason` at all: `revoked`, `partner_revoked` and
+ * `partner_inactive`. The other two carry none, and between them cover four
+ * of the seven throw sites: a bad prefix, a hash miss and an orphaned partner
+ * all answer the same bare `{"error":"Invalid grant token"}`, and a missing
+ * token answers `{"error":"Missing grant token", hint}`. Every one of those
+ * falls into the swallow below, so this function returns normally and the
+ * connection lands on `CONNECTED` holding a token eduFleet will not honour.
+ *
+ * Widening the check is not the fix: treating "401 for an unstated reason" as
+ * proof the school withdrew consent is a stronger claim than a cosmetic
+ * lookup can support, and it would let a transient eduFleet fault tear down a
+ * good connection. The gap closes from the other side — Plan B2's vacancy
+ * push is the first code path that makes a grant-authenticated call for an
+ * established connection, and it is where a dead grant will actually surface.
  */
 async function fetchRemoteInstitution(
   ctx: AdapterContext,
