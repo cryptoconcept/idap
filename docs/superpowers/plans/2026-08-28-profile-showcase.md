@@ -809,6 +809,8 @@ Login: `admin@infinityschool.edu.in` / `Infinity!2026`.
 3. Upload a `.jpg` whose bytes are not an image → refused, nothing stored.
 4. Profile → Alumni: create one with a photo, batch `2012-2015`. It renders with the batch text intact.
 5. Hide one achievement and one alumnus, then fetch `/api/public/INS0001/profile` — **both must be absent** while the visible ones are present with absolute URLs.
+5a. **Clear a field through the form and confirm it is gone.** Give the achievement a description and an event date, save, reload, confirm both persisted. Then empty both fields, save, reload — **both must be gone, not merely blank in the form**. Confirm against the stored record, not the input. Do the same for one alumnus field (`note`). This is the only end-to-end check of the absent / value / explicit-`null` contract that Tasks 3, 5, 6, 8, 9, 10, 11 and 12 each built one layer of; the form is the sole layer with no automated coverage, and an `""` reaching the wire silently means "leave alone" — the admin sees success and the old value survives. That precise bug shipped here once with media captions.
+5b. **The facilities unmapped-code notice.** Give INS0001 a facility coded `HOSTEL`, reload Profile → Facilities, and confirm the "needs re-picking" marker renders with a reason an administrator could act on — and that nothing auto-converted it to `boys_hostel` or `girls_hostel`. Remove the facility afterwards as part of step 8.
 6. Run `npm run migrate:facility-codes` (dry-run, no `--apply`) and confirm it reports without writing.
 7. Console: zero uncaught page errors.
 8. **Clean up** every record and asset created, and verify by listing — including that no orphaned objects remain under `showcase/INS0001/`.
