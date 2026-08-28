@@ -241,11 +241,37 @@ disclosure** at the point of publishing, not an addition to that list.
 - Claim → read-only, per §7.1.
 - A test must FAIL when the behaviour it guards is removed.
 
-## 12. Open questions, deliberately not decided here
+## 12. The two open questions, now decided
 
-- **Whether IDAP should push at all for a school with no eduFleet connection.**
-  Doing so creates a claimable aggregated listing the school has not asked for.
-  The alternative is requiring a connection first, which is a smaller product
-  but a slower start. Decide before the plan.
-- **Whether a `FILLED` vacancy should auto-close its listing** or wait for an
-  explicit action.
+**Q1: does IDAP push for a school with no eduFleet connection? Yes — under the
+platform key.**
+
+The objection was that this creates a publicly visible listing the school has
+not authorised. On inspection that is not true: the school authorises it by
+pressing publish in IDAP. Consent exists; it simply lives on IDAP's side rather
+than eduFleet's.
+
+The alternative — requiring a live connection first — makes a school's first
+vacancy wait on a request, an eduFleet admin matching it, and a confirmation on
+eduFleet. That is a multi-day loop before anything can be posted, and it is the
+kind of first-run friction that stops a feature being adopted at all.
+
+So: publish under the platform key when unconnected, under the grant when
+connected. **The publish confirmation must state that an unconnected listing is
+claimable on eduFleet and that connecting gives the school direct ownership** —
+the friction moves into one honest sentence instead of a blocked flow.
+
+*What this costs if wrong:* schools accumulate aggregated listings they must
+claim. Recoverable by claiming, and the connection path stays available.
+
+**Q2: does a `FILLED` vacancy auto-close its listing? Yes.**
+
+A filled vacancy left live on a public jobs board wastes applicants' time and
+misrepresents the school. Marking it `FILLED` is already an explicit act;
+requiring a second, separate "close on eduFleet" step invites forgetting
+exactly when forgetting is most costly.
+
+Note the asymmetry this creates, already recorded in §7: reopening is not the
+inverse. Contract Two's PATCH accepts only `"closed"`, so reopening a filled
+vacancy creates a **new** listing rather than reviving the old one. The publish
+UI must not imply otherwise.
