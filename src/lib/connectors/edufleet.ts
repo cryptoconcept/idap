@@ -65,17 +65,30 @@ const REDEEM_STATE_MOVED_DETAIL = "already redeemed (or no longer approved) — 
 // initiate — POST /api/partner/connection-requests (platform key)
 // ---------------------------------------------------------------------------
 
+/**
+ * The capabilities IDAP asks each school to consent to. `jobs:write` is the
+ * scope eduFleet's Contract Two job endpoints require, and it is what Plan B2
+ * pushes vacancies with; `listings:write` belongs to eduFleet's vehicle API,
+ * which IDAP has no surface for. eduFleet enforces this twice — the array must
+ * be non-empty, and every entry must appear in the partner's `allowedScopes`,
+ * which an eduFleet admin sets at partner registration (default `["jobs:write"]`).
+ * A partner registered without it is refused even with a well-formed body.
+ */
+const REQUESTED_SCOPES = ["jobs:write"];
+
 function buildConnectionRequestBody(institution: InstitutionSummary): Rec {
-  // api-map §1.2 step 1: required fields only — `externalRef` (IDAP's own
-  // institutionId) and `payload.institutionName`. Nothing else is documented
-  // for this endpoint, unlike PassPercent's equivalent, so nothing else is
-  // sent. The platform key never belongs here — it is `ctx.platformKey`,
-  // carried solely in the Authorization header by `createConnectorHttp`.
+  // api-map §1.2 step 1, contract 1.1.0: `externalRef` (IDAP's own
+  // institutionId), `payload.institutionName`, and a non-empty `scopes`.
+  // The platform key never belongs here — it is `ctx.platformKey`, carried
+  // solely in the Authorization header by `createConnectorHttp`.
+  // `scopes` is a fresh copy per call: the returned object is handed to the
+  // HTTP layer, and a shared array constant could be mutated by a caller.
   return {
     externalRef: institution.institutionId,
     payload: {
       institutionName: institution.name,
     },
+    scopes: [...REQUESTED_SCOPES],
   };
 }
 

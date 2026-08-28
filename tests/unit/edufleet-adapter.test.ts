@@ -84,7 +84,7 @@ describe("edufleetAdapter", () => {
       await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow();
     });
 
-    it("sends externalRef and payload.institutionName, and never the platform key in the body", async () => {
+    it("sends externalRef, payload.institutionName and a non-empty scopes array, and never the platform key in the body", async () => {
       const http = vi.fn().mockResolvedValue({ status: 201, body: { requestId: "req-abc", status: "pending" } });
       const ctx = makeCtx(http);
 
@@ -94,12 +94,26 @@ describe("edufleetAdapter", () => {
       const body = init.body as Record<string, unknown>;
       expect(body.externalRef).toBe("inst-42");
       expect((body.payload as Record<string, unknown>).institutionName).toBe("St. Xavier's");
+      expect(init.body).toMatchObject({ scopes: ["jobs:write"] });
 
       // The platform key must live only in the Authorization header (via
       // `init.token`), never anywhere inside the request body.
       expect(JSON.stringify(body)).not.toContain(PLATFORM_KEY);
       expect(body.platformKey).toBeUndefined();
       expect(body.token).toBeUndefined();
+    });
+
+    it("MUTATION-DISTINGUISHING: the requested scopes are non-empty — eduFleet 400s on an empty array", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 201, body: { requestId: "req-abc", status: "pending" } });
+      const ctx = makeCtx(http);
+
+      await edufleetAdapter.initiate!(ctx, makeInstitution());
+
+      const [, init] = http.mock.calls[0];
+      const scopes = (init.body as { scopes?: unknown }).scopes;
+      expect(Array.isArray(scopes)).toBe(true);
+      expect(scopes as string[]).toHaveLength(1);
+      expect(scopes as string[]).toContain("jobs:write");
     });
   });
 
