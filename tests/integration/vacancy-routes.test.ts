@@ -1,0 +1,464 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
+import { makeInstitution, makeUser } from "../helpers/factories";
+import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
+import { cookies } from "next/headers";
+import type { NextRequest } from "next/server";
+import { GET as listVacancies, POST as createVacancy } from "@/app/api/settings/vacancies/route";
+import {
+  PATCH as patchVacancy,
+  DELETE as deleteVacancy,
+} from "@/app/api/settings/vacancies/[vacancyId]/route";
+import { VacancyService } from "@/services/vacancy.service";
+import { Vacancy } from "@/models";
+import type { VacancyCreateInput } from "@/lib/validation/vacancy";
+
+const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
+
+/** An id shaped like a vacancy's but belonging to no record. */
+const UNKNOWN_ID = "6a8bf44bf4e473b526efc999";
+
+/** A different valid ObjectId a caller might try to smuggle in as `_id`. */
+const SMUGGLED_ID = "6a8bf44bf4e473b526efc123";
+
+const vacancyInput: VacancyCreateInput = {
+  title: "Maths Teacher",
+  subject: "Mathematics",
+  description: "Teach grades 6-10",
+  salaryMin: 25000,
+  salaryMax: 40000,
+  experienceRequired: 2,
+  facilities: ["Provident Fund (PF)", "Paid leave"],
+};
+
+async function makeVacancy(institutionId: string, overrides: Record<string, unknown> = {}) {
+  return VacancyService.create(institutionId, { ...vacancyInput, ...overrides }, actor);
+}
+
+/** A request carrying only a session cookie, for JSON body routes. */
+function jsonRequest(init: { url?: string; body?: unknown; origin?: string } = {}) {
+  const url = new URL(init.url ?? "http://localhost/api/settings/vacancies");
+  const headers = new Headers();
+  if (init.origin) headers.set("origin", init.origin);
+  headers.set("host", "localhost");
+  return {
+    headers,
+    nextUrl: url,
+    url: url.toString(),
+    json: async () => init.body ?? {},
+  } as unknown as NextRequest;
+}
+
+async function signInWithCookie(institutionId: string, email = "vacancies-admin@example.test") {
+  const user = await makeUser(institutionId, "INSTITUTION_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "INSTITUTION_ADMIN",
+    institutionId,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
+/**
+ * Platform-admin session: no `institutionId`, role `SUPER_ADMIN`.
+ * `requireInstitution()` denies SUPER_ADMIN and any other institution-scoped
+ * role (COUNSELOR, FRONT_DESK) through the same branch, so this one session
+ * covers every non-admin role — same convention as
+ * tests/integration/achievement-routes.test.ts / results-routes.test.ts.
+ */
+async function signInPlatformAdmin(email = "vacancies-platform-admin@example.test") {
+  const user = await makeUser(undefined, "SUPER_ADMIN", email);
+  const token = await signSession({
+    sub: String(user._id),
+    role: "SUPER_ADMIN",
+    institutionId: undefined,
+    name: user.name,
+    email: user.email,
+    v: 0,
+  });
+  (await cookies()).set(SESSION_COOKIE, token);
+}
+
+beforeAll(async () => {
+  await startTestDatabase("vacancy-routes");
+  await Vacancy.syncIndexes();
+});
+afterAll(stopTestDatabase);
+
+beforeEach(async () => {
+  await clearDatabase();
+  await makeInstitution("INS0001");
+  await makeInstitution("INS0002");
+});
+
+// The cookie store is module-level, so a session left behind would silently
+// authenticate the tests that expect no credentials at all.
+afterEach(async () => {
+  (await cookies()).delete(SESSION_COOKIE);
+});
+
+describe("GET /api/settings/vacancies", () => {
+  it("lists only the caller's vacancies", async () => {
+    await makeVacancy("INS0001");
+    await makeVacancy("INS0002");
+    await signInWithCookie("INS0001");
+
+    const response = await listVacancies();
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancies).toHaveLength(1);
+  });
+});
+
+describe("POST /api/settings/vacancies", () => {
+  it("creates a vacancy over HTTP", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await createVacancy(
+      jsonRequest({ body: vacancyInput, origin: "http://localhost" }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.vacancy.title).toBe("Maths Teacher");
+    expect(payload.vacancy.status).toBe("DRAFT");
+  });
+
+  it("rejects a body missing a required field", async () => {
+    await signInWithCookie("INS0001");
+
+    const { title: _title, ...rest } = vacancyInput;
+    const response = await createVacancy(
+      jsonRequest({ body: rest, origin: "http://localhost" }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  // This is the test that pins the route's `.parse()`. `_id` is a real
+  // Mongoose path with no re-assignment in `VacancyService.create` (only
+  // `institutionId` is re-assigned after the spread — verified by reading
+  // `vacancy.service.ts` before writing this test). Without `.parse()`, a
+  // caller-chosen `_id` in the raw body would flow straight into
+  // `Vacancy.create` and become the document's actual id, since `_id` is not
+  // in `vacancyCreateSchema` and nothing else strips it.
+  it("MUTATION-DISTINGUISHING: strips _id from the create body — the stored document gets a server-generated id", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await createVacancy(
+      jsonRequest({ body: { ...vacancyInput, _id: SMUGGLED_ID }, origin: "http://localhost" }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.id).not.toBe(SMUGGLED_ID);
+
+    const raw = await Vacancy.findById(payload.vacancy.id).lean();
+    expect(raw).not.toBeNull();
+    expect(String(raw?._id)).not.toBe(SMUGGLED_ID);
+  });
+
+  // Not a parse-pinning test: `status` is absent from `vacancyCreateSchema`
+  // entirely, and `VacancyService.create` never re-assigns it — a fresh
+  // vacancy gets the model's own `"DRAFT"` default regardless of whether
+  // this route parses at all. Kept because the behaviour itself matters (a
+  // vacancy must never be born already OPEN), not as a mutation-check pin.
+  it("still creates a DRAFT vacancy when the body carries status: OPEN", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await createVacancy(
+      jsonRequest({
+        body: { ...vacancyInput, status: "OPEN" },
+        origin: "http://localhost",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.status).toBe("DRAFT");
+
+    const raw = await Vacancy.findById(payload.vacancy.id).lean();
+    expect(raw?.status).toBe("DRAFT");
+  });
+
+  // Tenant scoping: institutionId comes from requireInstitution() and
+  // nowhere else. This does not pin the route's `.parse()` — `create`
+  // re-assigns `institutionId` after the spread regardless of what the body
+  // carries — but the behaviour is still a binding requirement and needs its
+  // own coverage.
+  it("creates the record under the caller's institution even when the body names another institution, and leaves that institution's own record untouched", async () => {
+    const foreign = await makeVacancy("INS0002", { title: "INS0002 original" });
+    const before = await Vacancy.findById(foreign.id).lean();
+    await signInWithCookie("INS0001");
+
+    const response = await createVacancy(
+      jsonRequest({
+        body: { ...vacancyInput, institutionId: "INS0002" },
+        origin: "http://localhost",
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+
+    const raw = await Vacancy.findById(payload.vacancy.id).lean();
+    expect(raw?.institutionId).toBe("INS0001");
+
+    const after = await Vacancy.findById(foreign.id).lean();
+    expect(after).toEqual(before);
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects a cross-origin create and creates nothing", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await createVacancy(
+      jsonRequest({ body: vacancyInput, origin: "https://not-the-app.test" }),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+    expect(await Vacancy.countDocuments({})).toBe(0);
+  });
+
+  it("returns 401 without a session and creates nothing", async () => {
+    const response = await createVacancy(
+      jsonRequest({ body: vacancyInput, origin: "http://localhost" }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(await Vacancy.countDocuments({})).toBe(0);
+  });
+
+  // requireInstitution() is INSTITUTION_ADMIN-only: it throws `forbidden` for
+  // a SUPER_ADMIN session exactly as it does for COUNSELOR/FRONT_DESK — one
+  // session covers every non-admin role.
+  it("returns 403 for an authenticated platform admin and creates nothing", async () => {
+    await signInPlatformAdmin();
+
+    const response = await createVacancy(
+      jsonRequest({ body: vacancyInput, origin: "http://localhost" }),
+    );
+
+    expect(response.status).toBe(403);
+    expect(await Vacancy.countDocuments({})).toBe(0);
+  });
+});
+
+describe("PATCH /api/settings/vacancies/[vacancyId]", () => {
+  it("updates a vacancy over HTTP", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { title: "Senior Maths Teacher" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.title).toBe("Senior Maths Teacher");
+  });
+
+  // The three-state patch contract's load-bearing assertion, exercised
+  // end-to-end through the route rather than the service: a route that
+  // normalises the body or drops `null` on the way through would silently
+  // turn "clear this field" into "leave it alone" — this repo shipped
+  // exactly that bug once with media captions.
+  it("MUTATION-DISTINGUISHING: clears the stored salaryMin when the patch sends an explicit null, not merely omitting the key", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { salaryMin: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.salaryMin).toBeUndefined();
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("salaryMin");
+  });
+
+  it("leaves the stored salaryMin untouched when the patch omits it", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { title: "Renamed only" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.salaryMin).toBe(25000);
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.salaryMin).toBe(25000);
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects a cross-origin PATCH and leaves the record unchanged", async () => {
+    const created = await makeVacancy("INS0001");
+    const before = await Vacancy.findById(created.id).lean();
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { title: "Should not apply", salaryMin: null },
+        origin: "https://not-the-app.test",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+
+    const after = await Vacancy.findById(created.id).lean();
+    expect(after).toEqual(before);
+  });
+
+  it("returns 404 for another institution's vacancy and leaves it byte-for-byte unchanged", async () => {
+    const foreign = await makeVacancy("INS0002");
+    const before = await Vacancy.findById(foreign.id).lean();
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${foreign.id}`,
+        body: { title: "Hacked" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: foreign.id }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+    const after = await Vacancy.findById(foreign.id).lean();
+    expect(after).toEqual(before);
+  });
+
+  it("returns 404 for an unknown id", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${UNKNOWN_ID}`,
+        body: { title: "Nope" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: UNKNOWN_ID }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  it("returns 401 without a session and leaves the record unchanged", async () => {
+    const created = await makeVacancy("INS0001");
+    const before = await Vacancy.findById(created.id).lean();
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { title: "Should not apply" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(401);
+    const after = await Vacancy.findById(created.id).lean();
+    expect(after).toEqual(before);
+  });
+});
+
+describe("DELETE /api/settings/vacancies/[vacancyId]", () => {
+  it("removes a vacancy over HTTP", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await deleteVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.deleted).toBe(true);
+    expect(await Vacancy.findById(created.id).lean()).toBeNull();
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects a cross-origin DELETE and leaves the record intact", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await deleteVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        origin: "https://not-the-app.test",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+    expect(await Vacancy.findById(created.id).lean()).not.toBeNull();
+  });
+
+  it("returns 404 for another institution's vacancy and leaves it intact", async () => {
+    const foreign = await makeVacancy("INS0002");
+    await signInWithCookie("INS0001");
+
+    const response = await deleteVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${foreign.id}`,
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: foreign.id }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+    expect(await Vacancy.findById(foreign.id).lean()).not.toBeNull();
+  });
+
+  it("returns 404 for an unknown id", async () => {
+    await signInWithCookie("INS0001");
+
+    const response = await deleteVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${UNKNOWN_ID}`,
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: UNKNOWN_ID }) } as never,
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  // No separate 401 here: DELETE shares the exact same `requireInstitution()`
+  // guard as PATCH above, in the same file — that branch is already pinned
+  // there, same reasoning as the single SUPER_ADMIN 403 covering every
+  // non-admin role rather than one test per role.
+});
