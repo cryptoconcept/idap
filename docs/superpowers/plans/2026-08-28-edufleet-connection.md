@@ -93,7 +93,7 @@ git commit -m "feat: register the eduFleet platform and implement initiate"
 - Test: `tests/unit/edufleet-adapter.test.ts` (extend)
 
 **Interfaces:**
-- Consumes: Task 1's adapter module; `RefreshResult`, `SyncOutcome`, `GrantRevokedError` from `src/lib/connectors/types.ts`.
+- Consumes: Task 1's adapter module; `RefreshResult`, `SyncOutcome`, `ConnectorAuthError` from `src/lib/connectors/types.ts`.
 - Produces: a complete connection lifecycle. Plan B2 replaces `sync`'s body.
 
 **The state machine** (api-map §1.2). eduFleet's `PartnerConnectionRequest.status` is one of `pending`, `awaiting_school`, `approved`, `rejected`, `completed`. Map them onto `RefreshResult`:
@@ -120,9 +120,11 @@ Three things about that response matter:
 
 **The defensive `completed` branch.** A request already `completed` means something redeemed it — and since the grant is returned exactly once, IDAP cannot obtain it now. PassPercent's `refresh` already has this shape for the same reason. Return a non-`CONNECTED` result with a detail an operator can act on, rather than throwing or silently retrying. eduFleet also returns 409 `already_redeemed` and 409 `not_approved` on the redeem endpoint; both are the same class.
 
-**Revocation.** When a school disconnects on eduFleet's side, a grant-authenticated call returns **401 with reason `revoked`**. Throw `GrantRevokedError` — the connection service catches it and flips the connection's state. Read that type's docblock in `types.ts` before using it; it exists precisely to distinguish "the credential we hold is no longer honoured" from any other request failure.
+**Revocation.** When a school disconnects on eduFleet's side, a grant-authenticated call returns **401 with reason `revoked`**. Throw **`ConnectorAuthError`** — verified at `types.ts:90`; that is the actual export name. The connection service catches it and flips the connection's state. Read its docblock before using it: it exists precisely to distinguish "the grant we hold is no longer honoured" from any other request-shaped failure.
 
-**The placeholder `sync`.** `sync` is required on `PlatformAdapter` and this plan has nothing to push. Return a `SyncOutcome` with a single step whose `detail` says plainly that the vacancy push is not configured yet. **Do not fabricate a success and do not throw** — an operator pressing Sync deserves an honest answer, and Plan B2 replaces this body.
+**The placeholder `sync`.** `sync` is required on `PlatformAdapter` and this plan has nothing to push. `SyncStatus` is `"SUCCESS" | "PARTIAL" | "FAILED"` (`constants.ts:472` — verified), so the honest answer must be one of three.
+
+Return **`PARTIAL`**, with one step `{ step: "vacancies", ok: false, … }` and a warning saying plainly that vacancy publishing is not enabled yet. The reasoning, because the choice is not obvious: `SUCCESS` is the fabrication this plan refuses — nothing was pushed. `FAILED` is also untrue and worse in practice: nothing broke, and painting a normal state red trains an operator to ignore red. `PARTIAL` is the only remaining option that is true, with the warning carrying what an operator needs to know. **Do not throw.** Plan B2 replaces this body.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -132,7 +134,7 @@ Three things about that response matter:
 - A **failing follow-up call still returns `CONNECTED`** with the grant intact — name this `MUTATION-DISTINGUISHING: a cosmetic lookup failure never costs the grant`.
 - `completed` returns a non-`CONNECTED` result with an actionable detail.
 - A 401 whose body reason is `revoked` throws `GrantRevokedError`; a 401 with any other reason does not.
-- `sync` returns an outcome that is not a fabricated success.
+- `sync` returns `PARTIAL` with `ok: false` on its single step and a warning naming the reason — **not** `SUCCESS`, and not a throw.
 
 - [ ] **Step 2: Run to verify they fail. Step 3: Implement. Step 4: Run to verify they pass.**
 
@@ -140,7 +142,7 @@ Three things about that response matter:
 
 (a) Make the follow-up call's failure propagate → the grant-intact test fails.
 (b) Populate `slug` from the school name → the slug test fails.
-(c) Remove the `revoked` reason check so every 401 throws `GrantRevokedError` → the other-reason test fails.
+(c) Remove the `revoked` reason check so every 401 throws `ConnectorAuthError` → the other-reason test fails.
 
 Restore each, verify by `grep`, report all three messages.
 
@@ -190,6 +192,6 @@ Walk the whole chain and record each step's request and response:
 
 **Placeholder scan:** no TBDs. The one deliberate placeholder — `sync`'s body — is specified as returning an honest non-success, with its replacement named.
 
-**Type consistency:** `EDUFLEET` is added to `PLATFORMS` in Task 1 and consumed by the registry in the same task. `RefreshResult`, `SyncOutcome` and `GrantRevokedError` are existing exports of `src/lib/connectors/types.ts`, not new types.
+**Type consistency:** `EDUFLEET` is added to `PLATFORMS` in Task 1 and consumed by the registry in the same task. `RefreshResult`, `SyncOutcome` and `ConnectorAuthError` are existing exports of `src/lib/connectors/types.ts`, not new types — the error class was checked at source after an earlier draft of this plan invented the name "GrantRevokedError" from its docblock's prose.
 
 **Verified at source while writing this plan:** `PlatformAdapter`'s shape and that `sync` is **required**, not optional (`types.ts:58-63`); that `SyncSourceData` is Result-centric and has no vacancy field; that the registry self-registers by side-effect import (`connectors/index.ts`); that `PLATFORM_LABELS` is `Record<Platform, string>` so the enum addition forces the label; that `connections-panel.tsx` reads `PLATFORM_LABELS[entry.platform]` and so needs no per-platform code; and eduFleet's four-step chain, its five request states, its exact redeem response shape and its `duplicate_open_request` 409, all from api-map §1.
