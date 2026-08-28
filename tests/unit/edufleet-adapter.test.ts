@@ -892,6 +892,46 @@ describe("edufleetAdapter", () => {
       expect(http).not.toHaveBeenCalled();
     });
 
+    it("MUTATION-DISTINGUISHING: a body containing status throws before any HTTP call — status changes must go through closeJob", async () => {
+      // Contract Two's updateSchoolJob short-circuits the instant `status`
+      // is present and silently discards every other field in the same
+      // body, reporting a 200 with the pre-patch values. The guard must fire
+      // BEFORE ctx.http is ever called — a caller that sent status believed
+      // it was closing the listing, and a throw that still spent a write
+      // unit would be no better than the silent discard it exists to avoid.
+      const http = vi.fn();
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.patchJob!(
+          ctx,
+          makeConnection(),
+          "job-1",
+          { title: "x", status: "closed" },
+          "AGGREGATED",
+        ),
+      ).rejects.toThrow(/closeJob/);
+      expect(http).not.toHaveBeenCalled();
+    });
+
+    it("a body with no status key still passes through untouched", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { jobId: "job-1", title: "x", status: "active" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.patchJob!(
+        ctx,
+        makeConnection(),
+        "job-1",
+        { title: "x", salaryMin: 20000 },
+        "AGGREGATED",
+      );
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-1" });
+      expect(http).toHaveBeenCalledTimes(1);
+      const [, init] = http.mock.calls[0];
+      expect(init.body).toEqual({ title: "x", salaryMin: 20000 });
+    });
+
     it("a 403 returns BLOCKED without throwing", async () => {
       const http = vi.fn().mockResolvedValue({ status: 403, body: { error: "claimed", reason: "claimed" } });
       const ctx = makeCtx(http);

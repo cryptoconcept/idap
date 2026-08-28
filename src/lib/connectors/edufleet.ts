@@ -577,6 +577,21 @@ async function createJob(
   return classifyJobPush(resp);
 }
 
+/**
+ * Fix round 1: `body` is forwarded to eduFleet otherwise unfiltered, and a
+ * `status` key is exactly the field `closeJob` below exists to isolate.
+ * Contract Two's `updateSchoolJob` short-circuits the instant `status` is
+ * present — it returns immediately and never looks at any other field in the
+ * same body, then reports a 200 carrying the PRE-patch values. A caller that
+ * put `status` in a `patchJob` body alongside, say, a salary edit would see
+ * that 200 as success and the salary would never have changed. Refusing
+ * before the request is sent — rather than silently stripping the key — is
+ * deliberate: a caller that sent `status` believed it was closing the
+ * listing, and dropping the key quietly would leave it believing a close
+ * happened when none did. `closeJob` is the only sanctioned way to change
+ * `status`, and this throw never spends a write unit (it runs before
+ * `ctx.http` is called at all).
+ */
 async function patchJob(
   ctx: AdapterContext,
   connection: ConnectionState,
@@ -584,6 +599,11 @@ async function patchJob(
   body: Record<string, unknown>,
   contract: VacancyListingContract,
 ): Promise<JobPushResult> {
+  if ("status" in body) {
+    throw new Error(
+      "eduFleet: patchJob cannot carry a status key — Contract Two silently discards every other field once status is present; call closeJob to close a listing",
+    );
+  }
   const resp = await ctx.http(`${jobsPath(contract)}/${encodeURIComponent(jobId)}`, {
     method: "PATCH",
     token: tokenFor(ctx, connection, contract),
