@@ -180,6 +180,55 @@ describe("edufleetAdapter", () => {
       expect(body.token).toBeUndefined();
     });
 
+    it("sends every payload field eduFleet's ConnectionPayload accepts and has a source for", async () => {
+      // Step 2 is a human admin matching this request to a real school; a
+      // name-only request is what produces a wrong match. `board` and `type`
+      // are accepted by eduFleet but have no source on `InstitutionSummary`,
+      // so they must not appear.
+      const http = vi.fn().mockResolvedValue({ status: 201, body: { requestId: "req-abc", status: "pending" } });
+      const ctx = makeCtx(http);
+
+      await edufleetAdapter.initiate!(ctx, makeInstitution());
+
+      const [, init] = http.mock.calls[0];
+      const payload = (init.body as { payload: Record<string, unknown> }).payload;
+      expect(payload).toEqual({
+        institutionName: "Delhi Public School",
+        city: "Bengaluru",
+        district: "Bengaluru Urban",
+        state: "KA",
+        phone: "9999999999",
+        email: "principal@dps.example",
+        website: "https://dps.example",
+        contactName: "Principal",
+      });
+      expect(payload.board).toBeUndefined();
+      expect(payload.type).toBeUndefined();
+    });
+
+    it("MUTATION-DISTINGUISHING: a sparse institution sends no empty optional keys at all", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 201, body: { requestId: "req-abc", status: "pending" } });
+      const ctx = makeCtx(http);
+
+      // Deliberately not `makeInstitution({...})` — the fixture populates
+      // every optional field, and overriding them one by one would leave the
+      // keys present with `undefined` values, which is the very thing under
+      // test.
+      await edufleetAdapter.initiate!(ctx, { institutionId: "inst-sparse", name: "Nameless High" });
+
+      const [, init] = http.mock.calls[0];
+      const body = init.body as Record<string, unknown>;
+      const payload = body.payload as Record<string, unknown>;
+      // `Object.keys` (not `toEqual`) is the point: an explicit
+      // `city: undefined` passes a `toEqual` against `{institutionName}` but
+      // is still a key on the wire.
+      expect(Object.keys(payload)).toEqual(["institutionName"]);
+      expect("city" in payload).toBe(false);
+      expect("district" in payload).toBe(false);
+      expect("phone" in payload).toBe(false);
+      expect(body.scopes).toEqual(["jobs:write"]);
+    });
+
     it("MUTATION-DISTINGUISHING: the requested scopes are non-empty — eduFleet 400s on an empty array", async () => {
       const http = vi.fn().mockResolvedValue({ status: 201, body: { requestId: "req-abc", status: "pending" } });
       const ctx = makeCtx(http);

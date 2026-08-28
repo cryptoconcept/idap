@@ -105,11 +105,40 @@ function buildConnectionRequestBody(institution: InstitutionSummary): Rec {
   // solely in the Authorization header by `createConnectorHttp`.
   // `scopes` is a fresh copy per call: the returned object is handed to the
   // HTTP layer, and a shared array constant could be mutated by a caller.
+  //
+  // Everything after `institutionName` is optional to eduFleet
+  // (`ConnectionPayload`, `partner-connections.ts:20-31`) and load-bearing to
+  // a human: step 2 of the chain is an eduFleet **admin** hand-matching this
+  // request to a real school, and a request carrying nothing but a name is
+  // what produces a wrong match — which is in turn the precondition for the
+  // auto-remap clash `initiate` refuses below, and for handing a school's
+  // grant to an institution that school never consented to. The service
+  // already refuses to initiate without a city; sending it is the whole point
+  // of collecting it.
+  //
+  // `board` and `type` are also accepted by eduFleet but have no source on
+  // `InstitutionSummary`, so they are omitted rather than invented.
+  const optional: Record<string, string | undefined> = {
+    city: institution.city,
+    district: institution.address?.district,
+    state: institution.address?.state,
+    phone: institution.phone,
+    email: institution.contactEmail,
+    website: institution.website,
+    contactName: institution.contactName,
+  };
+
+  // Absent keys are dropped rather than sent as an explicit `undefined`: the
+  // payload is persisted on eduFleet's request document and shown to the
+  // matching admin, and an empty field is noise there.
+  const payload: Rec = { institutionName: institution.name };
+  for (const [key, value] of Object.entries(optional)) {
+    if (value !== undefined) payload[key] = value;
+  }
+
   return {
     externalRef: institution.institutionId,
-    payload: {
-      institutionName: institution.name,
-    },
+    payload,
     scopes: [...REQUESTED_SCOPES],
   };
 }
