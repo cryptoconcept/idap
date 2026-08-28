@@ -618,4 +618,359 @@ describe("edufleetAdapter", () => {
       expect(http).not.toHaveBeenCalled();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // createJob / patchJob / closeJob — the wire layer for Task 2's builders.
+  // These methods take an already-built body (or, for closeJob, build their
+  // own fixed one) and classify the response; they never construct or
+  // validate a body themselves.
+  // ---------------------------------------------------------------------------
+
+  const GRANT_TOKEN = "ef_pgrant_live_abc";
+
+  function makeGrantConnection(overrides: Partial<ConnectionState> = {}): ConnectionState {
+    return makeConnection({ grantToken: GRANT_TOKEN, scopes: ["jobs:write"], ...overrides });
+  }
+
+  const AGGREGATED_BODY = {
+    externalJobId: "vac-1",
+    title: "Mathematics Teacher",
+    subject: "Mathematics",
+    description: "Teach mathematics to grades 9-10.",
+    institutionName: "Delhi Public School",
+    city: "Bengaluru",
+  };
+
+  const SCHOOL_BODY = {
+    externalJobId: "vac-1",
+    title: "Mathematics Teacher",
+    subject: "Mathematics",
+    description: "Teach mathematics to grades 9-10.",
+    city: "Bengaluru",
+  };
+
+  describe("createJob", () => {
+    it("AGGREGATED: posts to /api/partner/jobs with the platform key and returns OK carrying jobId and claimState", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 201,
+        body: {
+          jobId: "job-1",
+          externalJobId: "vac-1",
+          slug: "maths-teacher",
+          status: "active",
+          claimStatus: "unclaimed",
+          publicUrl: "https://edufleet.example/jobs/maths-teacher/job-1",
+          claimUrl: "https://edufleet.example/claim/tok-1",
+        },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED");
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-1", claimState: "unclaimed" });
+      expect(http).toHaveBeenCalledTimes(1);
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/jobs");
+      expect(init.method).toBe("POST");
+      expect(init.token).toBe(PLATFORM_KEY);
+      expect(init.body).toEqual(AGGREGATED_BODY);
+    });
+
+    it("SCHOOL_POSTED: posts to /api/partner/school/jobs with the grant token and returns OK with no claimState", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 201,
+        body: {
+          jobId: "job-2",
+          externalJobId: "vac-1",
+          status: "active",
+          featured: false,
+          publicUrl: "https://edufleet.example/jobs/maths-teacher/job-2",
+        },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.createJob!(
+        ctx,
+        makeGrantConnection(),
+        SCHOOL_BODY,
+        "SCHOOL_POSTED",
+      );
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-2" });
+      expect("claimState" in (result as object)).toBe(false);
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/school/jobs");
+      expect(init.method).toBe("POST");
+      expect(init.token).toBe(GRANT_TOKEN);
+      expect(init.body).toEqual(SCHOOL_BODY);
+    });
+
+    it("throws when SCHOOL_POSTED is called on a connection with no grant token", async () => {
+      const http = vi.fn();
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.createJob!(ctx, makeConnection({ grantToken: undefined }), SCHOOL_BODY, "SCHOOL_POSTED"),
+      ).rejects.toThrow(/grant token/);
+      expect(http).not.toHaveBeenCalled();
+    });
+
+    it("MUTATION-DISTINGUISHING: a 403 returns kind BLOCKED and does not throw — two of eduFleet's four triggers are reversible", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 403,
+        body: {
+          error: "This listing has been claimed by the school and can no longer be edited by a partner key",
+          reason: "claimed",
+        },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED");
+
+      expect(result).toEqual({
+        kind: "BLOCKED",
+        reason: "claimed",
+        detail: expect.stringContaining("403"),
+      });
+    });
+
+    it("a 403 upgrade_required returns BLOCKED with a reason naming the plan cap", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 403,
+        body: { error: "This school's plan has no active-job slots left", reason: "upgrade_required" },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.createJob!(ctx, makeGrantConnection(), SCHOOL_BODY, "SCHOOL_POSTED");
+
+      expect(result).toEqual({
+        kind: "BLOCKED",
+        reason: "upgrade_required",
+        detail: expect.any(String),
+      });
+    });
+
+    it("MUTATION-DISTINGUISHING: a 409 carries the response's OWN contract field, not the contract the caller used", async () => {
+      // Caller pushed via AGGREGATED, but eduFleet reports the colliding
+      // externalJobId is actually owned by the "school" (Contract Two) side —
+      // exactly the cross-contract collision api-map §4 describes. A mutant
+      // that echoes the caller's own contract ("AGGREGATED") instead of the
+      // response's ("school") must fail this assertion.
+      const http = vi.fn().mockResolvedValue({
+        status: 409,
+        body: {
+          error: 'A job with externalJobId "vac-1" already exists — PATCH it instead',
+          reason: "duplicate_external_job",
+          jobId: "job-owned-by-school",
+          contract: "school",
+        },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED");
+
+      expect(result).toEqual({
+        kind: "CONFLICT",
+        ownedByContract: "school",
+        detail: expect.any(String),
+      });
+    });
+
+    it("throws when a 409 carries no contract field to trust", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 409,
+        body: { error: "duplicate", reason: "duplicate_external_job", jobId: "job-x" },
+      });
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED"),
+      ).rejects.toThrow(/contract/);
+    });
+
+    it("a 401 revoked throws ConnectorAuthError", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 401, body: { error: "Grant revoked", reason: "revoked" } });
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.createJob!(ctx, makeGrantConnection(), SCHOOL_BODY, "SCHOOL_POSTED"),
+      ).rejects.toBeInstanceOf(ConnectorAuthError);
+    });
+
+    it("a 401 with a different reason throws a plain Error, not ConnectorAuthError", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValue({ status: 401, body: { error: "Partner inactive", reason: "partner_inactive" } });
+      const ctx = makeCtx(http);
+
+      let caught: unknown;
+      try {
+        await edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED");
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).not.toBeInstanceOf(ConnectorAuthError);
+      expect(caught).toBeInstanceOf(Error);
+    });
+
+    it("throws on any other non-2xx status", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 500, body: { error: "internal" } });
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED"),
+      ).rejects.toThrow(/status 500/);
+    });
+
+    it("MUTATION-DISTINGUISHING: a success response with no jobId throws rather than returning an empty id", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 201, body: { status: "active" } });
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED"),
+      ).rejects.toThrow(/no jobId/);
+    });
+  });
+
+  describe("patchJob", () => {
+    it("AGGREGATED: PATCHes /api/partner/jobs/{jobId} with the platform key, encoded", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 200,
+        body: { jobId: "job-1", externalJobId: "vac 1/x", title: "Updated", status: "active", claimStatus: "unclaimed" },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.patchJob!(
+        ctx,
+        makeConnection(),
+        "vac 1/x",
+        { title: "Updated" },
+        "AGGREGATED",
+      );
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-1", claimState: "unclaimed" });
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe(`/api/partner/jobs/${encodeURIComponent("vac 1/x")}`);
+      expect(init.method).toBe("PATCH");
+      expect(init.token).toBe(PLATFORM_KEY);
+      expect(init.body).toEqual({ title: "Updated" });
+    });
+
+    it("SCHOOL_POSTED: PATCHes /api/partner/school/jobs/{id} with the grant token", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { jobId: "job-2", title: "Updated", status: "active" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.patchJob!(
+        ctx,
+        makeGrantConnection(),
+        "job-2",
+        { title: "Updated" },
+        "SCHOOL_POSTED",
+      );
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-2" });
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/school/jobs/job-2");
+      expect(init.method).toBe("PATCH");
+      expect(init.token).toBe(GRANT_TOKEN);
+      expect(init.body).toEqual({ title: "Updated" });
+    });
+
+    it("throws when SCHOOL_POSTED is called on a connection with no grant token", async () => {
+      const http = vi.fn();
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.patchJob!(
+          ctx,
+          makeConnection({ grantToken: undefined }),
+          "job-2",
+          { title: "x" },
+          "SCHOOL_POSTED",
+        ),
+      ).rejects.toThrow(/grant token/);
+      expect(http).not.toHaveBeenCalled();
+    });
+
+    it("a 403 returns BLOCKED without throwing", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 403, body: { error: "claimed", reason: "claimed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.patchJob!(ctx, makeConnection(), "job-1", { title: "x" }, "AGGREGATED");
+
+      expect(result.kind).toBe("BLOCKED");
+    });
+
+    it("a 409 carries the response's contract field", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 409,
+        body: { error: "dup", reason: "duplicate_external_job", jobId: "job-3", contract: "platform" },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.patchJob!(
+        ctx,
+        makeGrantConnection(),
+        "job-3",
+        { title: "x" },
+        "SCHOOL_POSTED",
+      );
+
+      expect(result).toMatchObject({ kind: "CONFLICT", ownedByContract: "platform" });
+    });
+  });
+
+  describe("closeJob", () => {
+    it("MUTATION-DISTINGUISHING: on Contract Two, sends status \"closed\" and nothing else — eduFleet silently discards any co-sent field", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { jobId: "job-2", title: "Old title", status: "closed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.closeJob!(ctx, makeGrantConnection(), "job-2", "SCHOOL_POSTED");
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-2" });
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/school/jobs/job-2");
+      expect(init.method).toBe("PATCH");
+      expect(init.token).toBe(GRANT_TOKEN);
+      const body = init.body as Record<string, unknown>;
+      expect(Object.keys(body)).toEqual(["status"]);
+      expect(body.status).toBe("closed");
+    });
+
+    it("on Contract One, also sends status \"closed\" and nothing else", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValue({ status: 200, body: { jobId: "job-1", externalJobId: "vac-1", title: "x", status: "closed", claimStatus: "unclaimed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.closeJob!(ctx, makeConnection(), "vac-1", "AGGREGATED");
+
+      expect(result).toEqual({ kind: "OK", jobId: "job-1", claimState: "unclaimed" });
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/jobs/vac-1");
+      expect(init.token).toBe(PLATFORM_KEY);
+      const body = init.body as Record<string, unknown>;
+      expect(Object.keys(body)).toEqual(["status"]);
+      expect(body.status).toBe("closed");
+    });
+
+    it("throws when SCHOOL_POSTED is called on a connection with no grant token", async () => {
+      const http = vi.fn();
+      const ctx = makeCtx(http);
+
+      await expect(
+        edufleetAdapter.closeJob!(ctx, makeConnection({ grantToken: undefined }), "job-2", "SCHOOL_POSTED"),
+      ).rejects.toThrow(/grant token/);
+      expect(http).not.toHaveBeenCalled();
+    });
+
+    it("a 403 (e.g. already withdrawn) returns BLOCKED without throwing", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 403, body: { error: "claimed", reason: "claimed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.closeJob!(ctx, makeConnection(), "vac-1", "AGGREGATED");
+
+      expect(result.kind).toBe("BLOCKED");
+    });
+  });
 });

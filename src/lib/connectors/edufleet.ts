@@ -28,10 +28,12 @@ import type {
   ConnectionState,
   InitiateResult,
   InstitutionSummary,
+  JobPushResult,
   PlatformAdapter,
   RefreshResult,
   SyncOutcome,
 } from "./types";
+import type { VacancyListingContract } from "@/lib/constants";
 import { registerAdapter } from "./index";
 
 type Rec = Record<string, unknown>;
@@ -459,6 +461,166 @@ async function sync(): Promise<SyncOutcome> {
 }
 
 // ---------------------------------------------------------------------------
+// createJob / patchJob / closeJob — the wire layer for Task 2's builders
+// (`edufleet-vacancy-map.ts`). This plan's B2 vacancy push: these methods
+// send an already-built, already-preflighted body and classify the answer —
+// they never build or validate a body themselves, and they never retry.
+// `spendWrite` (api-map §1.4) runs BEFORE eduFleet validates anything, so a
+// `400` or a `409` has already burned one of the day's write units by the
+// time it reaches `classifyJobPush` below; retrying either from inside this
+// module would be how a school's whole daily budget disappears in one bad
+// push. There is exactly one `ctx.http` call per method for that reason.
+// ---------------------------------------------------------------------------
+
+/** Contract One (platform key) uses `externalJobId` to address a job on the
+ *  PATCH route; Contract Two (grant) uses eduFleet's own Mongo `_id`. Both
+ *  are opaque strings from this module's point of view — the caller is
+ *  responsible for passing the shape the contract expects. */
+function jobsPath(contract: VacancyListingContract): string {
+  return contract === "SCHOOL_POSTED" ? "/api/partner/school/jobs" : "/api/partner/jobs";
+}
+
+/**
+ * Contract One is authenticated with the platform key (`ctx.platformKey`);
+ * Contract Two is authenticated with the school's own grant
+ * (`connection.grantToken`) — there is no fallback between the two, because
+ * a platform key cannot post as a specific school and a grant is scoped to
+ * exactly one. A `SCHOOL_POSTED` call with no grant on the connection is a
+ * caller bug (this plan's orchestration never reaches here without one), so
+ * it throws immediately rather than sending a request with no credential.
+ */
+function tokenFor(ctx: AdapterContext, connection: ConnectionState, contract: VacancyListingContract): string {
+  if (contract === "SCHOOL_POSTED") {
+    if (!connection.grantToken) {
+      throw new Error("eduFleet: pushing to Contract Two requires a grant token, but this connection has none");
+    }
+    return connection.grantToken;
+  }
+  return ctx.platformKey;
+}
+
+/**
+ * Shared classification for all three job-push methods below. Every branch
+ * here mirrors api-map §5's error catalog for the four job routes.
+ *
+ * `403` never throws: `claim_pending` and `hiddenPendingReview` (Contract
+ * One's PATCH, api-map §2.2) both revert on their own — a rejected claim or
+ * a restored takedown — and `upgrade_required` (Contract Two's create,
+ * §2.3) just means today's plan cap is full. Throwing on any of these would
+ * let a caller latch the vacancy as permanently dead over a state that can
+ * still heal, so it comes back as `BLOCKED` for the caller to act on or
+ * retry later.
+ *
+ * `409 duplicate_external_job` always echoes the response's own `contract`
+ * field, never the contract this call used — `externalJobId` uniqueness is
+ * shared across both contracts (api-map §4), so a collision can be owned by
+ * the *other* contract, and a caller that assumed its own contract would
+ * retry against a PATCH endpoint that 404s on it.
+ *
+ * `401 revoked` is the one case worth distinguishing from an ordinary
+ * failure: it means the credential this call just used is already dead, the
+ * same signal `fetchRemoteInstitution` above throws `ConnectorAuthError`
+ * for. Every other 401 (a bad/missing token, `partner_revoked`,
+ * `partner_inactive`) throws a plain `Error` — those are not "reconnect this
+ * school" signals in the way `revoked` is.
+ */
+function classifyJobPush(resp: { status: number; body: unknown }): JobPushResult {
+  if (resp.status === 200 || resp.status === 201) {
+    const body = rec(resp.body) ?? {};
+    const jobId = str(body.jobId);
+    if (!jobId) {
+      throw new Error(`eduFleet: job push succeeded (status ${resp.status}) but the response carried no jobId`);
+    }
+    const claimState = str(body.claimStatus);
+    return claimState !== undefined ? { kind: "OK", jobId, claimState } : { kind: "OK", jobId };
+  }
+
+  if (resp.status === 401) {
+    const body = rec(resp.body);
+    if (str(body?.reason) === "revoked") {
+      throw new ConnectorAuthError("eduFleet: the credential used for this job push has been revoked");
+    }
+    throw new Error(`eduFleet: job push failed (${describeFailure(resp)})`);
+  }
+
+  if (resp.status === 403) {
+    const body = rec(resp.body) ?? {};
+    const reason = str(body.reason) ?? "blocked";
+    return { kind: "BLOCKED", reason, detail: describeFailure(resp) };
+  }
+
+  if (resp.status === 409) {
+    const body = rec(resp.body) ?? {};
+    const ownedByContract = str(body.contract);
+    if (!ownedByContract) {
+      throw new Error(
+        `eduFleet: duplicate externalJobId, but the response carried no contract field to trust (${describeFailure(resp)})`,
+      );
+    }
+    return { kind: "CONFLICT", ownedByContract, detail: describeFailure(resp) };
+  }
+
+  throw new Error(`eduFleet: job push failed (${describeFailure(resp)})`);
+}
+
+async function createJob(
+  ctx: AdapterContext,
+  connection: ConnectionState,
+  body: Record<string, unknown>,
+  contract: VacancyListingContract,
+): Promise<JobPushResult> {
+  const resp = await ctx.http(jobsPath(contract), {
+    method: "POST",
+    token: tokenFor(ctx, connection, contract),
+    body,
+  });
+  return classifyJobPush(resp);
+}
+
+async function patchJob(
+  ctx: AdapterContext,
+  connection: ConnectionState,
+  jobId: string,
+  body: Record<string, unknown>,
+  contract: VacancyListingContract,
+): Promise<JobPushResult> {
+  const resp = await ctx.http(`${jobsPath(contract)}/${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    token: tokenFor(ctx, connection, contract),
+    body,
+  });
+  return classifyJobPush(resp);
+}
+
+/**
+ * Closes a vacancy by sending `{status: "closed"}` and NOTHING else, on
+ * either contract. Contract Two's `updateSchoolJob` short-circuits the
+ * instant `status` is present in the body: it returns immediately with
+ * `closeJob(...)` and never looks at any other field in the same request
+ * (`partner-school-jobs.ts` — the `patch.status !== undefined` branch
+ * returns before the title/description/salary/facilities assignments below
+ * it even run). A close call carrying field edits in the same body would
+ * report success on the 200 while silently discarding the edits — the 200
+ * itself echoes the PRE-patch values, not the ones sent. Hardcoding this
+ * method's body rather than accepting one from the caller makes that
+ * combination structurally impossible rather than a caller discipline that
+ * could lapse.
+ */
+async function closeJob(
+  ctx: AdapterContext,
+  connection: ConnectionState,
+  jobId: string,
+  contract: VacancyListingContract,
+): Promise<JobPushResult> {
+  const resp = await ctx.http(`${jobsPath(contract)}/${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    token: tokenFor(ctx, connection, contract),
+    body: { status: "closed" },
+  });
+  return classifyJobPush(resp);
+}
+
+// ---------------------------------------------------------------------------
 // Adapter export + registration
 // ---------------------------------------------------------------------------
 
@@ -468,6 +630,9 @@ export const edufleetAdapter: PlatformAdapter = {
   initiate,
   refresh,
   sync,
+  createJob,
+  patchJob,
+  closeJob,
 };
 
 registerAdapter(edufleetAdapter);
