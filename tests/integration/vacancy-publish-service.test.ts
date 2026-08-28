@@ -1466,6 +1466,50 @@ describe("a 403 claimed is resolved against the free job list", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// M2 — clearing every benefit
+// ---------------------------------------------------------------------------
+
+describe("clearing all benefits", () => {
+  it("MUTATION-DISTINGUISHING: sends facilities: [] so eduFleet actually clears them", async () => {
+    // eduFleet CAN clear facilities — both PATCH routes run
+    // `sanitizeFacilities(patch.facilities)` and its version returns `[]` for
+    // `[]`. IDAP could not SAY it: `sanitizeFacilities` returned `undefined`
+    // for an empty array and `toVacancyInput` mapped `[]` to `undefined`, so
+    // the key was omitted, eduFleet read "not mentioned", and the advert kept
+    // advertising benefits the school had removed — after a write unit was
+    // spent sending only values eduFleet already held.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      facilities: [],
+      listing: { jobId: "ef-job-90", contract: "AGGREGATED", lastPushedAt: new Date() },
+    });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-90", status: "active" }));
+
+    const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("PUSHED");
+    expect(callAt(fetchMock, 0).body.facilities).toEqual([]);
+  });
+
+  it("still omits the key when the vacancy never had benefits — absent is not the same as cleared", async () => {
+    // Absent means "IDAP has nothing to say", which must leave eduFleet's
+    // copy alone. Sending `[]` here would silently wipe benefits IDAP never
+    // knew about.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-91", contract: "AGGREGATED", lastPushedAt: new Date() },
+    });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-91", status: "active" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(callAt(fetchMock, 0).body).not.toHaveProperty("facilities");
+  });
+});
+
 describe("pushClose", () => {
   it("does nothing at all for a vacancy that was never published", async () => {
     await makeInstitution("INS0001");
@@ -1497,6 +1541,57 @@ describe("pushClose", () => {
 
     expect(outcome.status).toBe("CLOSED");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("MUTATION-DISTINGUISHING: a listing eduFleet already shows as closed is not closed again — no HTTP call at all", async () => {
+    // M1. `pushCloseFor` short-circuited only on `if (!listing)`, so a
+    // listing whose `remoteStatus` is already `closed` still went over the
+    // wire: a write unit spent on the ordinary close-then-delete sequence to
+    // tell eduFleet something it already did.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      status: "FILLED",
+      listing: {
+        jobId: "ef-job-52",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "closed",
+      },
+    });
+    const fetchMock = stubFetch();
+
+    const outcome = await VacancyPublishService.pushClose("INS0001", String(vacancy._id), actor);
+
+    // The action that must not happen, asserted as the action: no request was
+    // made. `NOT_LISTED` is what `remove` reads as safe-to-delete.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("NOT_LISTED");
+  });
+
+  it("MUTATION-DISTINGUISHING: a closed SCHOOL_POSTED listing on a school that has since disconnected is still closable — it just needs nothing doing", async () => {
+    // The worse half of M1. `resolveTarget` throws "reconnect to eduFleet
+    // Exchange to update or close it" for a `SCHOOL_POSTED` listing with no
+    // grant, and `remove` reads that throw as a failed close and refuses the
+    // delete — so the row became undeletable to protect an advert that was
+    // already down. Nothing here is worth protecting and nothing is sent.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      status: "CLOSED",
+      listing: {
+        jobId: "ef-job-53",
+        contract: "SCHOOL_POSTED",
+        lastPushedAt: new Date(),
+        remoteStatus: "closed",
+      },
+    });
+    const fetchMock = stubFetch();
+
+    const outcome = await VacancyPublishService.pushClose("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("NOT_LISTED");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("records a 403 on close without latching the listing", async () => {

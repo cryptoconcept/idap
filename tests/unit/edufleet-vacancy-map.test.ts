@@ -212,4 +212,16 @@ describe("buildAggregatedJobBody", () => {
     const body = buildAggregatedJobBody(vac({ facilities: ["Provident Fund (PF)", "Free Parking"] }), inst());
     expect(body.facilities).toEqual(["Provident Fund (PF)"]);
   });
+
+  it("MUTATION-DISTINGUISHING: an empty benefit list is SENT as [], while an absent one is omitted", () => {
+    // M2. The two mean different things on the wire. `[]` is "the school
+    // removed every benefit", which eduFleet applies — both PATCH routes run
+    // `sanitizeFacilities(patch.facilities)` and its version returns `[]` for
+    // `[]`. Absent is "IDAP has nothing to say", and eduFleet keeps what it
+    // holds. Collapsing the first into the second made the clear unsendable.
+    expect(buildAggregatedJobBody(vac({ facilities: [] }), inst()).facilities).toEqual([]);
+    expect(buildAggregatedJobBody(vac(), inst())).not.toHaveProperty("facilities");
+    // Contract Two goes through the same helper, so it must agree.
+    expect(buildSchoolJobBody(vac({ facilities: [] }), inst()).facilities).toEqual([]);
+  });
 });

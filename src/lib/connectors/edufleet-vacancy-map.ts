@@ -110,14 +110,29 @@ function omitUndefined<T extends Rec>(obj: T): T {
  * `sanitizeFacilities()` produces. eduFleet's version DISCARDS anything not
  * on its list silently, with no error and no signal back to the caller, so
  * this filter is what keeps an unrecognised label from ever leaving IDAP in
- * the first place. Returns `undefined` (rather than `[]`) when nothing
- * survives, so the caller can omit the key entirely.
+ * the first place.
+ *
+ * **M2: `undefined` in, `undefined` out — but `[]` in, `[]` out.** The two
+ * inputs mean different things and the wire treats them differently. Absent
+ * is "IDAP has nothing to say about benefits", and omitting the key leaves
+ * eduFleet's copy alone. An empty array is "the school removed every
+ * benefit", and eduFleet CAN apply that: both PATCH routes run
+ * `sanitizeFacilities(patch.facilities)` and eduFleet's own version returns
+ * `[]` for `[]` (`job-facilities.ts` — `JOB_FACILITIES.filter` over an empty
+ * chosen set), so the key must be SENT as `[]` for the clear to land.
+ * Returning `undefined` for both was why unticking every benefit spent a
+ * write unit, changed nothing on the public advert, and warned nobody.
+ *
+ * An input whose every entry is unrecognised also yields `[]` rather than
+ * `undefined`, which is the honest reading: IDAP holds nothing eduFleet can
+ * show, so the advert should show nothing. It is unreachable through the API
+ * anyway — `vacancyCreateSchema`/`vacancyPatchSchema` constrain facilities to
+ * `z.enum(VACANCY_BENEFITS)`, which is byte-identical to eduFleet's list.
  */
 function sanitizeFacilities(input: string[] | undefined): string[] | undefined {
-  if (!input || input.length === 0) return undefined;
+  if (!input) return undefined;
   const chosen = new Set(input.filter((f) => KNOWN_BENEFITS.has(f)));
-  const ordered = VACANCY_BENEFITS.filter((b) => chosen.has(b));
-  return ordered.length > 0 ? ordered : undefined;
+  return VACANCY_BENEFITS.filter((b) => chosen.has(b));
 }
 
 // ---------------------------------------------------------------------------

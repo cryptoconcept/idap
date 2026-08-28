@@ -511,6 +511,15 @@ function BenefitsEditor({
  * Only a LIVE listing is warned about: a closed one is republished as a brand
  * new advert (eduFleet has no reopen), and a new advert carries exactly the
  * fields sent at create time — including the cleared ones.
+ *
+ * **Benefits are deliberately not a fourth line here.** They look like the
+ * same hazard and are not: eduFleet's two PATCH routes both run
+ * `sanitizeFacilities(patch.facilities)`, which returns `[]` for `[]`, so an
+ * emptied benefit list really does clear the public advert. IDAP used to be
+ * unable to express it (the mapping module collapsed `[]` to "absent"), which
+ * was IDAP's limitation rather than eduFleet's, and it now sends the empty
+ * array. A warning would say something untrue. If a future eduFleet change
+ * makes facilities unclearable, this is where the fourth line belongs.
  */
 function unclearableWarnings(
   listing: VacancyListingDTO | undefined,

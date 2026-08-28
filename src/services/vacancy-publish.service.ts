@@ -463,7 +463,14 @@ function toVacancyInput(vacancy: VacancyDoc, externalJobId: string): VacancyPush
     salaryMin: vacancy.salaryMin ?? undefined,
     salaryMax: vacancy.salaryMax ?? undefined,
     experienceRequired: vacancy.experienceRequired ?? undefined,
-    facilities: vacancy.facilities?.length ? vacancy.facilities : undefined,
+    // M2. `?? undefined`, NOT `?.length ? … : undefined`. An empty array and
+    // an absent one are different facts and the wire treats them differently:
+    // `[]` is "the school removed every benefit", which eduFleet CAN apply
+    // (`sanitizeFacilities([])` returns `[]` on both PATCH routes), while
+    // absent is "IDAP has nothing to say", which leaves eduFleet's copy
+    // alone. Collapsing the two was why unticking every benefit spent a write
+    // unit, changed nothing on the public advert, and warned nobody.
+    facilities: vacancy.facilities ?? undefined,
   };
 }
 
@@ -550,6 +557,17 @@ function assertPreflightPatch(vacancy: VacancyPushInput, remote: RemoteJobSalary
  * closed and re-published to change it), and clearing a salary bound in IDAP
  * leaves eduFleet's copy as it was, since the mapping module omits absent
  * keys and eduFleet reads `undefined` as "not mentioned".
+ *
+ * `facilities` is deliberately NOT a third such limit, and the difference is
+ * worth naming because it looks like one. The salary bounds and
+ * `experienceRequired` are unclearable because eduFleet's patch types declare
+ * `number`, never `null`, and both routes gate on `!== undefined` — there is
+ * no value that means "remove". Facilities is an array, and `[]` IS that
+ * value: both routes run `sanitizeFacilities(patch.facilities)`, which
+ * returns `[]` for `[]`, so eduFleet really does clear them. IDAP used to be
+ * unable to say it, which was IDAP's limitation rather than eduFleet's;
+ * `toVacancyInput` and the mapping module's own `sanitizeFacilities` now
+ * carry an empty array through instead of collapsing it to absent.
  */
 /**
  * Exported so `vacancy.service.ts` can decide whether an edit is worth pushing
@@ -1196,8 +1214,25 @@ async function pushCloseFor(
   vacancy: VacancyDoc,
   actor: Actor,
 ): Promise<VacancyPublishOutcome> {
-  const listing = vacancy.listing;
-  if (!listing) return { status: "NOT_LISTED" };
+  // M1: `isListingLive`, not `if (!listing)`. "Nothing to close" is a
+  // question about the ADVERT, and a listing whose `remoteStatus` is already
+  // `closed` points at one no teacher can see. Sending the close anyway cost
+  // two things. A write unit, on the ordinary close-then-delete sequence, to
+  // tell eduFleet something it already did. And — worse — an undeletable row:
+  // a `SCHOOL_POSTED` listing that is already closed, on a school that has
+  // since disconnected, hit `resolveTarget`'s "reconnect to update or close
+  // it" throw, which `remove` reads as a failed close and refuses the delete
+  // over. There was nothing left to protect; the advert was already down.
+  //
+  // `NOT_LISTED` is the correct arm rather than a fabricated `CLOSED`: no
+  // HTTP call was made and nothing changed, and `remove` already reads it as
+  // safe-to-delete for exactly that reason.
+  //
+  // `isListingLive` is a type predicate, so this both decides and narrows —
+  // the same idiom `pushFields` uses, and the reason "is this listing live?"
+  // has exactly one spelling in this file.
+  const listing = vacancy.listing ?? undefined;
+  if (!isListingLive(listing)) return { status: "NOT_LISTED" };
 
   const contract = listing.contract as VacancyListingContract;
   const { connection } = await resolveTarget(institutionId, contract);
