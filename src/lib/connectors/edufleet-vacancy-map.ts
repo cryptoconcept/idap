@@ -113,10 +113,13 @@ function sanitizeFacilities(input: string[] | undefined): string[] | undefined {
  * eduFleet's taxonomy (`VACANCY_SUBJECTS`), salary ordering when both bounds
  * are present, `experienceRequired` non-negative, `institutionName` present
  * for `AGGREGATED` only (Contract Two never carries one), and — for BOTH
- * contracts — a location: `city` or `branchId`. FIX ROUND 1: the location
- * check used to be gated to `AGGREGATED`, on the mistaken belief Contract Two
- * needed neither. It does — see the module docblock's FIX ROUND 1 note for
- * why a locationless Contract Two body 400s every time and burns a write unit
+ * contracts — a location, whose accepted shape differs by contract (FIX
+ * ROUND 2): `AGGREGATED` requires `city` specifically, since Contract One's
+ * `createPartnerJob` has no `branchId` field at all; `SCHOOL_POSTED` accepts
+ * `city` OR `branchId` (FIX ROUND 1). Both branches share the same
+ * user-facing message. FIX ROUND 1 also made this check apply to Contract Two
+ * in the first place — see the module docblock's FIX ROUND 1 note for why a
+ * locationless Contract Two body 400s every time and burns a write unit
  * doing it.
  *
  * Deliberately collects every applicable reason rather than stopping at the
@@ -150,14 +153,21 @@ export function preflight(
     reasons.push("eduFleet needs an institution name before a job can be published");
   }
 
-  // Location is required for BOTH contracts (FIX ROUND 1 — see module
-  // docblock): Contract One needs `city` directly; Contract Two needs
-  // `city` OR `branchId`, and its own `createJob` throws with no fallback to
-  // the school's own record when it gets neither. The message deliberately
-  // never names a contract a school admin has never heard of.
+  // Location is required for BOTH contracts, but the accepted shape differs
+  // by contract (FIX ROUND 2 — found reading fix round 1, not by a review;
+  // not reachable today since IDAP has no source for `branchId`, but worth
+  // closing anyway rather than leaving a known hole in a quota shield). A
+  // `branchId`-only push under `AGGREGATED` must still be refused here: Contract
+  // One's `createPartnerJob` requires `city` specifically (api-map §2.1) and
+  // has no `branchId` field at all, so `buildAggregatedJobBody` never sends
+  // one — a push that cleared a shared city-or-branchId check would 400 at
+  // eduFleet with no location field present. Contract Two genuinely accepts
+  // either (FIX ROUND 1). The message is shared across both branches and
+  // deliberately never names a contract a school admin has never heard of.
   const hasCity = !!i.city && i.city.trim().length > 0;
   const hasBranchId = !!i.branchId && i.branchId.trim().length > 0;
-  if (!hasCity && !hasBranchId) {
+  const hasLocation = contract === "AGGREGATED" ? hasCity : hasCity || hasBranchId;
+  if (!hasLocation) {
     reasons.push("eduFleet needs a city on the institution profile before a job can be published");
   }
 

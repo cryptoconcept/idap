@@ -57,6 +57,16 @@ describe("preflight", () => {
   it("preflight accepts a Contract Two push carrying branchId instead of city", () => {
     expect(preflight(vac(), { institutionName: "DPS", branchId: "br-1" }, "SCHOOL_POSTED")).toEqual([]);
   });
+
+  it("MUTATION-DISTINGUISHING: refuses a Contract One push carrying branchId but no city", () => {
+    // FIX ROUND 2: branchId is a Contract Two concept only — Contract One's
+    // createPartnerJob has no branchId field, so buildAggregatedJobBody never
+    // sends one. A branchId-only institution must not clear preflight for
+    // AGGREGATED, or the push would 400 at eduFleet with no location field
+    // present, burning a write unit.
+    const reasons = preflight(vac(), { institutionName: "DPS", branchId: "br-1" }, "AGGREGATED");
+    expect(reasons).toContainEqual(expect.stringContaining("city"));
+  });
 });
 
 describe("buildSchoolJobBody", () => {
