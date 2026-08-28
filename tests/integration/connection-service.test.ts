@@ -458,6 +458,73 @@ describe("refresh", () => {
     expect(conn?.lastError).toMatch(/polling the connection request failed/);
   });
 
+  it("ConnectorAuthError from refresh flips the connection to DISCONNECTED and drops the dead grant", async () => {
+    registerAdapter(
+      makeFakeAdapter({
+        refresh: async () => {
+          throw new ConnectorAuthError("grant revoked");
+        },
+      }),
+    );
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      remoteRequestId: "req-1",
+      grantTokenEncrypted: encryptCredential("pp_pgrant_dead_abcdef"),
+    });
+
+    await expect(ConnectionService.refresh("INS0001", "PASSPERCENT", actor)).rejects.toBeInstanceOf(AppError);
+
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    // DISCONNECTED, not left at CONNECTED and not a generic upstream blip:
+    // the school withdrew consent, and DISCONNECTED is the state that
+    // re-offers "Request connection".
+    expect(conn?.status).toBe("DISCONNECTED");
+    expect(conn?.lastError).toMatch(/grant revoked/);
+    // The ciphertext is confirmed dead — keeping it only invites a later
+    // reader to trust it.
+    expect(conn?.grantTokenEncrypted).toBeUndefined();
+  });
+
+  it("MUTATION-DISTINGUISHING: a plain Error from refresh leaves a CONNECTED row connected, grant intact", async () => {
+    const PLAINTEXT_GRANT = "pp_pgrant_still_good_abcdef";
+    registerAdapter(
+      makeFakeAdapter({
+        refresh: async () => {
+          throw new Error("boom");
+        },
+      }),
+    );
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      remoteRequestId: "req-1",
+      grantTokenEncrypted: encryptCredential(PLAINTEXT_GRANT),
+    });
+
+    await expect(ConnectionService.refresh("INS0001", "PASSPERCENT", actor)).rejects.toBeInstanceOf(AppError);
+
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    // An ordinary upstream failure is not evidence this institution's grant
+    // is bad — the branch must discriminate, not flatten every failure into
+    // DISCONNECTED.
+    expect(conn?.status).toBe("CONNECTED");
+    expect(conn?.grantTokenEncrypted).toBeTruthy();
+    expect(decryptCredential(conn!.grantTokenEncrypted!)).toBe(PLAINTEXT_GRANT);
+  });
+
   describe("tenant isolation (mutation-checked — see task-8-report.md)", () => {
     it("INS0001 never reaches the adapter using INS0002's connection state, even though INS0001 has none of its own", async () => {
       let refreshCalls = 0;

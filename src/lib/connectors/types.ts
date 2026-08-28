@@ -88,9 +88,10 @@ export type SyncSourceData = {
  * platform previously issued is rejected (HTTP 401) — i.e. the credential
  * IDAP is holding is no longer honoured by the remote side, as distinct from
  * any other request-shaped failure. The PassPercent adapter throws this from
- * `sync`/`refresh`; the connection service catches it to flip the connection
- * to an error state that means "needs reconnection" rather than treating it
- * as an ordinary sync failure.
+ * `sync` only (all three throw sites are inside it); the eduFleet adapter also
+ * throws it from `refresh`. The connection service discriminates it in both
+ * `syncNow` and `refresh`, flipping the connection to a state that means
+ * "needs reconnection" rather than treating it as an ordinary failure.
  *
  * `steps`/`warnings` (fix round 2, F3) carry whatever `sync` had already
  * accumulated before the 401 — results are pushed one year at a time, so a

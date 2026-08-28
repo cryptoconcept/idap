@@ -416,6 +416,21 @@ export const ConnectionService = {
       result = await adapter.refresh(ctx, state);
     } catch (error) {
       const message = messageOf(error);
+      if (error instanceof ConnectorAuthError) {
+        // The grant this connection holds (or, mid-redeem, just received) is
+        // revoked — the school withdrew consent. That is not a transient
+        // upstream failure, so it must not be reported as one: DISCONNECTED is
+        // the truth, and it is the state that re-offers "Request connection"
+        // (`connections-panel.tsx:166`). Leaving the status alone would strand
+        // the row at PENDING forever, since every later poll finds the request
+        // already `completed`.
+        await PlatformConnection.updateOne(
+          { institutionId, platform },
+          { $set: { status: "DISCONNECTED", lastError: message }, $unset: { grantTokenEncrypted: "" } },
+        );
+        await recordActivity(institutionId, platform, "Connection revoked remotely", message, actor);
+        throw upstreamError(platform);
+      }
       // Same reasoning as `initiate`'s catch: a plain thrown Error from the
       // platform-key polling call is not evidence this institution's grant
       // is bad, so the status is left untouched. No `upsert` needed here —
