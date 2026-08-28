@@ -1495,13 +1495,27 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     expect(conn?.grantTokenEncrypted).toBeUndefined();
   });
 
-  it("MUTATION-DISTINGUISHING: the full loop — a sync 401 followed by a refresh poll must not end up CONNECTED", async () => {
-    // Task 7, obligation 2, tested as the loop rather than as two states.
-    // eduFleet keeps a redeemed connection request queryable forever, so an
-    // ordinary poll after a revocation lands on `completed`. If the sync had
-    // left the dead ciphertext behind, `refresh`'s `completed`-with-grant
-    // branch would hand back CONNECTED on the strength of a credential
-    // eduFleet has already refused.
+  /**
+   * Task 7, obligation 2, tested as the loop rather than as two states.
+   * eduFleet keeps a redeemed connection request queryable forever, so an
+   * ordinary poll after a revocation lands on `completed`, where the adapter
+   * answers CONNECTED on the strength of whatever grant it was handed.
+   *
+   * **No longer marked MUTATION-DISTINGUISHING (fix round 2), and the reason
+   * is a deliberate trade.** The outcome is now held by two guards: `syncNow`
+   * drops the ciphertext, AND `trustedGrantOf` refuses to hand a grant off a
+   * non-CONNECTED row. Remove the second alone and this test still passes,
+   * because the first already removed the ciphertext — so the label would
+   * claim more than the test can deliver.
+   *
+   * That argues against leaning on this test to cover both guards, not against
+   * having the second guard: it is an authorization boundary whose blast radius
+   * is every connected school. The narrow test below carries the label for the
+   * new guard; this one keeps its full value as proof of the OUTCOME — that the
+   * loop a school actually walks cannot end up CONNECTED — which is the thing
+   * the obligation was written about.
+   */
+  it("the full loop — a sync 401 followed by a refresh poll must not end up CONNECTED", async () => {
     await edufleetFixture();
 
     stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
@@ -1554,6 +1568,40 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     // And no "the school revoked us" entry was written against them.
     const entries = await Activity.find({ entityType: "PLATFORM_CONNECTION" }).lean();
     expect(entries.some((entry) => entry.action === "Connection revoked remotely")).toBe(false);
+  });
+
+  it("MUTATION-DISTINGUISHING: refresh alone will not resurrect a DISCONNECTED row that still carries a ciphertext", async () => {
+    // The new guard, on its own, against the anomaly it exists for: every path
+    // that takes a connection down drops the ciphertext in the same write, so a
+    // DISCONNECTED row still holding one is a torn write, a crash between two
+    // operations, a row predating those fixes, or a manual edit. Seeded
+    // directly here rather than reached through a sync, so nothing else in the
+    // system is standing between the guard and the assertion.
+    await PlatformCredential.create({
+      platform: "EDUFLEET",
+      keyEncrypted: encryptCredential(EF_KEY),
+      baseUrl: EF_BASE,
+      active: true,
+    });
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "EDUFLEET",
+      status: "DISCONNECTED",
+      externalRef: "INS0001",
+      remoteRequestId: "req-abc",
+      grantTokenEncrypted: encryptCredential(EF_GRANT),
+      scopes: ["jobs:write"],
+    });
+
+    // The poll eduFleet answers forever after a redeem.
+    stubFetch(jsonResponse(200, { requestId: "req-abc", status: "completed", externalRef: "INS0001" }));
+
+    const refreshed = await ConnectionService.refresh("INS0001", "EDUFLEET", actor);
+
+    expect(refreshed.status).not.toBe("CONNECTED");
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" }).lean();
+    expect(conn?.status).not.toBe("CONNECTED");
   });
 
   it("eduFleet unreachable partway through abandons the rest of the sweep rather than retrying it per vacancy", async () => {

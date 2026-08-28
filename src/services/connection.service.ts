@@ -260,6 +260,44 @@ async function loadSyncVacancies(institutionId: string, actor: Actor): Promise<S
   });
 }
 
+/**
+ * The stored grant — but only from a row whose own status still claims it is
+ * usable (fix round 2).
+ *
+ * A ciphertext on the row is NOT by itself evidence that IDAP holds a working
+ * credential, and treating it as such is how a dead connection comes back to
+ * life. `refresh`'s `"completed"` branch is the concrete path: eduFleet keeps a
+ * redeemed connection request queryable forever, so every poll of a
+ * once-connected row lands there, and the adapter answers `CONNECTED` on the
+ * strength of whatever grant it was handed. Hand it a grant from a
+ * `DISCONNECTED` row and the poll silently undoes the disconnection.
+ *
+ * Every path that takes a connection down already drops the ciphertext in the
+ * same write, so a non-CONNECTED row holding one is an anomaly — a torn write,
+ * a crash between two operations, a row predating those fixes, a manual edit.
+ * This is the guard for exactly that anomaly, and it is an authorization
+ * boundary rather than tidiness: the blast radius of getting it wrong is every
+ * connected school.
+ *
+ * An allowlist, not a denylist — only `CONNECTED` unlocks the credential — so a
+ * status added to `CONNECTION_STATUSES` later is refused by default rather than
+ * silently trusted. `vacancy-publish.service.ts`'s `resolveTarget` has always
+ * read the ciphertext this way (`row?.status === "CONNECTED" && row.grantTokenEncrypted`);
+ * this is the connection service agreeing with it.
+ *
+ * In `syncNow` this is redundant today — the `status !== "CONNECTED"` refusal
+ * above it fires first — and it is used there anyway so the rule for turning a
+ * stored ciphertext into a usable grant has ONE definition, and so a later
+ * change to that precheck cannot quietly unlock a dead credential.
+ */
+function trustedGrantOf(
+  connection: Pick<PlatformConnectionDoc, "status" | "grantTokenEncrypted">,
+): string | undefined {
+  if (connection.status !== "CONNECTED") return undefined;
+  if (!connection.grantTokenEncrypted) return undefined;
+  return decryptCredential(connection.grantTokenEncrypted);
+}
+
 function toEntry(platform: Platform, configured: boolean, doc?: PlatformConnectionDoc | null): ConnectionEntry {
   return {
     platform,
@@ -507,9 +545,7 @@ export const ConnectionService = {
       institutionId,
       externalRef: connection.externalRef,
       remoteRequestId: connection.remoteRequestId ?? undefined,
-      grantToken: connection.grantTokenEncrypted
-        ? decryptCredential(connection.grantTokenEncrypted)
-        : undefined,
+      grantToken: trustedGrantOf(connection),
       scopes: connection.scopes ?? undefined,
     };
 
@@ -730,7 +766,7 @@ export const ConnectionService = {
         institutionId,
         externalRef: locked.externalRef,
         remoteRequestId: locked.remoteRequestId ?? undefined,
-        grantToken: locked.grantTokenEncrypted ? decryptCredential(locked.grantTokenEncrypted) : undefined,
+        grantToken: trustedGrantOf(locked),
         scopes: locked.scopes ?? undefined,
       };
 

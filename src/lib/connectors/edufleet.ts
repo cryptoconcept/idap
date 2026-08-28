@@ -285,11 +285,19 @@ async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: strin
  * interpretation is theirs.
  *
  * `GET /api/partner/school` is deliberate rather than incidental: it is
- * authenticated by `requireGrant` (eduFleet `partner-auth.ts:113`) and it
- * calls **no** `spendWrite` — the only twelve call sites are the four job
- * routes, the four listings routes and the connection-request POST, all
- * verified in eduFleet's source. So this costs nothing from the school's
- * 100/day write budget however often a sync runs.
+ * authenticated by `requireGrant` (eduFleet `partner-auth.ts:113`) and its
+ * route handler calls **no** `spendWrite`, so this costs nothing from the
+ * school's 100/day write budget however often a sync runs.
+ *
+ * Checkable in one place, on purpose. `spendWrite` is called by route handlers
+ * and by nothing else, so the claim is settled by reading
+ * `app/api/partner/school/route.ts` — `requireGrant`, `db()`, two service
+ * reads, `Response.json`, and no budget call anywhere in it. An earlier draft
+ * of this comment enumerated eduFleet's write routes instead and got the count
+ * wrong: a bare `grep -rn "spendWrite(" web/src` includes five hits in
+ * `partner-auth.spec.ts` and the definition itself. A number that has to be
+ * re-verified every time eduFleet ships a route is a liability, and it was
+ * never the load-bearing fact — this route not being a write route is.
  *
  * Never throws for a transport failure: a network error or a timeout yields
  * `undefined`, which every caller must treat as "could not ask", never as
