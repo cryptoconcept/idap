@@ -1049,4 +1049,117 @@ describe("VacancyService.remove closes the eduFleet listing before deleting (Tas
     const after = await Vacancy.findById(foreign._id).lean();
     expect(after).toEqual(before);
   });
+
+  // ---------------------------------------------------------------------------
+  // Fix round 1 — the non-atomic window between the pre-check read and the
+  // delete. Both races below use the same technique
+  // `results-media.test.ts`/`fee-bulk-create.test.ts` already use: patch the
+  // Mongoose query's own `exec` so a competing write is awaited to completion
+  // BEFORE the real query reaches the database, reproducing the landing order
+  // a genuine race would produce, deterministically rather than by timing.
+  // ---------------------------------------------------------------------------
+
+  it("MUTATION-DISTINGUISHING (race): a listing published between the pre-check and the delete leaves the vacancy undeleted and the new listing un-closed", async () => {
+    await makeCredential();
+    // Observed with NO listing at pre-check time.
+    const vacancy = await Vacancy.create({
+      institutionId: "INS0001",
+      title: "Race condition teacher",
+      subject: "Clerk",
+      description: "Front office",
+      status: "OPEN",
+    });
+    const fetchMock = stubFetch();
+    const raceListing = {
+      jobId: "ef-job-race",
+      externalJobId: String(vacancy._id),
+      contract: "AGGREGATED",
+      lastPushedAt: new Date(),
+      claimState: "unclaimed",
+      remoteStatus: "active",
+    };
+
+    const originalFindOneAndDelete = Vacancy.findOneAndDelete.bind(Vacancy) as (
+      filter?: Record<string, unknown>,
+    ) => ReturnType<typeof Vacancy.findOneAndDelete>;
+    const spy = vi.spyOn(Vacancy, "findOneAndDelete").mockImplementation(((
+      filter?: Record<string, unknown>,
+    ) => {
+      const query = originalFindOneAndDelete(filter);
+      const patched = query as unknown as { exec: (...execArgs: unknown[]) => Promise<unknown> };
+      const originalExec = patched.exec.bind(patched);
+      patched.exec = async (...execArgs: unknown[]) => {
+        // A concurrent publish lands here — after `remove`'s pre-check read
+        // observed no listing, before its conditional delete reaches Mongo.
+        await Vacancy.updateOne({ _id: vacancy._id }, { $set: { listing: raceListing } });
+        return originalExec(...execArgs);
+      };
+      return query;
+    }) as typeof Vacancy.findOneAndDelete);
+
+    try {
+      await expect(
+        VacancyService.remove("INS0001", String(vacancy._id), actor),
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    // Not deleted...
+    const survivor = await Vacancy.findById(vacancy._id).lean();
+    expect(survivor).not.toBeNull();
+    // ...and the listing that landed mid-flight is untouched: nobody closed
+    // it (no HTTP call at all) and nobody deleted the vacancy out from under
+    // a live, un-closed advert.
+    expect(survivor?.listing?.jobId).toBe("ef-job-race");
+    expect(survivor?.listing?.remoteStatus).toBe("active");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("(race) a listing replaced by a fresh republish between closing the old one and the delete leaves the vacancy undeleted", async () => {
+    await makeCredential();
+    // Observed WITH a listing at pre-check time; this one gets closed.
+    const vacancy = await makeListedVacancy("INS0001", { jobId: "ef-job-old" });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-old", status: "closed" }));
+    const freshListing = {
+      jobId: "ef-job-fresh",
+      externalJobId: `${String(vacancy._id)}-2`,
+      contract: "AGGREGATED",
+      lastPushedAt: new Date(),
+      claimState: "unclaimed",
+      remoteStatus: "active",
+    };
+
+    const originalFindOneAndDelete = Vacancy.findOneAndDelete.bind(Vacancy) as (
+      filter?: Record<string, unknown>,
+    ) => ReturnType<typeof Vacancy.findOneAndDelete>;
+    const spy = vi.spyOn(Vacancy, "findOneAndDelete").mockImplementation(((
+      filter?: Record<string, unknown>,
+    ) => {
+      const query = originalFindOneAndDelete(filter);
+      const patched = query as unknown as { exec: (...execArgs: unknown[]) => Promise<unknown> };
+      const originalExec = patched.exec.bind(patched);
+      patched.exec = async (...execArgs: unknown[]) => {
+        // A second, fresh publish replaces the just-closed listing wholesale
+        // (exactly what `recordSuccess`'s create branch does on a republish)
+        // after the close succeeded but before the delete reaches Mongo.
+        await Vacancy.updateOne({ _id: vacancy._id }, { $set: { listing: freshListing } });
+        return originalExec(...execArgs);
+      };
+      return query;
+    }) as typeof Vacancy.findOneAndDelete);
+
+    try {
+      await expect(
+        VacancyService.remove("INS0001", String(vacancy._id), actor),
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1); // the close that DID happen, against the old listing
+    const survivor = await Vacancy.findById(vacancy._id).lean();
+    expect(survivor).not.toBeNull();
+    expect(survivor?.listing?.jobId).toBe("ef-job-fresh");
+  });
 });

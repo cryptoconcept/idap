@@ -351,15 +351,50 @@ export const VacancyService = {
       .lean<Pick<VacancyDoc, "listing">>();
     if (!existing) throw notFound("Vacancy not found");
 
+    // Fix round 1: the delete below must not simply trust that what was just
+    // observed still holds by the time it runs. Between this read and the
+    // delete, a concurrent publish — a second tab, a double-click, a slow
+    // publish request landing late — can attach a brand-new listing this
+    // call never saw and therefore never tried to close: the exact
+    // orphaned-public-advert failure this task exists to prevent, reached
+    // through the one path the earlier version left open. The delete filter
+    // re-states whatever was just observed as a CONDITION of the write, so
+    // Mongo itself refuses the delete if that state no longer holds, rather
+    // than this function merely hoping it still does.
+    const deleteFilter: Record<string, unknown> = { _id: objectId, institutionId };
+
     if (existing.listing) {
       await closeListingBeforeDelete(institutionId, vacancyId, existing.listing.contract, actor);
+      // Conditioned on the SAME listing this call just closed still being
+      // present — not "any listing" — because a fresh publish landing in
+      // this exact window replaces the whole `listing` sub-document
+      // (`recordSuccess`'s create branch) under a NEW `jobId`, and that new,
+      // live listing must not be deleted out from under itself, unclosed.
+      deleteFilter["listing.jobId"] = existing.listing.jobId;
+    } else {
+      // Conditioned on there still being nothing published, so a publish
+      // landing in this exact window cannot slip a live, un-closed listing
+      // through underneath a delete that observed none.
+      deleteFilter.listing = { $exists: false };
     }
 
-    const removed = await Vacancy.findOneAndDelete({
-      _id: objectId,
-      institutionId,
-    }).lean<VacancyDoc>();
-    if (!removed) throw notFound("Vacancy not found");
+    const removed = await Vacancy.findOneAndDelete(deleteFilter).lean<VacancyDoc>();
+    if (!removed) {
+      // The conditional delete matched nothing even though `existing` proved
+      // the vacancy was there moments ago — the state changed underneath
+      // this call, not "no such vacancy". Re-reading and silently looping the
+      // close-then-delete sequence here would risk looping indefinitely
+      // against a vacancy under concurrent edits, and would hide from the
+      // caller that anything happened at all. Refusing instead is bounded
+      // and honest: the caller's retry re-enters `remove` from a fresh read —
+      // exactly the check this function starts with — so it converges in one
+      // more attempt once the race stops recurring.
+      const stillThere = await Vacancy.exists({ _id: objectId, institutionId });
+      if (!stillThere) throw notFound("Vacancy not found");
+      throw validationError(
+        "This vacancy changed while it was being removed — try deleting it again.",
+      );
+    }
 
     await ActivityService.record({
       institutionId,
