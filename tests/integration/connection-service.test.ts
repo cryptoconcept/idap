@@ -1,7 +1,7 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { Activity, Institution, PlatformConnection, PlatformCredential, Result, SyncRun } from "@/models";
+import { Activity, Institution, PlatformConnection, PlatformCredential, Result, SyncRun, Vacancy } from "@/models";
 import { decryptCredential, encryptCredential } from "@/lib/security/credentials";
 import { registerAdapter } from "@/lib/connectors";
 import { passpercentAdapter } from "@/lib/connectors/passpercent";
@@ -33,9 +33,19 @@ type FakeHooks = {
   refresh?: PlatformAdapter["refresh"];
   connectWithKey?: PlatformAdapter["connectWithKey"];
   sync?: PlatformAdapter["sync"];
+  /** Task 7: the presence of all three is what makes the service build a
+   *  vacancy worklist for this adapter at all. */
+  jobMethods?: boolean;
 };
 
 function makeFakeAdapter(hooks: FakeHooks = {}): PlatformAdapter {
+  const job = hooks.jobMethods
+    ? {
+        createJob: async () => ({ kind: "OK" as const, jobId: "job-1" }),
+        patchJob: async () => ({ kind: "OK" as const, jobId: "job-1" }),
+        closeJob: async () => ({ kind: "OK" as const, jobId: "job-1" }),
+      }
+    : {};
   return {
     platform: "PASSPERCENT",
     connectMode: "REQUEST_APPROVE_REDEEM",
@@ -43,6 +53,7 @@ function makeFakeAdapter(hooks: FakeHooks = {}): PlatformAdapter {
     refresh: hooks.refresh,
     connectWithKey: hooks.connectWithKey,
     sync: hooks.sync ?? (async () => ({ status: "SUCCESS", steps: [], warnings: [] })),
+    ...job,
   };
 }
 
@@ -770,7 +781,11 @@ describe("syncNow", () => {
     await expect(ConnectionService.syncNow("INS0001", "PASSPERCENT", actor)).rejects.toThrow(/publish/i);
   });
 
-  it("ConnectorAuthError flips the connection to ERROR and records a FAILED SyncRun", async () => {
+  it("MUTATION-DISTINGUISHING: ConnectorAuthError disconnects the connection AND drops the dead grant ciphertext, and records a FAILED SyncRun", async () => {
+    // Task 7, obligation 2. This branch used to set ERROR and KEEP the
+    // ciphertext, which was harmless only while no `sync` could raise the
+    // error. Now that one can, a retained known-dead grant is what `refresh`
+    // resurrects a connection from (see the full-loop test below).
     registerAdapter(
       makeFakeAdapter({
         sync: async () => {
@@ -782,14 +797,22 @@ describe("syncNow", () => {
 
     const result = await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
     expect(result.run.status).toBe("FAILED");
-    expect(result.connection.status).toBe("ERROR");
+    expect(result.connection.status).toBe("DISCONNECTED");
 
-    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
-    expect(conn?.status).toBe("ERROR");
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(conn?.status).toBe("DISCONNECTED");
+    expect(conn?.grantTokenEncrypted).toBeUndefined();
     expect(conn?.lastError).toMatch(/rejected the grant token/i);
+
+    // The revocation is named in the audit trail in its own right, not left
+    // to be inferred from a failed sync run.
+    const entries = await Activity.find({ entityType: "PLATFORM_CONNECTION" }).lean();
+    expect(entries.some((entry) => entry.action === "Connection revoked remotely")).toBe(true);
   });
 
-  it("F3 (fix round 2): a mid-run 401 does not discard the steps/warnings already accumulated — the persisted SyncRun keeps them, and the connection still flips to ERROR", async () => {
+  it("F3 (fix round 2): a mid-run 401 does not discard the steps/warnings already accumulated — the persisted SyncRun keeps them, and the connection is still taken down", async () => {
     registerAdapter(
       makeFakeAdapter({
         sync: async () => {
@@ -810,8 +833,9 @@ describe("syncNow", () => {
 
     const result = await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
 
-    // Both halves: the connection still flips to ERROR (unchanged behaviour)...
-    expect(result.connection.status).toBe("ERROR");
+    // Both halves: the connection is still taken down (Task 7 changed which
+    // state that is — DISCONNECTED, not ERROR — not whether it happens)...
+    expect(result.connection.status).toBe("DISCONNECTED");
     expect(result.run.status).toBe("FAILED");
     // ...AND the run that already reached the public listing before the 401
     // is not thrown away.
@@ -829,7 +853,7 @@ describe("syncNow", () => {
     expect(persisted?.status).toBe("FAILED");
 
     const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
-    expect(conn?.status).toBe("ERROR");
+    expect(conn?.status).toBe("DISCONNECTED");
   });
 
   it("a plain Error/network failure from sync does NOT flip status — only ConnectorAuthError does — but still writes a FAILED run", async () => {
@@ -1177,5 +1201,399 @@ describe("listRuns", () => {
       const runs = await ConnectionService.listRuns("INS0001", "PASSPERCENT");
       expect(runs).toHaveLength(0);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 7 — the vacancy reconciler, end to end
+//
+// These run against the REAL eduFleet adapter and the REAL
+// `VacancyPublishService`, with only the global `fetch` stubbed — the same
+// technique `vacancy-publish-service.test.ts` uses and for the same reason.
+// A fake adapter would prove that `syncNow` handles whatever comes back; what
+// needs proving here is the opposite: which calls a sync actually makes, and
+// (repeatedly) that it makes none.
+// ---------------------------------------------------------------------------
+
+describe("syncNow — eduFleet vacancy reconciliation", () => {
+  const EF_KEY = "ef_pkey_test_platform";
+  const EF_GRANT = "ef_pgrant_test_school";
+  const EF_BASE = "https://api.edufleet.test";
+
+  const SCHOOL_OK = { schoolId: "sch-1", schoolName: "INS0001 Institute", city: "Mysore" };
+
+  function jsonResponse(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  }
+
+  /** Queues one response per call, in order. */
+  function stubFetch(...responses: Response[]) {
+    const mock = vi.fn();
+    for (const response of responses) mock.mockResolvedValueOnce(response);
+    vi.stubGlobal("fetch", mock);
+    return mock;
+  }
+
+  function callAt(mock: ReturnType<typeof vi.fn>, index: number) {
+    const [url, init] = mock.mock.calls[index] as [
+      string,
+      { method: string; headers: Record<string, string>; body?: string },
+    ];
+    return {
+      url: String(url),
+      method: init.method,
+      token: init.headers.Authorization,
+      body: init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {},
+    };
+  }
+
+  async function edufleetFixture(institutionId = "INS0001") {
+    await PlatformCredential.create({
+      platform: "EDUFLEET",
+      keyEncrypted: encryptCredential(EF_KEY),
+      baseUrl: EF_BASE,
+      active: true,
+    });
+    await makeConnectableInstitution(institutionId);
+    await PlatformConnection.create({
+      institutionId,
+      platform: "EDUFLEET",
+      status: "CONNECTED",
+      externalRef: institutionId,
+      remoteRequestId: "req-abc",
+      grantTokenEncrypted: encryptCredential(EF_GRANT),
+      scopes: ["jobs:write"],
+    });
+  }
+
+  async function makeVacancy(institutionId: string, overrides: Record<string, unknown> = {}) {
+    const { listing, ...rest } = overrides as { listing?: Record<string, unknown> };
+    const vacancy = await Vacancy.create({
+      institutionId,
+      title: "Mathematics Teacher",
+      subject: "Mathematics",
+      description: "Teach Mathematics to Grades 8-10.",
+      status: "OPEN",
+      ...rest,
+    });
+    if (!listing) return vacancy;
+    const updated = await Vacancy.findByIdAndUpdate(
+      vacancy._id,
+      { $set: { listing: { externalJobId: String(vacancy._id), ...listing } } },
+      { new: true, runValidators: true },
+    );
+    return updated!;
+  }
+
+  const LIVE_LISTING = {
+    jobId: "ef-job-1",
+    contract: "AGGREGATED",
+    lastPushedAt: new Date(),
+    remoteStatus: "active",
+    claimState: "unclaimed",
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("closes the advert for a FILLED vacancy — one probe, one close, and the listing is recorded closed", async () => {
+    await edufleetFixture();
+    const vacancy = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    const fetchMock = stubFetch(
+      jsonResponse(200, SCHOOL_OK),
+      jsonResponse(200, { jobId: "ef-job-1", status: "closed" }),
+    );
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(callAt(fetchMock, 0).url).toBe(`${EF_BASE}/api/partner/school`);
+    expect(callAt(fetchMock, 0).token).toBe(`Bearer ${EF_GRANT}`);
+
+    const close = callAt(fetchMock, 1);
+    expect(close.method).toBe("PATCH");
+    expect(close.url).toBe(`${EF_BASE}/api/partner/jobs/${String(vacancy._id)}`);
+    expect(close.body).toEqual({ status: "closed" });
+
+    expect(result.run.status).toBe("SUCCESS");
+    expect(result.connection.lastSyncStatus).toBe("SUCCESS");
+
+    const stored = await Vacancy.findById(vacancy._id).lean();
+    expect(stored?.listing?.remoteStatus).toBe("closed");
+  });
+
+  // Not marked MUTATION-DISTINGUISHING: this is the integration echo of the
+  // adapter unit test that carries that label. The rule lives in `planFor`
+  // and is distinguished there; what this adds is that the rule survives the
+  // whole real stack down to `fetch`.
+  it("an OPEN vacancy whose advert is in step costs nothing — the probe is the only call made", async () => {
+    await edufleetFixture();
+    await makeVacancy("INS0001", { status: "OPEN", listing: LIVE_LISTING });
+
+    const fetchMock = stubFetch(jsonResponse(200, SCHOOL_OK));
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(callAt(fetchMock, 0).url).toBe(`${EF_BASE}/api/partner/school`);
+    expect(result.run.status).toBe("SUCCESS");
+  });
+
+  /**
+   * Deliberately NOT marked MUTATION-DISTINGUISHING, and the reason is the
+   * point of the test.
+   *
+   * "A sync never creates a listing" is held here by TWO independent guards:
+   * `planFor`'s `!listing` branch in the adapter, and `repush`'s
+   * `allowCreate: false` in the publish service. Break either one alone and
+   * no advert is created anyway — the other still refuses — so no single
+   * mutation can make this test fail *for the reason the label would claim*.
+   * Both mutations were run; under each, `fetch` was still called exactly
+   * once. A marker is a claim about the test, and this one would be a claim
+   * the evidence does not support.
+   *
+   * It stays as a regression test, which is what it honestly is.
+   */
+  it("a vacancy the school never published is never created by a sync — no call beyond the probe", async () => {
+    await edufleetFixture();
+    await makeVacancy("INS0001", { status: "OPEN" });
+    await makeVacancy("INS0001", { status: "FILLED" });
+
+    const fetchMock = stubFetch(jsonResponse(200, SCHOOL_OK));
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.run.status).toBe("SUCCESS");
+
+    const rows = await Vacancy.find({ institutionId: "INS0001" }).lean();
+    expect(rows.every((row) => row.listing === undefined)).toBe(true);
+  });
+
+  it("a 403 on a reconciled push is PARTIAL with a warning naming the vacancy, and the reason lands on the listing", async () => {
+    await edufleetFixture();
+    const vacancy = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    stubFetch(
+      jsonResponse(200, SCHOOL_OK),
+      jsonResponse(403, { error: "This job has been claimed", reason: "claimed" }),
+    );
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(result.run.status).toBe("PARTIAL");
+    expect(result.run.warnings?.some((warning) => warning.includes(String(vacancy._id)))).toBe(true);
+
+    const stored = await Vacancy.findById(vacancy._id).lean();
+    expect(stored?.listing?.remoteStatus).toBe("active");
+    expect(stored?.listing?.blockedReason).toMatch(/claimed/i);
+  });
+
+  /**
+   * Deliberately NOT marked MUTATION-DISTINGUISHING — and it was marked, until
+   * the mutation refused to cooperate.
+   *
+   * "A neighbour's advert is never touched" is held by TWO tenant filters:
+   * `loadSyncVacancies`'s `{institutionId}` and, behind every worklist
+   * closure, `VacancyPublishService.loadVacancy`'s own `{_id, institutionId}`.
+   * Removing the first was run: INS0002's vacancy did enter INS0001's
+   * worklist, the close closure did fire — and the publish service answered
+   * "Vacancy not found", so `fetch` was still called exactly once and the
+   * neighbour's advert stayed active. The test passed under the mutation.
+   *
+   * The claim the label would make is therefore false for this test, so the
+   * label is gone and the property it DOES distinguish — the worklist itself
+   * being scoped — is tested directly below.
+   */
+  it("a neighbour's live advert is never closed by this institution's sync", async () => {
+    await edufleetFixture("INS0001");
+    await makeConnectableInstitution("INS0002");
+    await makeVacancy("INS0002", { status: "FILLED", listing: LIVE_LISTING });
+
+    const fetchMock = stubFetch(jsonResponse(200, SCHOOL_OK));
+
+    await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const neighbour = await Vacancy.findOne({ institutionId: "INS0002" }).lean();
+    expect(neighbour?.listing?.remoteStatus).toBe("active");
+  });
+
+  it("MUTATION-DISTINGUISHING: the worklist itself is tenant-scoped — a neighbour's vacancy never enters it", async () => {
+    // The singly-guarded half of the property above: whatever the publish
+    // service would go on to refuse, another school's row has no business
+    // being in this institution's worklist in the first place.
+    let captured: SyncSourceData | undefined;
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await makeConnectableInstitution("INS0002");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("pp_pgrant_test"),
+    });
+    const mine = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+    await makeVacancy("INS0002", { status: "FILLED", listing: LIVE_LISTING });
+
+    registerAdapter(
+      makeFakeAdapter({
+        jobMethods: true,
+        sync: async (_ctx, _conn, data) => {
+          captured = data;
+          return { status: "SUCCESS", steps: [], warnings: [] };
+        },
+      }),
+    );
+
+    await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+
+    expect(captured?.vacancies?.map((vacancy) => vacancy.vacancyId)).toEqual([String(mine._id)]);
+  });
+
+  // Not marked MUTATION-DISTINGUISHING: the two lines this would distinguish
+  // are the ones the `syncNow` unit-level test above already carries the label
+  // for. What this adds is the whole real path — eduFleet's own 401 body,
+  // classified by the real adapter, mid-sweep — reaching them.
+  it("a 401 `revoked` mid-sweep takes the connection down and drops the ciphertext, and the run keeps what it had already done", async () => {
+    await edufleetFixture();
+    const done = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+    const dies = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    stubFetch(
+      jsonResponse(200, SCHOOL_OK),
+      jsonResponse(200, { jobId: "ef-job-1", status: "closed" }),
+      jsonResponse(401, { error: "Grant revoked", reason: "revoked" }),
+    );
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    expect(result.run.status).toBe("FAILED");
+    expect(result.connection.status).toBe("DISCONNECTED");
+    // The advert that DID come down before the credential died is still on the
+    // record, not discarded with the failure.
+    expect(result.run.steps?.some((step) => step.step === `close:${String(done._id)}` && step.ok)).toBe(true);
+    expect(result.run.steps?.some((step) => step.step === `close:${String(dies._id)}` && !step.ok)).toBe(true);
+
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(conn?.status).toBe("DISCONNECTED");
+    expect(conn?.grantTokenEncrypted).toBeUndefined();
+  });
+
+  it("MUTATION-DISTINGUISHING: the full loop — a sync 401 followed by a refresh poll must not end up CONNECTED", async () => {
+    // Task 7, obligation 2, tested as the loop rather than as two states.
+    // eduFleet keeps a redeemed connection request queryable forever, so an
+    // ordinary poll after a revocation lands on `completed`. If the sync had
+    // left the dead ciphertext behind, `refresh`'s `completed`-with-grant
+    // branch would hand back CONNECTED on the strength of a credential
+    // eduFleet has already refused.
+    await edufleetFixture();
+
+    stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
+    const synced = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+    expect(synced.connection.status).toBe("DISCONNECTED");
+
+    vi.unstubAllGlobals();
+    stubFetch(jsonResponse(200, { requestId: "req-abc", status: "completed", externalRef: "INS0001" }));
+
+    const refreshed = await ConnectionService.refresh("INS0001", "EDUFLEET", actor);
+
+    expect(refreshed.status).not.toBe("CONNECTED");
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(conn?.status).not.toBe("CONNECTED");
+    expect(conn?.grantTokenEncrypted).toBeUndefined();
+  });
+
+  it("eduFleet unreachable partway through abandons the rest of the sweep rather than retrying it per vacancy", async () => {
+    await edufleetFixture();
+    await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+    await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, SCHOOL_OK));
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    // Probe + exactly one failed close, not one per vacancy.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.run.status).toBe("FAILED");
+    // A transport failure is not evidence the grant is bad: the connection
+    // stays put, unlike the 401 above.
+    expect(result.connection.status).toBe("CONNECTED");
+  });
+
+  it("MUTATION-DISTINGUISHING: only an adapter with the three job methods is given a worklist", async () => {
+    let captured: SyncSourceData | undefined;
+    const capture: PlatformAdapter["sync"] = async (_ctx, _conn, data) => {
+      captured = data;
+      return { status: "SUCCESS", steps: [], warnings: [] };
+    };
+
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("pp_pgrant_test"),
+    });
+    await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    // PassPercent has no job contract at all: it must see exactly what it saw
+    // before Task 7 existed.
+    registerAdapter(makeFakeAdapter({ sync: capture }));
+    await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+    expect(captured?.vacancies).toBeUndefined();
+
+    registerAdapter(makeFakeAdapter({ sync: capture, jobMethods: true }));
+    await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+    expect(captured?.vacancies).toHaveLength(1);
+    expect(captured?.vacancies?.[0].listing?.remoteStatus).toBe("active");
+  });
+
+  it("a worklist action refused before the wire comes back as a VACANCY-scoped failure, with no HTTP call at all", async () => {
+    // `repush` on a vacancy with no listing is refused by the publish service
+    // itself — the guard that keeps an edit, or a sync, from ever creating a
+    // listing. It must reach the adapter as one vacancy's problem, not as the
+    // platform being down.
+    let captured: SyncSourceData | undefined;
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("pp_pgrant_test"),
+    });
+    await makeVacancy("INS0001", { status: "OPEN" });
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    registerAdapter(
+      makeFakeAdapter({
+        jobMethods: true,
+        sync: async (_ctx, _conn, data) => {
+          captured = data;
+          return { status: "SUCCESS", steps: [], warnings: [] };
+        },
+      }),
+    );
+    await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+
+    const result = await captured!.vacancies![0].repush();
+    expect(result).toEqual({ ok: false, scope: "VACANCY", detail: expect.any(String) });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

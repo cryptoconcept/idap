@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConnectorHttp } from "@/lib/connectors/http";
-import type { AdapterContext, ConnectionState, InstitutionSummary, SyncSourceData } from "@/lib/connectors/types";
+import type {
+  AdapterContext,
+  ConnectionState,
+  InstitutionSummary,
+  SyncSourceData,
+  SyncVacancy,
+} from "@/lib/connectors/types";
 import { ConnectorAuthError, ConnectorRejectedError } from "@/lib/connectors/types";
 import { edufleetAdapter } from "@/lib/connectors/edufleet";
 
@@ -602,20 +608,308 @@ describe("edufleetAdapter", () => {
     });
   });
 
-  describe("sync", () => {
-    it("returns PARTIAL with a single failed step and a warning naming the reason, without throwing or calling out", async () => {
-      const http = vi.fn();
-      const ctx = makeCtx(http);
-      const connection = makeConnection({ grantToken: "ef_pgrant_whatever" });
-      const data: SyncSourceData = { institution: {}, results: [], readPublicMedia: vi.fn() };
+  // ---------------------------------------------------------------------------
+  // sync — the reconciler (Task 7)
+  //
+  // Two jobs: prove the school's grant is still alive (the ONLY place IDAP
+  // ever discovers a revocation), and bring eduFleet back into step for
+  // vacancies the school already published. Every push goes through the
+  // service-owned closures on `SyncVacancy`, so these tests assert WHICH
+  // closure ran on WHICH vacancy — and, at each guard, that neither ran.
+  // ---------------------------------------------------------------------------
 
-      const outcome = await edufleetAdapter.sync(ctx, connection, data);
+  describe("sync", () => {
+    const SCHOOL_OK = { status: 200, body: { schoolId: "sch-1", schoolName: "Delhi Public School", city: "Bengaluru" } };
+
+    /** An http stub whose FIRST answer is the grant probe. */
+    function makeHttp(probe: { status: number; body: unknown } = SCHOOL_OK) {
+      return vi.fn().mockResolvedValue(probe);
+    }
+
+    let counter = 0;
+
+    function makeVacancy(overrides: Partial<SyncVacancy> = {}): SyncVacancy & {
+      repush: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+    } {
+      counter += 1;
+      return {
+        vacancyId: `vac-${counter}`,
+        title: `Mathematics Teacher ${counter}`,
+        status: "OPEN",
+        repush: vi.fn().mockResolvedValue({ ok: true }),
+        close: vi.fn().mockResolvedValue({ ok: true }),
+        ...overrides,
+      } as SyncVacancy & { repush: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
+    }
+
+    const LIVE = { contract: "AGGREGATED", remoteStatus: "active" } as const;
+
+    function makeData(vacancies?: SyncVacancy[]): SyncSourceData {
+      return { institution: {}, results: [], readPublicMedia: vi.fn(), vacancies };
+    }
+
+    function grantConnection() {
+      return makeConnection({ grantToken: "ef_pgrant_live", scopes: ["jobs:write"] });
+    }
+
+    // -- the grant probe ----------------------------------------------------
+
+    it("probes the grant with a GET to /api/partner/school before touching any vacancy, and reports SUCCESS when nothing needs reconciling", async () => {
+      const http = makeHttp();
+      const outcome = await edufleetAdapter.sync(makeCtx(http), grantConnection(), makeData([]));
+
+      expect(http).toHaveBeenCalledTimes(1);
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/school");
+      expect(init.method).toBe("GET");
+      expect(init.token).toBe("ef_pgrant_live");
+      expect(outcome.status).toBe("SUCCESS");
+      expect(outcome.steps).toContainEqual({ step: "grant", ok: true });
+    });
+
+    it("MUTATION-DISTINGUISHING: a 401 `revoked` on the probe throws ConnectorAuthError and no vacancy is touched", async () => {
+      // The obligation B1 recorded: this is the only path by which IDAP ever
+      // learns a school withdrew consent. The assertion is not merely that an
+      // error came back — it is that the run stopped before spending a single
+      // write unit on a credential already known to be dead.
+      const http = makeHttp({ status: 401, body: { reason: "revoked" } });
+      const filled = makeVacancy({ status: "FILLED", listing: LIVE });
+
+      await expect(edufleetAdapter.sync(makeCtx(http), grantConnection(), makeData([filled]))).rejects.toBeInstanceOf(
+        ConnectorAuthError,
+      );
+
+      expect(filled.close).not.toHaveBeenCalled();
+      expect(filled.repush).not.toHaveBeenCalled();
+      expect(http).toHaveBeenCalledTimes(1);
+    });
+
+    it("the grant token never appears in the ConnectorAuthError a revoked probe throws", async () => {
+      const http = makeHttp({ status: 401, body: { reason: "revoked" } });
+      const connection = makeConnection({ grantToken: "ef_pgrant_secret_value" });
+
+      let caught: unknown;
+      try {
+        await edufleetAdapter.sync(makeCtx(http), connection, makeData([]));
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ConnectorAuthError);
+      expect((caught as Error).message).not.toContain("ef_pgrant_secret_value");
+    });
+
+    it("MUTATION-DISTINGUISHING: a 401 with no reason is reported, not treated as revocation — the run is PARTIAL and the connection survives", async () => {
+      // eduFleet answers four of its seven grant-rejection paths with a bare
+      // `{"error":"Invalid grant token"}`. Treating those as proof of consent
+      // withdrawal would let a transient fault tear down a good connection;
+      // saying nothing would let a dead token read as healthy forever.
+      const http = makeHttp({ status: 401, body: { error: "Invalid grant token" } });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(http), grantConnection(), makeData([]));
 
       expect(outcome.status).toBe("PARTIAL");
-      expect(outcome.steps).toEqual([{ step: "vacancies", ok: false, detail: expect.any(String) }]);
-      expect(outcome.warnings.length).toBeGreaterThan(0);
-      expect(outcome.warnings.some((w) => /vacanc/i.test(w))).toBe(true);
+      expect(outcome.steps).toContainEqual({ step: "grant", ok: false, detail: expect.stringContaining("401") });
+      expect(outcome.warnings.some((w) => /still live/i.test(w))).toBe(true);
+    });
+
+    it("a probe that cannot reach eduFleet at all is PARTIAL, never a revocation", async () => {
+      const http = vi.fn().mockRejectedValue(new Error("Connector GET /api/partner/school failed: network error"));
+
+      const outcome = await edufleetAdapter.sync(makeCtx(http), grantConnection(), makeData([]));
+
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.steps).toContainEqual({ step: "grant", ok: false, detail: expect.stringContaining("reached") });
+    });
+
+    it("a connection holding no grant is PARTIAL and warns, but still reconciles the Contract One listings it can", async () => {
+      const http = vi.fn();
+      const filled = makeVacancy({ status: "FILLED", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(http), makeConnection(), makeData([filled]));
+
       expect(http).not.toHaveBeenCalled();
+      expect(filled.close).toHaveBeenCalledTimes(1);
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.warnings.some((w) => /no grant token/i.test(w))).toBe(true);
+    });
+
+    // -- what gets pushed, and what deliberately does not --------------------
+
+    it("MUTATION-DISTINGUISHING: a vacancy the school never published is never pushed — publishing is an explicit school action", async () => {
+      // Spec §7 and §10. A sync that created listings would put adverts on a
+      // public jobs board without the publish dialog that discloses it, and
+      // would be the single largest write-unit burn available here.
+      const open = makeVacancy({ status: "OPEN" });
+      const filled = makeVacancy({ status: "FILLED" });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([open, filled]));
+
+      expect(open.repush).not.toHaveBeenCalled();
+      expect(open.close).not.toHaveBeenCalled();
+      expect(filled.repush).not.toHaveBeenCalled();
+      expect(filled.close).not.toHaveBeenCalled();
+      // Nothing was skipped, because there was no work: SUCCESS, not PARTIAL.
+      expect(outcome.status).toBe("SUCCESS");
+    });
+
+    it("MUTATION-DISTINGUISHING: an OPEN vacancy whose live listing is in step is not pushed — no write unit for an unchanged advert", async () => {
+      const inStep = makeVacancy({ status: "OPEN", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([inStep]));
+
+      expect(inStep.repush).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("SUCCESS");
+      expect(outcome.steps).toContainEqual({ step: "vacancies", ok: true, detail: expect.any(String) });
+    });
+
+    it("MUTATION-DISTINGUISHING: an OPEN vacancy whose last push did not land IS repushed", async () => {
+      const drifted = makeVacancy({
+        status: "OPEN",
+        listing: { ...LIVE, blockedReason: "eduFleet refused this push (claim_pending)." },
+      });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([drifted]));
+
+      expect(drifted.repush).toHaveBeenCalledTimes(1);
+      expect(drifted.close).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("SUCCESS");
+      expect(outcome.steps).toContainEqual({ step: `repush:${drifted.vacancyId}`, ok: true, detail: drifted.title });
+    });
+
+    it("MUTATION-DISTINGUISHING: a FILLED vacancy with a live listing is closed, not repushed", async () => {
+      const filled = makeVacancy({ status: "FILLED", listing: LIVE });
+      const closed = makeVacancy({ status: "CLOSED", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([filled, closed]));
+
+      expect(filled.close).toHaveBeenCalledTimes(1);
+      expect(filled.repush).not.toHaveBeenCalled();
+      expect(closed.close).toHaveBeenCalledTimes(1);
+      expect(outcome.status).toBe("SUCCESS");
+      expect(outcome.steps).toContainEqual({ step: `close:${filled.vacancyId}`, ok: true, detail: filled.title });
+    });
+
+    it("MUTATION-DISTINGUISHING: a listing eduFleet already shows as closed is left alone, whatever the local status", async () => {
+      // Nothing is live over there, and neither contract can reopen an advert
+      // — the only route back is a NEW listing, which is a create.
+      const dead = { contract: "AGGREGATED", remoteStatus: "closed" } as const;
+      const openAgain = makeVacancy({ status: "OPEN", listing: { ...dead, blockedReason: "was refused" } });
+      const filled = makeVacancy({ status: "FILLED", listing: dead });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([openAgain, filled]));
+
+      expect(openAgain.repush).not.toHaveBeenCalled();
+      expect(openAgain.close).not.toHaveBeenCalled();
+      expect(filled.close).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("SUCCESS");
+    });
+
+    it("MUTATION-DISTINGUISHING: a claimed listing is neither pushed nor closed, and the run says so", async () => {
+      // `claimed` is terminal: IDAP's key is refused forever, and `spendWrite`
+      // runs before validation, so every attempt would burn a write unit to be
+      // told something already known.
+      const claimedFilled = makeVacancy({
+        status: "FILLED",
+        listing: { ...LIVE, claimState: "claimed" },
+      });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([claimedFilled]));
+
+      expect(claimedFilled.close).not.toHaveBeenCalled();
+      expect(claimedFilled.repush).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.warnings.some((w) => w.includes(claimedFilled.vacancyId) && /claimed/i.test(w))).toBe(true);
+    });
+
+    it("a claim still pending is NOT treated as claimed — it reverts on rejection, so the push is still attempted", async () => {
+      const pending = makeVacancy({
+        status: "FILLED",
+        listing: { ...LIVE, claimState: "claim_pending" },
+      });
+
+      await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([pending]));
+
+      expect(pending.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("a DRAFT vacancy with a live advert is named in a warning, never silently closed", async () => {
+      const draft = makeVacancy({ status: "DRAFT", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([draft]));
+
+      expect(draft.close).not.toHaveBeenCalled();
+      expect(draft.repush).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.warnings.some((w) => w.includes(draft.vacancyId) && /draft/i.test(w))).toBe(true);
+    });
+
+    // -- how failures are reported -------------------------------------------
+
+    it("MUTATION-DISTINGUISHING: one vacancy's refusal never becomes SUCCESS — the run is PARTIAL and the warning names it", async () => {
+      const refused = makeVacancy({ status: "FILLED", listing: LIVE });
+      refused.close.mockResolvedValue({ ok: false, scope: "VACANCY", detail: "eduFleet refused this push (claimed)." });
+      const fine = makeVacancy({ status: "FILLED", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([refused, fine]));
+
+      // The sweep continued: a per-vacancy failure is about that vacancy only.
+      expect(fine.close).toHaveBeenCalledTimes(1);
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.warnings.some((w) => w.includes(refused.vacancyId))).toBe(true);
+      expect(outcome.steps).toContainEqual({
+        step: `close:${refused.vacancyId}`,
+        ok: false,
+        detail: "eduFleet refused this push (claimed).",
+      });
+    });
+
+    it("MUTATION-DISTINGUISHING: a RUN-scoped failure abandons the rest of the sweep instead of repeating it per vacancy", async () => {
+      // eduFleet unreachable, or the school's 100 daily write units spent (an
+      // unclassified 429). Continuing would rediscover the same fact once per
+      // vacancy — and on a write-cap refusal, keep asking for units that are
+      // already gone.
+      const first = makeVacancy({ status: "FILLED", listing: LIVE });
+      first.close.mockResolvedValue({ ok: false, scope: "RUN", detail: "eduFleet could not be reached right now." });
+      const second = makeVacancy({ status: "FILLED", listing: LIVE });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([first, second]));
+
+      expect(second.close).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("FAILED");
+      expect(outcome.error).toBe("eduFleet could not be reached right now.");
+    });
+
+    it("MUTATION-DISTINGUISHING: a grant revoked mid-sweep carries the steps and warnings already accumulated", async () => {
+      // Same rule as PassPercent's mid-run 401: a credential dying partway
+      // through must not erase the record of which adverts already went up or
+      // came down.
+      const done = makeVacancy({ status: "FILLED", listing: LIVE });
+      const dies = makeVacancy({ status: "FILLED", listing: LIVE });
+      dies.close.mockRejectedValue(new ConnectorAuthError("eduFleet: the credential used for this job push has been revoked"));
+
+      let caught: unknown;
+      try {
+        await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([done, dies]));
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(ConnectorAuthError);
+      const steps = (caught as ConnectorAuthError).steps.map((step) => step.step);
+      expect(steps).toContain("grant");
+      expect(steps).toContain(`close:${done.vacancyId}`);
+      expect(steps).toContain(`close:${dies.vacancyId}`);
+      expect(done.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("a sync given no vacancy worklist at all reports PARTIAL rather than fabricating a push that never happened", async () => {
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData(undefined));
+
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.steps).toContainEqual({ step: "vacancies", ok: false, detail: expect.any(String) });
+      expect(outcome.warnings.some((w) => /vacanc/i.test(w))).toBe(true);
     });
   });
 

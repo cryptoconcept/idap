@@ -1,7 +1,7 @@
 import "server-only";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { Institution, PlatformConnection, PlatformCredential, SyncRun } from "@/models";
-import type { PlatformConnectionDoc, PlatformCredentialDoc, SyncRunDoc } from "@/models";
+import { Institution, PlatformConnection, PlatformCredential, SyncRun, Vacancy } from "@/models";
+import type { PlatformConnectionDoc, PlatformCredentialDoc, SyncRunDoc, VacancyDoc } from "@/models";
 import {
   PLATFORMS,
   PLATFORM_LABELS,
@@ -27,9 +27,12 @@ import {
   type RefreshResult,
   type SyncOutcome,
   type SyncSourceData,
+  type SyncVacancy,
+  type VacancyActionResult,
 } from "@/lib/connectors/types";
 import { ResultService } from "./result.service";
 import { ActivityService } from "./activity.service";
+import { VacancyPublishService, type VacancyPublishOutcome } from "./vacancy-publish.service";
 
 const ENTITY_TYPE = "PLATFORM_CONNECTION";
 
@@ -156,6 +159,105 @@ function upstreamError(platform: Platform): AppError {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+/**
+ * One vacancy action, as a reconciling adapter needs to see it.
+ *
+ * `VacancyPublishService` reports itself two ways — an outcome for "eduFleet
+ * answered" and a thrown `AppError` for "refused before the wire" — and an
+ * adapter has no business knowing that split. This flattens both, keeping the
+ * one distinction a reconciler genuinely needs: whether the failure was about
+ * THIS vacancy or about the platform, i.e. whether continuing the sweep is
+ * worth anything. `status >= 500` is the line, because that is exactly where
+ * the service puts `upstreamError` (502) — eduFleet unreachable, misconfigured,
+ * or answering an uncataloged 5xx, and an unclassified `429` write-cap
+ * refusal with it. A `400`/`404` refusal is about one vacancy and the sweep
+ * carries on.
+ *
+ * **`ConnectorAuthError` is not caught here, and that is load-bearing.** It
+ * does not extend `AppError`, so it falls through to the `throw` below,
+ * leaves `sync`, and reaches `syncNow`'s own handler — the only path by which
+ * IDAP ever learns a school revoked its grant. Turning that final `throw`
+ * into a returned failure would silently retire the entire revocation
+ * detector while every test about pushing still passed.
+ */
+async function runVacancyAction(run: () => Promise<VacancyPublishOutcome>): Promise<VacancyActionResult> {
+  let outcome: VacancyPublishOutcome;
+  try {
+    outcome = await run();
+  } catch (error) {
+    if (error instanceof AppError) {
+      return { ok: false, scope: error.status >= 500 ? "RUN" : "VACANCY", detail: error.message };
+    }
+    throw error;
+  }
+
+  switch (outcome.status) {
+    case "PUSHED":
+    case "CLOSED":
+      return { ok: true };
+    case "NOT_LISTED":
+      // Nothing was there to close — no HTTP call, nothing failed. Only
+      // reachable if the listing went away between the worklist load and the
+      // action, which is a race the reconciler does not need to hear about.
+      return { ok: true, detail: "nothing was listed" };
+    default:
+      // BLOCKED and CONFLICT: eduFleet answered and the service has already
+      // written the reason onto the listing, so the school sees it on the
+      // card too. Reported here so the run says PARTIAL rather than SUCCESS.
+      return { ok: false, scope: "VACANCY", detail: outcome.message };
+  }
+}
+
+/**
+ * The vacancy worklist an adapter's `sync` reconciles, built here because
+ * adapters never touch models.
+ *
+ * **Unfiltered on purpose.** It would be cheaper to ask Mongo only for
+ * vacancies that carry a listing — every adapter decision that ignores a
+ * vacancy today ignores exactly those without one — but that would move a
+ * product rule ("a sync never publishes a vacancy for the first time") out of
+ * the adapter, where it is stated and tested, and into a query nobody reads.
+ * The rows are small, `select`ed and `lean`, and the cost of loading them is
+ * a fraction of one HTTP call.
+ *
+ * Sorted oldest-first so a run's steps are stable and reproducible rather
+ * than in whatever order Mongo returns.
+ *
+ * TENANT-SENSITIVE: `institutionId` scopes the read, and each closure passes
+ * it back into the publish service, which scopes its own reads and writes
+ * with it again. A vacancy id is not an authorisation on either side.
+ */
+async function loadSyncVacancies(institutionId: string, actor: Actor): Promise<SyncVacancy[]> {
+  const rows = await Vacancy.find({ institutionId })
+    .select("title status listing")
+    .sort({ createdAt: 1 })
+    .lean<Pick<VacancyDoc, "_id" | "title" | "status" | "listing">[]>();
+
+  return rows.map((row) => {
+    const vacancyId = String(row._id);
+    return {
+      vacancyId,
+      title: row.title,
+      status: row.status,
+      listing: row.listing
+        ? {
+            contract: row.listing.contract,
+            remoteStatus: row.listing.remoteStatus,
+            claimState: row.listing.claimState ?? undefined,
+            blockedReason: row.listing.blockedReason ?? undefined,
+          }
+        : undefined,
+      // Both actions re-read the vacancy themselves, so the snapshot above is
+      // only ever a plan: a row that changed since the load is acted on as it
+      // now is, or refused. `repush` cannot create a listing (`allowCreate:
+      // false`), which is what keeps a sync from ever being the thing that
+      // first puts a vacancy on a public jobs board.
+      repush: () => runVacancyAction(() => VacancyPublishService.repush(institutionId, vacancyId, actor)),
+      close: () => runVacancyAction(() => VacancyPublishService.pushClose(institutionId, vacancyId, actor)),
+    };
+  });
 }
 
 function toEntry(platform: Platform, configured: boolean, doc?: PlatformConnectionDoc | null): ConnectionEntry {
@@ -609,10 +711,19 @@ export const ConnectionService = {
       const allResults = await ResultService.list(institutionId);
       const publishedResults = allResults.filter((row) => row.status === "PUBLISHED");
 
+      // Only for an adapter that can actually push a job. The three per-record
+      // job methods are the same capability check `vacancy-publish.service.ts`
+      // makes before pushing anything, and gating on them is what keeps
+      // PassPercent and FeesBasket — which have no job contract at all —
+      // completely untouched by this: they receive `vacancies: undefined`,
+      // exactly as before.
+      const reconcilesVacancies = Boolean(adapter.createJob && adapter.patchJob && adapter.closeJob);
+
       const sourceData: SyncSourceData = {
         institution: institution as unknown as Record<string, unknown>,
         results: publishedResults as unknown as Record<string, unknown>[],
         readPublicMedia: storage.getPublic,
+        vacancies: reconcilesVacancies ? await loadSyncVacancies(institutionId, actor) : undefined,
       };
 
       const state: ConnectionState = {
@@ -625,13 +736,13 @@ export const ConnectionService = {
 
       const startedAt = new Date();
       let outcome: SyncOutcome;
-      let flipToError = false;
+      let grantRevoked = false;
 
       try {
         outcome = await adapter.sync(ctx, state, sourceData);
       } catch (error) {
         if (error instanceof ConnectorAuthError) {
-          flipToError = true;
+          grantRevoked = true;
           // F3 (fix round 2): carry out whatever the adapter had already
           // accumulated before the auth failure, rather than discarding it —
           // a mid-run 401 must not erase the record of which years already
@@ -664,16 +775,57 @@ export const ConnectionService = {
         lastSyncAt: finishedAt,
         lastSyncStatus: outcome.status,
       };
-      if (flipToError) connectionSet.status = "ERROR";
       if (outcome.error) connectionSet.lastError = outcome.error;
+
+      // Task 7, the second inherited obligation: DISCONNECTED **and drop the
+      // ciphertext**, exactly as `refresh`'s own `ConnectorAuthError` branch
+      // already does — not the `ERROR`-and-keep-it this used to do.
+      //
+      // The asymmetry was harmless only while nothing could raise this from a
+      // sync. Now `sync` is the sole revocation detector, so a run that ends
+      // here is IDAP being told the school withdrew consent. Leaving the dead
+      // grant on the row resurrects the connection at the very next poll:
+      // `refresh` finds the request `completed`, sees a stored grant, and
+      // returns CONNECTED on the strength of that ciphertext alone — a
+      // credential eduFleet has already refused. One fact must not produce two
+      // states, and the state it produces must not be one a poll can undo.
+      //
+      // `ERROR` loses nothing by going: it existed on this path for
+      // `ConnectorAuthError` alone (a plain failure deliberately leaves the
+      // status untouched), the run is still recorded FAILED, and `lastError`
+      // still carries what happened. DISCONNECTED is also what spec §9 asks
+      // for by name — "`revoked` → ... the connection is marked disconnected
+      // and future pushes fall back to the platform key" — and it is the
+      // state that re-offers "Request connection" on the card.
+      const update: Record<string, unknown> = { $set: connectionSet };
+      if (grantRevoked) {
+        connectionSet.status = "DISCONNECTED";
+        update.$unset = { grantTokenEncrypted: "" };
+      } else if (!outcome.error) {
+        update.$unset = { lastError: "" };
+      }
 
       const updatedConnection = await PlatformConnection.findOneAndUpdate(
         { institutionId, platform },
-        outcome.error ? { $set: connectionSet } : { $set: connectionSet, $unset: { lastError: "" } },
+        update,
         { new: true },
       );
       /* c8 ignore next */
       if (!updatedConnection) throw notFound("Connection not found");
+
+      if (grantRevoked) {
+        // The same entry `refresh` writes for the same fact. A sync run alone
+        // would record "sync failed", which is true and misses the point: the
+        // connection was taken down, and an audit trail that does not say so
+        // leaves the next person guessing why the school is disconnected.
+        await recordActivity(
+          institutionId,
+          platform,
+          "Connection revoked remotely",
+          outcome.error ?? "The platform rejected this connection's grant token",
+          actor,
+        );
+      }
 
       await recordActivity(
         institutionId,

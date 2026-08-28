@@ -1,4 +1,11 @@
-import type { Platform, SyncStatus, VacancyListingContract } from "@/lib/constants";
+import type {
+  Platform,
+  SyncStatus,
+  VacancyClaimState,
+  VacancyListingContract,
+  VacancyListingRemoteStatus,
+  VacancyStatus,
+} from "@/lib/constants";
 import type { ConnectorHttp } from "./http";
 
 export type ConnectMode = "REQUEST_APPROVE_REDEEM" | "PASTE_KEY";
@@ -162,11 +169,97 @@ export interface PlatformAdapter {
   ): Promise<JobPushResult>;
 }
 
+/**
+ * What one service-owned vacancy action did, as a reconciling `sync` sees it.
+ *
+ * `scope` is the only thing an adapter needs from a failure and the only
+ * thing it cannot work out for itself, because the service has already
+ * flattened four different causes into one message:
+ *
+ * - `"VACANCY"` — this vacancy alone could not be pushed. A local refusal
+ *   (a failing preflight, a listing whose grant is gone), a `400`, a `403`
+ *   or a `409`. Every other vacancy in the run is unaffected, so the
+ *   reconciler records it and carries on.
+ * - `"RUN"` — the platform itself could not serve the call: unreachable,
+ *   misconfigured, an uncataloged 5xx, or the daily write cap spent (a `429`
+ *   is not classified and arrives here). Continuing would spend the rest of
+ *   the run discovering the same thing once per vacancy, so the reconciler
+ *   stops. This is what bounds a sweep's cost when eduFleet is down or the
+ *   school's 100 daily write units run out mid-run.
+ *
+ * A `ConnectorAuthError` is deliberately NOT representable here. It is not a
+ * failure of one push, it is proof the credential is dead, and it must reach
+ * the connection service's own handler — so the action throws it rather than
+ * returning it.
+ */
+export type VacancyActionResult =
+  | { ok: true; detail?: string }
+  | { ok: false; scope: "VACANCY" | "RUN"; detail: string };
+
+/**
+ * One vacancy a reconciling `sync` may act on: what IDAP knows about it, plus
+ * the two actions that can act on it.
+ *
+ * The actions are closures the SERVICE supplies, and that is the whole point
+ * of this shape. Pushing a vacancy means reading the institution row, picking
+ * a contract, preflighting, sending, and then writing the listing block back —
+ * all of it already implemented once, in `vacancy-publish.service.ts`, and all
+ * of it model work an adapter is forbidden to do. Handing the adapter data
+ * alone would force it to reimplement that; handing it the service would make
+ * an adapter import a service (and close an import cycle through the connector
+ * registry). Handing it two closures leaves the adapter with exactly the job
+ * it is for — deciding WHICH vacancies need WHAT — and leaves every push, every
+ * local refusal and every write where they already live.
+ *
+ * The fields below are what that decision needs and nothing more; they are a
+ * snapshot for planning, not an authority. Each action re-reads the vacancy
+ * itself, so a row that changed between the load and the call is acted on as
+ * it now is, or refused — the plan can be stale, the push cannot.
+ */
+export type SyncVacancy = {
+  vacancyId: string;
+  /** For naming this vacancy in a warning; never sent anywhere. */
+  title: string;
+  status: VacancyStatus;
+  /** Absent when the school has never published this vacancy to the platform. */
+  listing?: {
+    contract: VacancyListingContract;
+    remoteStatus: VacancyListingRemoteStatus;
+    claimState?: VacancyClaimState;
+    /** Set when the last push did not land — the marker that a published
+     *  vacancy's current values have NOT reached the platform. */
+    blockedReason?: string;
+  };
+  /** Push this vacancy's current values to the listing it ALREADY has. Never
+   *  creates one: putting a vacancy on a public jobs board is an explicit
+   *  school action, never a side effect of a sync. */
+  repush(): Promise<VacancyActionResult>;
+  /** Close this vacancy's listing on the platform. */
+  close(): Promise<VacancyActionResult>;
+};
+
 /** Everything an adapter may push, loaded by the service so adapters never touch models. */
 export type SyncSourceData = {
   institution: Record<string, unknown>;
   results: Record<string, unknown>[]; // PUBLISHED only, full internal DTO shape
   readPublicMedia: (key: string) => Promise<{ body: Buffer; contentType: string } | null>;
+  /**
+   * The institution's vacancies, for an adapter whose `sync` reconciles them.
+   *
+   * **Optional on purpose.** PassPercent and FeesBasket have no job contract
+   * at all, so the service leaves this absent for them and neither adapter
+   * changes. It is populated only for a platform that implements the
+   * per-record job methods (`createJob`/`patchJob`/`closeJob`), which is the
+   * same capability check `vacancy-publish.service.ts` makes before pushing.
+   *
+   * This is not the "force vacancies through `SyncSourceData`" the spec (§8)
+   * warned against: that objection is about METHOD SHAPE — a single
+   * `sync(data)` cannot express a per-record create/patch/close with its own
+   * per-record result — and it is already honoured by the three per-record
+   * methods above, which are how every actual push is made. What travels here
+   * is the reconciler's worklist, not the push interface.
+   */
+  vacancies?: SyncVacancy[];
 };
 
 /**

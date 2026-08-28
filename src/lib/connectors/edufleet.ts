@@ -1,5 +1,6 @@
 /**
- * eduFleet Exchange adapter — connection lifecycle only.
+ * eduFleet Exchange adapter — the connection lifecycle, the job wire, and the
+ * reconciler that keeps the two honest.
  *
  * Task 1 registers the platform and implements `initiate`, the first step of
  * the four-step consent chain documented in
@@ -8,14 +9,17 @@
  * `passpercent.ts` already implements for the same `REQUEST_APPROVE_REDEEM`
  * mode).
  *
- * `sync` below is a deliberate placeholder, not a stub left unfinished by
- * accident: this plan (2026-08-28-edufleet-connection, "Plan B1 of 2") covers
- * the connection lifecycle only. The vacancy push itself — the `listing`
- * block, the publish action, claim handling — is Plan B2 and does not exist
- * yet. `SyncStatus` has exactly three legal values (`constants.ts`); `SUCCESS`
- * would fabricate a push that never happened, and `FAILED` would paint a
- * normal, unimplemented state red. `PARTIAL` is the only honest one: nothing
- * broke, nothing was pushed either, and the warning says why.
+ * Plan B2's Task 7 replaces what used to be a placeholder `sync` with a real
+ * reconciler, and gives this module its second job: bringing eduFleet back
+ * into step with IDAP for vacancies the school ALREADY published, and — the
+ * obligation B1 recorded in writing — being the one place a revoked grant is
+ * ever discovered.
+ *
+ * `SyncStatus` still has exactly three legal values (`constants.ts`), and the
+ * honesty rule that governed the placeholder governs the reconciler too:
+ * `SUCCESS` may never be reported over a push that did not happen, so a run
+ * that skipped anything is `PARTIAL` with a warning naming each vacancy it
+ * skipped.
  *
  * Like `passpercent.ts`, every function here relies on `ConnectorHttp`
  * resolving `{status, body}` on a non-2xx response rather than throwing — see
@@ -32,6 +36,10 @@ import type {
   PlatformAdapter,
   RefreshResult,
   SyncOutcome,
+  SyncSourceData,
+  SyncStep,
+  SyncVacancy,
+  VacancyActionResult,
 } from "./types";
 import type { VacancyListingContract } from "@/lib/constants";
 import { registerAdapter } from "./index";
@@ -270,22 +278,29 @@ async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: strin
 }
 
 /**
- * The redeem response (api-map §1.2 step 4) carries no school name, city,
- * or slug — just ids. This is a second call, using the grant token that was
- * just minted, purely to populate `RefreshResult.remoteInstitution` for
- * display.
+ * The one grant-authenticated READ IDAP makes of eduFleet, and the single
+ * place the "is this grant still alive?" policy lives. Two callers with two
+ * different jobs share it (`fetchRemoteInstitution` for display,
+ * `probeGrant` for the reconciler), which is why the policy is here and the
+ * interpretation is theirs.
  *
- * This call must never be able to cost the grant: a network throw, a
- * timeout, or any ordinary non-2xx status here is swallowed and simply
- * yields no `remoteInstitution` — a `CONNECTED` result with an unnamed
- * school is still a working connection. The one deliberate exception is a
- * 401 with body reason `revoked` (api-map §1.3): that is not a cosmetic
- * failure, it means the credential IDAP just received is already dead, which
- * is worth surfacing distinctly via `ConnectorAuthError` rather than quietly
- * handing back a token that will never work. `revoked` is matched exactly, not
- * by substring: `partner_revoked` is a different fact (the partner
- * registration was pulled, nothing a school can act on) that happens to
- * contain the word.
+ * `GET /api/partner/school` is deliberate rather than incidental: it is
+ * authenticated by `requireGrant` (eduFleet `partner-auth.ts:113`) and it
+ * calls **no** `spendWrite` — the only twelve call sites are the four job
+ * routes, the four listings routes and the connection-request POST, all
+ * verified in eduFleet's source. So this costs nothing from the school's
+ * 100/day write budget however often a sync runs.
+ *
+ * Never throws for a transport failure: a network error or a timeout yields
+ * `undefined`, which every caller must treat as "could not ask", never as
+ * "the grant is dead".
+ *
+ * The ONE authoritative signal is a 401 whose body reason is exactly
+ * `revoked` (api-map §1.3) — the school withdrew consent — and that raises
+ * `ConnectorAuthError` from here so no caller can accidentally swallow it.
+ * `revoked` is matched exactly, not by substring: `partner_revoked` is a
+ * different fact (the partner registration was pulled, nothing a school can
+ * act on) that happens to contain the word.
  *
  * **That split is not exhaustive, and the remainder is a known gap.** This
  * call can be answered 401 with five distinct bodies — `requireGrant`
@@ -294,21 +309,20 @@ async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: strin
  * `partner_inactive`. The other two carry none, and between them cover four
  * of the seven throw sites: a bad prefix, a hash miss and an orphaned partner
  * all answer the same bare `{"error":"Invalid grant token"}`, and a missing
- * token answers `{"error":"Missing grant token", hint}`. Every one of those
- * falls into the swallow below, so this function returns normally and the
- * connection lands on `CONNECTED` holding a token eduFleet will not honour.
+ * token answers `{"error":"Missing grant token", hint}`.
  *
- * Widening the check is not the fix: treating "401 for an unstated reason" as
- * proof the school withdrew consent is a stronger claim than a cosmetic
- * lookup can support, and it would let a transient eduFleet fault tear down a
- * good connection. The gap closes from the other side — Plan B2's vacancy
- * push is the first code path that makes a grant-authenticated call for an
- * established connection, and it is where a dead grant will actually surface.
+ * Widening the check is still not the fix: treating "401 for an unstated
+ * reason" as proof the school withdrew consent is a stronger claim than this
+ * call can support, and it would let a transient eduFleet fault tear down a
+ * good connection. What has changed is that the unstated 401s are no longer
+ * invisible — `probeGrant` reports the status it got as a failed step and the
+ * run comes back `PARTIAL`, so a connection holding a token eduFleet will not
+ * honour now says so on every sync instead of reading as healthy.
  */
-async function fetchRemoteInstitution(
+async function readSchool(
   ctx: AdapterContext,
   grantToken: string,
-): Promise<{ name?: string; city?: string; slug?: string } | undefined> {
+): Promise<{ status: number; body: unknown } | undefined> {
   let resp: { status: number; body: unknown };
   try {
     resp = await ctx.http("/api/partner/school", { method: "GET", token: grantToken });
@@ -316,19 +330,39 @@ async function fetchRemoteInstitution(
     return undefined;
   }
 
-  if (resp.status === 200) {
-    const school = rec(resp.body);
-    if (!school) return undefined;
-    // eduFleet's School model has no slug field at all — `slug` stays
-    // undefined always; never derive one from the name.
-    return { name: str(school.schoolName), city: str(school.city) };
-  }
-
   if (resp.status === 401 && str(rec(resp.body)?.reason) === "revoked") {
-    throw new ConnectorAuthError("eduFleet: the grant this connection just redeemed is already revoked");
+    throw new ConnectorAuthError("eduFleet: this connection's grant has been revoked by the school");
   }
 
-  return undefined;
+  return resp;
+}
+
+/**
+ * The redeem response (api-map §1.2 step 4) carries no school name, city,
+ * or slug — just ids. This is a second call, using the grant token that was
+ * just minted, purely to populate `RefreshResult.remoteInstitution` for
+ * display.
+ *
+ * This call must never be able to cost the grant: a network throw, a
+ * timeout, or any ordinary non-2xx status is swallowed and simply yields no
+ * `remoteInstitution` — a `CONNECTED` result with an unnamed school is still
+ * a working connection. The one deliberate exception is the `401 revoked`
+ * `readSchool` raises, which means the credential IDAP just received is
+ * already dead and is worth surfacing rather than quietly handing back a
+ * token that will never work.
+ */
+async function fetchRemoteInstitution(
+  ctx: AdapterContext,
+  grantToken: string,
+): Promise<{ name?: string; city?: string; slug?: string } | undefined> {
+  const resp = await readSchool(ctx, grantToken);
+  if (resp?.status !== 200) return undefined;
+
+  const school = rec(resp.body);
+  if (!school) return undefined;
+  // eduFleet's School model has no slug field at all — `slug` stays
+  // undefined always; never derive one from the name.
+  return { name: str(school.schoolName), city: str(school.city) };
 }
 
 async function redeem(ctx: AdapterContext, remoteRequestId: string): Promise<RefreshResult> {
@@ -423,18 +457,17 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
           // when the field is absent.
           //
           // The cost of that short-circuit is large enough to write down.
-          // Returning here means **no code path in this plan (B1) makes a
-          // grant-authenticated call for an established connection at all**:
-          // `refresh` stops short of `fetchRemoteInstitution`, and `sync` is
-          // the placeholder above. So a school can revoke its grant and IDAP
-          // will keep showing Connected indefinitely — `refresh`'s
-          // `ConnectorAuthError` branch only ever fires in the narrow
-          // mid-redeem window, never for a connection already established.
+          // Returning here means **`refresh` never makes a grant-authenticated
+          // call for an established connection**: it stops short of
+          // `fetchRemoteInstitution`, so its own `ConnectorAuthError` branch
+          // only ever fires in the narrow mid-redeem window. On its own that
+          // left a school able to revoke its grant while IDAP kept showing
+          // Connected indefinitely.
           //
-          // Plan B2's `sync` — the vacancy push — is the thing that closes
-          // this: it is the first and only path that will exercise a stored
-          // grant, which makes it the sole revocation detector. See the
-          // Task 4 amendment in
+          // `sync` below is what closes that, and it is now the ONLY thing
+          // that does: `probeGrant` exercises the stored grant on every run,
+          // which makes `sync` the sole revocation detector. See the Task 4
+          // amendment in
           // `docs/superpowers/plans/2026-08-28-edufleet-connection.md`.
         };
       }
@@ -445,19 +478,271 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
 }
 
 // ---------------------------------------------------------------------------
-// sync — placeholder (see module docblock); Plan B2 implements the real push
+// sync — the reconciler
 // ---------------------------------------------------------------------------
 
-// No parameters: a function with fewer params than `PlatformAdapter["sync"]`
-// declares is still assignable to it (same variance TS allows any callback
-// that ignores its trailing arguments), and it's the cleanest way to leave
-// ctx/connection/data genuinely unused without tripping no-unused-vars.
-async function sync(): Promise<SyncOutcome> {
-  return {
-    status: "PARTIAL",
-    steps: [{ step: "vacancies", ok: false, detail: "eduFleet vacancy push is not implemented yet" }],
-    warnings: ["eduFleet: vacancy sync is not implemented yet — this plan covers the connection lifecycle only"],
-  };
+/**
+ * Step 1 of every run, and the reason `sync` exists at all beyond the push.
+ *
+ * **This is the only way IDAP ever discovers a school revoked its grant.**
+ * `refresh` short-circuits the moment a connection is established (see its
+ * `"completed"` branch), and nothing else in IDAP makes a grant-authenticated
+ * call for one — so without this a school can withdraw consent on eduFleet and
+ * the connection card keeps saying "Connected", against a credential that will
+ * refuse every request, forever. Recorded as a binding obligation in the Task 4
+ * amendment of `docs/superpowers/plans/2026-08-28-edufleet-connection.md`.
+ *
+ * It runs FIRST, before any vacancy is touched, and it is a READ. Both matter:
+ *
+ * - A read costs no write unit (`GET /api/partner/school` calls no
+ *   `spendWrite`; see `readSchool`), so revocation detection is free however
+ *   often a school syncs.
+ * - Running before the sweep means a dead grant stops the run before a single
+ *   Contract Two push spends anything on a foregone 401 — and `spendWrite`
+ *   runs BEFORE eduFleet validates, so those would have cost real units.
+ *
+ * It cannot cover the whole surface, and the boundary is worth stating: it
+ * proves the SCHOOL'S GRANT is alive. A vacancy pinned to Contract One is
+ * pushed under the platform key, which this never exercises. A connection is
+ * still the right place to detect this, because the grant is the credential a
+ * school controls and can withdraw; the platform key is IDAP's own and its
+ * failure is an operator problem, not a per-school one.
+ *
+ * Returns whether the grant was PROVEN live. `false` is not an accusation —
+ * it covers "no grant on the row at all" and "eduFleet did not answer 200 for
+ * a reason it did not state" — but it does mean this run could not verify the
+ * connection, which is a `PARTIAL`, never a `SUCCESS`.
+ */
+async function probeGrant(
+  ctx: AdapterContext,
+  connection: ConnectionState,
+  steps: SyncStep[],
+  warnings: string[],
+): Promise<boolean> {
+  const grantToken = connection.grantToken;
+  if (!grantToken) {
+    // A CONNECTED eduFleet row always carries one, so this is an anomaly
+    // rather than a normal state — and an anomaly that silently disables the
+    // only revocation detector there is, which is exactly the kind of thing
+    // that must not read as a clean run.
+    steps.push({ step: "grant", ok: false, detail: "this connection holds no grant token to verify" });
+    warnings.push(
+      "eduFleet: this connection is marked connected but holds no grant token, so IDAP could not verify it is still live — reconnect to eduFleet.",
+    );
+    return false;
+  }
+
+  // `readSchool` raises `ConnectorAuthError` on the one authoritative signal
+  // (401 `revoked`) and it is deliberately NOT caught here: the connection
+  // service's own `ConnectorAuthError` branch is what flips the row out of
+  // CONNECTED and drops the dead ciphertext, and swallowing it would leave
+  // IDAP holding a credential it already knows is dead. `steps`/`warnings`
+  // are empty at this point, so nothing is lost by letting it fly as-is.
+  const resp = await readSchool(ctx, grantToken);
+
+  if (resp === undefined) {
+    steps.push({ step: "grant", ok: false, detail: "eduFleet could not be reached to verify the grant" });
+    warnings.push("eduFleet: could not be reached to check whether this connection is still live.");
+    return false;
+  }
+
+  if (resp.status !== 200) {
+    // Includes the four 401s that carry no `reason` (see `readSchool`). Not
+    // treated as revocation — that claim needs eduFleet to make it — but no
+    // longer invisible either.
+    steps.push({ step: "grant", ok: false, detail: describeFailure(resp) });
+    warnings.push(
+      `eduFleet: IDAP could not confirm this connection is still live (${describeFailure(resp)}) — if pushes keep failing, reconnect to eduFleet.`,
+    );
+    return false;
+  }
+
+  steps.push({ step: "grant", ok: true });
+  return true;
+}
+
+/**
+ * What one vacancy needs from a reconciliation, decided locally and before
+ * anything is sent. Every branch that answers `"NONE"` is a write unit not
+ * spent — and on a sweep, that is the whole ball game: `spendWrite` runs
+ * BEFORE eduFleet validates, so a reconciler that pushes speculatively burns
+ * the school's 100/day budget discovering things IDAP already knew.
+ *
+ * - **No listing → `NONE`.** The school never published this vacancy, and a
+ *   sync must never be what first puts one on a public jobs board. Spec §7
+ *   ("Publish is explicit — a school action on an `OPEN` vacancy, never
+ *   automatic on save") and §10 ("a vacancy is only ever pushed by an
+ *   explicit school action") both say so, and the publish dialog is IDAP's
+ *   consent surface for it. This is not work being skipped; there is no work.
+ * - **Listing already closed → `NONE`.** Nothing is live over there to
+ *   reconcile, and eduFleet cannot reopen an advert on either contract
+ *   (Contract Two's PATCH accepts only `"closed"`), so the only route back is
+ *   a NEW listing — a create, i.e. the explicit action above.
+ * - **`FILLED`/`CLOSED` with a live listing → `CLOSE`.** The vacancy is no
+ *   longer hiring and the public advert should come down. This is the half of
+ *   reconciliation that nothing else in IDAP performs on its own.
+ * - **`OPEN` with a live listing → `REPUSH` only if `blockedReason` is set.**
+ *   That field is precisely "why this listing is currently out of step with
+ *   IDAP" (`vacancy-publish.service.ts`), written by a `403`, a `409` or a
+ *   failed edit-push, and cleared by the next push that lands. It is the only
+ *   local evidence that a published vacancy's current values have NOT reached
+ *   eduFleet. Without it, "reconcile every live listing" would PATCH every
+ *   advert on every sync — one write unit each, for no change — which is the
+ *   single most expensive mistake available here. And two of eduFleet's four
+ *   `403` triggers (`claim_pending`, `hiddenPendingReview`) reverse on their
+ *   own, which is exactly why `JobPushResult` refuses to latch a vacancy as
+ *   dead: something has to retry later, and this is that something.
+ * - **`DRAFT` with a live listing → `DRAFT_LIVE`.** A real drift with no
+ *   sanctioned resolution: the spec never pushes a `DRAFT` (§4), and closing
+ *   the advert would destroy a listing that cannot be reopened, on nothing
+ *   more than a status toggle. Named in a warning instead, so the school can
+ *   resolve it in the direction they meant.
+ */
+type VacancyPlan = "NONE" | "CLOSE" | "REPUSH" | "DRAFT_LIVE";
+
+function planFor(vacancy: SyncVacancy): VacancyPlan {
+  const listing = vacancy.listing;
+  if (!listing || listing.remoteStatus === "closed") return "NONE";
+
+  switch (vacancy.status) {
+    case "FILLED":
+    case "CLOSED":
+      return "CLOSE";
+    case "OPEN":
+      return listing.blockedReason ? "REPUSH" : "NONE";
+    default:
+      return "DRAFT_LIVE";
+  }
+}
+
+/** How a vacancy is named in a warning: what the school called it, and the id
+ *  that identifies it. `clip` because a title is user-entered and the string
+ *  is persisted on the run. */
+function nameOf(vacancy: SyncVacancy): string {
+  return `"${clip(vacancy.title)}" (${clip(vacancy.vacancyId)})`;
+}
+
+/**
+ * Bring eduFleet back into step with IDAP for the vacancies this school has
+ * already published, and — before anything else — prove the grant is still
+ * alive.
+ *
+ * What this does NOT do is as deliberate as what it does. It builds no body,
+ * makes no job call, and writes no listing state: every push goes through the
+ * closures on `SyncVacancy`, which are `vacancy-publish.service.ts`'s own
+ * `repush`/`pushClose`. That service already owns contract selection,
+ * preflight, the wire call and the write-back, and it is the only thing
+ * allowed to touch models. This function's entire job is deciding WHICH
+ * vacancies need WHAT — and, on a sweep, deciding that as cheaply as possible.
+ *
+ * Ordering is not incidental: the grant probe first (a free read that stops a
+ * dead-credential run before it spends anything), then closes and repushes in
+ * the order the service handed them over. A `RUN`-scoped failure — eduFleet
+ * unreachable, or the daily write cap spent, which arrives as an unclassified
+ * `429` — abandons the rest of the sweep rather than rediscovering the same
+ * fact once per vacancy.
+ *
+ * The status is the honesty rule, verbatim: anything skipped or failed makes
+ * the run `PARTIAL` with a warning naming that vacancy; `SUCCESS` is reserved
+ * for a run where the grant verified and every vacancy that needed work got
+ * it. A push that did not happen is never reported as one.
+ */
+async function sync(
+  ctx: AdapterContext,
+  connection: ConnectionState,
+  data: SyncSourceData,
+): Promise<SyncOutcome> {
+  const steps: SyncStep[] = [];
+  const warnings: string[] = [];
+
+  const grantOk = await probeGrant(ctx, connection, steps, warnings);
+
+  const vacancies = data.vacancies;
+  if (vacancies === undefined) {
+    // The service did not supply a worklist. Nothing was pushed, so this can
+    // never be SUCCESS — the same reasoning the placeholder this replaced was
+    // written under.
+    steps.push({ step: "vacancies", ok: false, detail: "no vacancy worklist was supplied to this sync" });
+    warnings.push(
+      "eduFleet: vacancies were not reconciled — this sync ran without a vacancy worklist, so nothing was pushed.",
+    );
+    return { status: "PARTIAL", steps, warnings };
+  }
+
+  let skipped = false;
+  let acted = 0;
+
+  for (const vacancy of vacancies) {
+    const plan = planFor(vacancy);
+    if (plan === "NONE") continue;
+
+    if (plan === "DRAFT_LIVE") {
+      skipped = true;
+      warnings.push(
+        `eduFleet: ${nameOf(vacancy)} is back in draft, but its advert is still live on eduFleet. IDAP will not take down an advert over a draft toggle — set the vacancy to Filled or Closed to close it, or back to Open to keep it.`,
+      );
+      continue;
+    }
+
+    // A claimed listing has moved onto the school's OWN eduFleet account:
+    // IDAP's platform key is refused on it with `403 claimed`, one of the two
+    // TERMINAL triggers, so this is not a state that heals. Pushing anyway
+    // would spend a write unit per vacancy per sync to be told something
+    // already known. `vacancy.service.ts`'s `remove` makes the same call for
+    // the same reason.
+    if (vacancy.listing?.claimState === "claimed") {
+      skipped = true;
+      warnings.push(
+        `eduFleet: ${nameOf(vacancy)} has been claimed on eduFleet, so IDAP can no longer change or close its advert — manage it from your eduFleet account.`,
+      );
+      continue;
+    }
+
+    const step = `${plan === "CLOSE" ? "close" : "repush"}:${clip(vacancy.vacancyId)}`;
+
+    let result: VacancyActionResult;
+    try {
+      result = plan === "CLOSE" ? await vacancy.close() : await vacancy.repush();
+    } catch (error) {
+      if (error instanceof ConnectorAuthError) {
+        // The grant died partway through the sweep (the probe passed, the
+        // school revoked while the run was in flight). Same rule as
+        // PassPercent's mid-run 401: the error carries everything already
+        // accumulated, so the record of which adverts had already gone up or
+        // come down before the credential died is not thrown away.
+        steps.push({ step, ok: false, detail: error.message });
+        throw new ConnectorAuthError(error.message, steps, warnings);
+      }
+      throw error;
+    }
+
+    if (result.ok) {
+      acted += 1;
+      steps.push({ step, ok: true, detail: clip(vacancy.title) });
+      continue;
+    }
+
+    steps.push({ step, ok: false, detail: result.detail });
+
+    if (result.scope === "RUN") {
+      warnings.push(
+        `eduFleet: the sync stopped at ${nameOf(vacancy)} — ${result.detail} Any vacancies after it were left untouched.`,
+      );
+      return { status: "FAILED", steps, warnings, error: result.detail };
+    }
+
+    skipped = true;
+    warnings.push(`eduFleet: ${nameOf(vacancy)} was not reconciled — ${result.detail}`);
+  }
+
+  if (acted === 0 && !skipped) {
+    // Said explicitly rather than left as an empty step list: "eduFleet is
+    // already in step with IDAP" and "the sync did nothing" look identical on
+    // a run with no steps, and only one of them is good news.
+    steps.push({ step: "vacancies", ok: true, detail: "every published vacancy is already in step with eduFleet" });
+  }
+
+  return { status: grantOk && !skipped ? "SUCCESS" : "PARTIAL", steps, warnings };
 }
 
 // ---------------------------------------------------------------------------
