@@ -591,6 +591,28 @@ async function createJob(
  * happened when none did. `closeJob` is the only sanctioned way to change
  * `status`, and this throw never spends a write unit (it runs before
  * `ctx.http` is called at all).
+ *
+ * The guard is deliberately universal even though the hazard is not.
+ * Contract One's `updatePartnerJob` has no short-circuit — it applies every
+ * field AND `status` before a single `save()`, and it even accepts
+ * `status: "active"`, so it could reopen a listing. Narrowing this guard to
+ * Contract Two would therefore be defensible, and is still the wrong trade:
+ *
+ *   - The spec already settled that reopening a filled vacancy creates a NEW
+ *     listing rather than reviving the old one, precisely because Contract
+ *     Two cannot reopen. So IDAP never needs `status: "active"` on either
+ *     contract, and the capability Contract One offers here is one the
+ *     product has declined.
+ *   - One rule ("`closeJob` changes status, `patchJob` never does") beats a
+ *     per-contract exception a caller must remember, on the path where
+ *     forgetting is silent rather than loud.
+ *   - The cost is a second write unit for a combined edit-and-close on
+ *     Contract One. IDAP has no such flow: editing fields and changing status
+ *     are separate user actions, so the cost is unrealised today.
+ *
+ * If a future caller genuinely needs a Contract One reopen, add an explicit
+ * method for it rather than relaxing this guard — that keeps the loud path
+ * loud.
  */
 async function patchJob(
   ctx: AdapterContext,
