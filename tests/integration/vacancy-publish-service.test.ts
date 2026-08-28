@@ -838,12 +838,21 @@ describe("rule 5: BLOCKED is recorded, never latched", () => {
         error: "This listing has been claimed by the school and can no longer be edited by a partner key",
         reason: "claimed",
       }),
+      // The free list read that follows every Contract One `403 claimed`.
+      // This job is not on it, so the claim state stays unknown — which is
+      // exactly the case this test needs: nothing may be latched.
+      jsonResponse(200, { jobs: [{ externalJobId: "some-other-job", claimStatus: "claimed" }] }),
     );
 
     const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
 
     expect(outcome.status).toBe("BLOCKED");
-    expect(fetchMock).toHaveBeenCalledTimes(1); // never retried — the unit is already spent
+    // Two calls, and neither is a retry: the PATCH, then the list read, which
+    // is a GET and spends no write unit (`app/api/partner/jobs/route.ts`'s
+    // GET handler calls `requirePlatformKey` and nothing else).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(callAt(fetchMock, 1).method).toBe("GET");
+    expect(callAt(fetchMock, 1).url).toBe(`${BASE_URL}/api/partner/jobs`);
     const listing = await storedListing(String(vacancy._id));
     expect(listing?.blockedReason).toContain("claimed");
     // Everything else survives: two of eduFleet's four 403 triggers
@@ -1221,6 +1230,149 @@ describe("repush", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// H1 — a 403 `claimed` is disambiguated by a free read, so `claimState` can
+// hold something other than "unclaimed" for the first time
+//
+// eduFleet raises ONE reason for three states with two futures, and no
+// response IDAP can read ever reports a claim state: a create hardcodes
+// `claimStatus: "unclaimed"`, Contract One's PATCH 403s before it can answer,
+// and neither Contract Two route returns the field at all. So until these
+// tests existed, `listing.claimState` could only ever hold "unclaimed" in
+// production and every consumer of a claimed listing was dead code that only
+// a fixture could reach.
+// ---------------------------------------------------------------------------
+
+describe("a 403 claimed is resolved against the free job list", () => {
+  it("MUTATION-DISTINGUISHING: records the claim state the list read reported, not the one the 403 implied", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: {
+        jobId: "ef-job-70",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date("2026-08-01T00:00:00.000Z"),
+        claimState: "unclaimed",
+      },
+    });
+    const fetchMock = stubFetch(
+      jsonResponse(403, {
+        error: "This listing has been claimed by the school and can no longer be edited by a partner key",
+        reason: "claimed",
+      }),
+      jsonResponse(200, {
+        jobs: [
+          { externalJobId: "someone-elses-job", claimStatus: "unclaimed" },
+          { externalJobId: String(vacancy._id), claimStatus: "claimed", status: "active" },
+        ],
+      }),
+    );
+
+    const blocked = expectOutcome(
+      await VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
+      "BLOCKED",
+    );
+
+    // The read is a GET on the platform key, against the one route that
+    // reports `claimStatus` per job and calls no `spendWrite` — verified in
+    // `app/api/partner/jobs/route.ts`, whose GET handler is
+    // `requirePlatformKey` then `listPartnerJobs` and nothing else.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const read = callAt(fetchMock, 1);
+    expect(read.method).toBe("GET");
+    expect(read.url).toBe(`${BASE_URL}/api/partner/jobs`);
+    expect(read.token).toBe(`Bearer ${PLATFORM_KEY}`);
+
+    // The whole point: the stored state is what the READ said, matched on
+    // this vacancy's own externalJobId rather than on whichever row came
+    // first. Before the fix wave nothing could ever write this value.
+    const listing = await storedListing(String(vacancy._id));
+    expect(listing?.claimState).toBe("claimed");
+    // ...and the message says the true thing rather than the vague
+    // three-states-in-one wording the bare reason forces.
+    expect(blocked.message).toContain("claimed this advert");
+  });
+
+  it("MUTATION-DISTINGUISHING: a claim still pending is recorded as pending, never as claimed", async () => {
+    // The distinction the 403 cannot make and this read can. A REJECTED claim
+    // returns the job to `unclaimed`, so recording `claim_pending` as
+    // terminal would abandon a live public advert IDAP still has to manage.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-71", contract: "AGGREGATED", lastPushedAt: new Date(), claimState: "unclaimed" },
+    });
+    stubFetch(
+      jsonResponse(403, { error: "claimed", reason: "claimed" }),
+      jsonResponse(200, { jobs: [{ externalJobId: String(vacancy._id), claimStatus: "claim_pending" }] }),
+    );
+
+    const blocked = expectOutcome(
+      await VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
+      "BLOCKED",
+    );
+
+    expect((await storedListing(String(vacancy._id)))?.claimState).toBe("claim_pending");
+    expect(blocked.message).toContain("awaiting review");
+  });
+
+  it("records withdrawn — an admin takedown — as itself, which the old three-value enum could not hold", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-72", contract: "AGGREGATED", lastPushedAt: new Date(), claimState: "unclaimed" },
+    });
+    stubFetch(
+      jsonResponse(403, { error: "claimed", reason: "claimed" }),
+      jsonResponse(200, { jobs: [{ externalJobId: String(vacancy._id), claimStatus: "withdrawn" }] }),
+    );
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect((await storedListing(String(vacancy._id)))?.claimState).toBe("withdrawn");
+  });
+
+  it("leaves the stored state alone when the list read fails — unknown must never read as unclaimed", async () => {
+    // The push already happened and was already classified; a listing lookup
+    // that cannot be made must not turn a recorded BLOCKED into a throw, and
+    // must not overwrite a state already established with a guess.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-73", contract: "AGGREGATED", lastPushedAt: new Date(), claimState: "claimed" },
+    });
+    stubFetch(
+      jsonResponse(403, { error: "claimed", reason: "claimed" }),
+      jsonResponse(500, { error: "boom" }),
+    );
+
+    const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("BLOCKED");
+    expect((await storedListing(String(vacancy._id)))?.claimState).toBe("claimed");
+  });
+
+  it("MUTATION-DISTINGUISHING: a Contract Two 403 reads no job list — a school_posted job is never claimable", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    await makeConnectedGrant("INS0001");
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-74", contract: "SCHOOL_POSTED", lastPushedAt: new Date() },
+    });
+    const fetchMock = stubFetch(
+      jsonResponse(403, { error: "no room on this plan", reason: "upgrade_required" }),
+    );
+
+    const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("BLOCKED");
+    // The action that must not happen: a second request. Contract One's job
+    // list is not the school's, so reading it would spend a rate-limit slot
+    // to learn nothing about this listing.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("pushClose", () => {
   it("does nothing at all for a vacancy that was never published", async () => {
     await makeInstitution("INS0001");
@@ -1278,14 +1430,15 @@ describe("pushClose", () => {
 
 describe("recording a successful push", () => {
   it("does not store a claim state IDAP's own enum has never heard of", async () => {
-    // eduFleet's CLAIM_STATUSES has four values (`Job.ts:13`) and IDAP's
-    // VACANCY_CLAIM_STATES has three — `withdrawn` is eduFleet-only. Storing
-    // it verbatim would throw on save AFTER the job went live, orphaning a
-    // public advert IDAP has no id for.
+    // `VACANCY_CLAIM_STATES` now mirrors eduFleet's `CLAIM_STATUSES` in full
+    // (`withdrawn` included — the free list read reports it), so the fixture
+    // is a value NEITHER side has: a state eduFleet might add tomorrow.
+    // Storing it verbatim would throw on save AFTER the job went live,
+    // orphaning a public advert IDAP has no id for.
     await makeInstitution("INS0001");
     await makeCredential();
     const vacancy = await makeVacancy("INS0001");
-    stubFetch(jsonResponse(201, { jobId: "ef-job-60", status: "active", claimStatus: "withdrawn" }));
+    stubFetch(jsonResponse(201, { jobId: "ef-job-60", status: "active", claimStatus: "escrowed" }));
 
     const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
 

@@ -557,15 +557,16 @@ function nextExternalJobId(vacancyId: string, previous: string | undefined): str
 const KNOWN_CLAIM_STATES = new Set<string>(VACANCY_CLAIM_STATES);
 
 /**
- * eduFleet's `CLAIM_STATUSES` has four values (`Job.ts:13`); IDAP's
- * `VACANCY_CLAIM_STATES` has three — `withdrawn` (an approved takedown) is
- * eduFleet-only. Nothing these three methods call can return it today
- * (a create always answers `unclaimed`, Contract One's PATCH 403s on a
- * withdrawn job before it can answer, and Contract Two never reports a claim
- * state at all), but storing an unrecognised value verbatim would fail the
- * model's enum on save — AFTER the job went live, leaving a public advert
- * IDAP recorded no id for. Unknown values are dropped instead so the write
- * cannot fail on data eduFleet chose.
+ * `VACANCY_CLAIM_STATES` now mirrors eduFleet's `CLAIM_STATUSES` in full,
+ * `withdrawn` included — the free list read behind a `403 claimed`
+ * (`edufleet.ts`'s `resolveClaimState`) reports all four, and dropping one
+ * would turn "eduFleet took this advert down" into "state unknown".
+ *
+ * The guard itself stays for the reason it was written: storing a value
+ * outside the enum verbatim would fail the model's own validation on save —
+ * AFTER the job went live, leaving a public advert IDAP recorded no id for.
+ * An unrecognised value is dropped instead, which every reader treats as
+ * "unknown", never as "unclaimed".
  */
 function toClaimState(value: string | undefined): VacancyClaimState | undefined {
   return value !== undefined && KNOWN_CLAIM_STATES.has(value)
@@ -611,17 +612,31 @@ function remoteSalaryOf(listing: NonNullable<VacancyDoc["listing"]>): RemoteJobS
 /**
  * eduFleet's `403` reasons, in words a school admin can act on (spec §9).
  *
- * None of them is terminal, and the wording must not imply otherwise: the
- * single reason `claimed` covers four different states on Contract One's
- * PATCH (`claimed`, `claim_pending`, `withdrawn`, `hiddenPendingReview`), and
- * two of those — a claim awaiting an admin's decision, and a takedown pending
- * review — revert on their own. `upgrade_required` clears the moment the
- * school frees a slot or upgrades.
+ * The single reason `claimed` covers FOUR states on Contract One's PATCH
+ * (`claimed`, `claim_pending`, `withdrawn`, `hiddenPendingReview`) with two
+ * different futures, so the reason alone can only be worded vaguely — which
+ * is what the last arm below still does, honestly, when nothing better is
+ * known. When the adapter's free list read established the actual claim
+ * state, `claimState` is passed and the wording says the true thing instead:
+ * whether this is over, and whose it is now.
+ *
+ * `upgrade_required` clears the moment the school frees a slot or upgrades;
+ * `hiddenPendingReview` reverses when a takedown request is rejected. Neither
+ * is terminal and neither may be worded as if it were.
  */
-function blockedMessage(reason: string): string {
+function blockedMessage(reason: string, claimState?: VacancyClaimState): string {
   switch (reason) {
     case "claimed":
-      return `${LABEL} will not accept changes to this listing right now — the school has claimed it, or a claim or takedown is awaiting review there. Manage it on ${LABEL}, or try again once that clears.`;
+      switch (claimState) {
+        case "claimed":
+          return `Your school has claimed this advert on ${LABEL}, so it belongs to your ${LABEL} account now — IDAP can no longer change or close it. Edit or close it there.`;
+        case "withdrawn":
+          return `${LABEL} has taken this advert down, so IDAP can no longer change or close it. Take it up on ${LABEL} if that was not expected.`;
+        case "claim_pending":
+          return `A claim on this advert is awaiting review on ${LABEL}, so it will not accept changes until that is decided. If the claim is rejected the advert comes back under IDAP's control and the next sync will bring it into step.`;
+        default:
+          return `${LABEL} will not accept changes to this listing right now — the school has claimed it, or a claim or takedown is awaiting review there. Manage it on ${LABEL}, or try again once that clears.`;
+      }
     case "upgrade_required":
       return `Your ${LABEL} plan has no room for another live listing — close one there or upgrade the plan, then try again.`;
     case "insufficient_scope":
@@ -697,11 +712,25 @@ async function recordBlockedReason(
   institutionId: string,
   vacancy: VacancyDoc,
   message: string,
+  claimState?: VacancyClaimState,
 ): Promise<VacancyListingDTO | undefined> {
   if (!vacancy.listing) return undefined;
   const updated = await Vacancy.findOneAndUpdate(
     { _id: vacancy._id, institutionId },
-    { $set: { "listing.blockedReason": message } },
+    {
+      $set: {
+        "listing.blockedReason": message,
+        // The one field a `403` may write besides the reason, and only when
+        // the adapter actually established it. This is what makes the three
+        // claimed-listing behaviours reachable at all: the delete's
+        // close-first exception, the reconciler's skip and the card's
+        // read-only state all read `claimState`, and before this the only
+        // thing that could ever write it was a SUCCESS body — which never
+        // carries one. Absent claimState leaves whatever is stored alone
+        // rather than writing "unknown" over a state already established.
+        ...(claimState ? { "listing.claimState": claimState } : {}),
+      },
+    },
     { new: true },
   ).lean<VacancyDoc>();
   return updated?.listing ? toListingDTO(updated.listing) : undefined;
@@ -918,8 +947,9 @@ async function settle(
   }
 
   if (result.kind === "BLOCKED") {
-    const message = blockedMessage(result.reason);
-    const listing = await recordBlockedReason(institutionId, vacancy, message);
+    const claimState = toClaimState(result.claimState);
+    const message = blockedMessage(result.reason, claimState);
+    const listing = await recordBlockedReason(institutionId, vacancy, message, claimState);
     await record(institutionId, vacancy, "eduFleet push blocked", `${vacancy.title} — ${result.detail}`, actor);
     return { status: "BLOCKED", message, listing };
   }

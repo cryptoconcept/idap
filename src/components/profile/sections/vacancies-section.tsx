@@ -46,6 +46,7 @@ import {
   VACANCY_STATUSES,
   VACANCY_SUBJECT_GROUPS,
   VACANCY_TITLE_MAX,
+  isTerminalClaim,
   type VacancyStatus,
   type VacancySubject,
 } from "@/lib/constants";
@@ -266,17 +267,27 @@ async function publishVacancy(vacancyId: string): Promise<VacancyPublishOutcome 
 }
 
 /**
- * A claimed advert belongs to the school on eduFleet now, and IDAP is locked
- * out of it permanently: every later push — a field update or a close — is
- * answered with a `403`, so there is nothing IDAP can send that will change
- * what the public listing says. This is the one listing state that makes the
- * vacancy read-only here, and it is deliberately narrower than "a push was
- * refused": `claim_pending` reverts on its own when an admin rejects the
- * claim, and a takedown under review clears when the takedown is reversed, so
- * neither of those may freeze a row that will heal.
+ * A terminally claimed advert is one IDAP is locked out of permanently: every
+ * later push — a field update or a close — is answered with a `403`, so there
+ * is nothing IDAP can send that will change what the public listing says.
+ * This is the one listing state that makes the vacancy read-only here.
+ *
+ * `isTerminalClaim` (`constants.ts`) is deliberately narrower than "a push was
+ * refused", and narrower than eduFleet's own single `403 claimed` reason,
+ * which covers four states. `claim_pending` reverts on its own when an admin
+ * rejects the claim, and a takedown under review clears when the takedown is
+ * reversed — neither may freeze a row that will heal. `claimed` and
+ * `withdrawn` do not heal.
+ *
+ * The value is only ever real because a push that got a `403 claimed` under
+ * Contract One now follows it with eduFleet's free per-job list read and
+ * records what came back (`edufleet.ts`'s `resolveClaimState`). Before that,
+ * no response IDAP could read ever carried a claim state, so this whole
+ * branch was unreachable outside test fixtures.
  */
-function isClaimed(listing?: VacancyListingDTO): boolean {
-  return listing?.claimState === "claimed";
+function claimLock(listing?: VacancyListingDTO): "claimed" | "withdrawn" | null {
+  if (!isTerminalClaim(listing?.claimState)) return null;
+  return listing?.claimState === "withdrawn" ? "withdrawn" : "claimed";
 }
 
 /** A listing eduFleet still shows to teachers, as far as the last push knows. */
@@ -300,7 +311,8 @@ function isLive(listing?: VacancyListingDTO): boolean {
  *   one is a single click from here; until fix round 1 of Task 7 the button was
  *   shown and the service refused it with "set this vacancy to Open", leaving a
  *   live public advert and no wording that named the way out.
- * - claimed and live — no button, for the reason in `isClaimed`.
+ * - terminally claimed (or withdrawn) and live — no button, for the reason
+ *   in `claimLock`.
  * - `OPEN` — creates the listing, or PATCHes the live one, or (after a close)
  *   mints a NEW one, since eduFleet cannot reopen a closed advert.
  * - `FILLED`/`CLOSED` — pushes a close, but only when something is still live
@@ -309,7 +321,7 @@ function isLive(listing?: VacancyListingDTO): boolean {
  */
 function publishAction(vacancy: VacancyDTO): { label: string; hint: string } | null {
   const listing = vacancy.listing;
-  if (isClaimed(listing) && isLive(listing)) return null;
+  if (claimLock(listing) && isLive(listing)) return null;
 
   if (vacancy.status === "OPEN") {
     if (isLive(listing)) {
@@ -363,7 +375,7 @@ function formatPushedAt(iso: string): string {
  */
 function ListingPanel({ listing }: { listing: VacancyListingDTO }) {
   const live = isLive(listing);
-  const claimed = isClaimed(listing);
+  const lock = claimLock(listing);
 
   return (
     <div className="space-y-2 rounded-md border border-border bg-muted/40 p-2.5">
@@ -398,14 +410,21 @@ function ListingPanel({ listing }: { listing: VacancyListingDTO }) {
         </p>
       )}
 
-      {claimed ? (
+      {lock ? (
         <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
           <Lock className="mt-px size-3 shrink-0" aria-hidden />
-          <span>
-            Your school has claimed this advert on {EDUFLEET}, so it belongs to your {EDUFLEET}
-            {" "}account now and IDAP can no longer change or close it. This vacancy is read-only
-            here — edit or close the advert on {EDUFLEET}.
-          </span>
+          {lock === "withdrawn" ? (
+            <span>
+              {EDUFLEET} has taken this advert down, so IDAP can no longer change or close it.
+              This vacancy is read-only here — take it up on {EDUFLEET} if that was not expected.
+            </span>
+          ) : (
+            <span>
+              Your school has claimed this advert on {EDUFLEET}, so it belongs to your {EDUFLEET}
+              {" "}account now and IDAP can no longer change or close it. This vacancy is
+              read-only here — edit or close the advert on {EDUFLEET}.
+            </span>
+          )}
         </p>
       ) : null}
 
@@ -784,9 +803,10 @@ function VacancyDialog({
  * One vacancy in the list — summary, the status control, edit/delete, and
  * everything eduFleet knows about it.
  *
- * **A claimed live listing makes the card read-only**, and that is the one
- * place this component overrides what the vacancy's own status would allow.
- * Once a school claims an aggregated advert on eduFleet it owns it there, and
+ * **A terminally claimed live listing makes the card read-only**, and that is
+ * the one place this component overrides what the vacancy's own status would
+ * allow. Once a school claims an aggregated advert on eduFleet it owns it
+ * there — or eduFleet withdraws it, which is equally final — and
  * every push IDAP could still make is answered `403` — so the title, subject,
  * description, salary and benefits shown here can never again be made to
  * match what the public sees. Leaving the Edit button live would offer an
@@ -823,7 +843,7 @@ function VacancyCard({
   const salaryLine = formatSalaryRange(vacancy.salaryMin, vacancy.salaryMax);
   const experienceLine = formatExperience(vacancy.experienceRequired);
   const listing = vacancy.listing;
-  const readOnly = isClaimed(listing) && isLive(listing);
+  const readOnly = claimLock(listing) !== null && isLive(listing);
   const action = publishAction(vacancy);
 
   return (
@@ -1158,7 +1178,7 @@ export function VacanciesSection() {
             is on their own eduFleet account now, and only they can take it
             down. Said BEFORE the button, not in a toast afterwards.
           */}
-          {isClaimed(pendingDelete?.listing) && isLive(pendingDelete?.listing) ? (
+          {claimLock(pendingDelete?.listing) === "claimed" && isLive(pendingDelete?.listing) ? (
             <p className="flex items-start gap-1.5 rounded-md border border-border bg-muted/40 p-2.5 text-[11px] text-muted-foreground">
               <Lock className="mt-px size-3 shrink-0" aria-hidden />
               <span>

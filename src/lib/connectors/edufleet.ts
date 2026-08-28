@@ -41,6 +41,7 @@ import type {
   SyncVacancy,
   VacancyActionResult,
 } from "./types";
+import { isTerminalClaim } from "@/lib/constants";
 import type { VacancyListingContract } from "@/lib/constants";
 import { registerAdapter } from "./index";
 
@@ -693,16 +694,28 @@ async function sync(
       continue;
     }
 
-    // A claimed listing has moved onto the school's OWN eduFleet account:
-    // IDAP's platform key is refused on it with `403 claimed`, one of the two
-    // TERMINAL triggers, so this is not a state that heals. Pushing anyway
-    // would spend a write unit per vacancy per sync to be told something
-    // already known. `vacancy.service.ts`'s `remove` makes the same call for
-    // the same reason.
-    if (vacancy.listing?.claimState === "claimed") {
+    // A TERMINAL claim state means IDAP's key is refused on this listing
+    // forever, so pushing would spend a write unit per vacancy per sync to be
+    // told something already known. `isTerminalClaim` is the shared rule
+    // (`constants.ts`) and covers two states, not one: `claimed` (the advert
+    // moved onto the school's own eduFleet account) and `withdrawn` (an
+    // admin-approved takedown). `claim_pending` is deliberately NOT terminal —
+    // a rejected claim returns the job to `unclaimed`, and this loop is the
+    // something that has to retry when it does. `vacancy.service.ts`'s
+    // `remove` reads the same rule for the same reason.
+    //
+    // Until fix wave 1 this read `claimState === "claimed"` against a field
+    // nothing could ever write, so the whole branch was unreachable outside
+    // test fixtures: every claim state IDAP could observe came from a SUCCESS
+    // body, and no success body can carry one (Contract One's PATCH 403s
+    // first, Contract Two reports none). `resolveClaimState` below is what
+    // makes this guard live.
+    if (isTerminalClaim(vacancy.listing?.claimState)) {
       skipped = true;
       warnings.push(
-        `eduFleet: ${nameOf(vacancy)} has been claimed on eduFleet, so IDAP can no longer change or close its advert — manage it from your eduFleet account.`,
+        vacancy.listing?.claimState === "withdrawn"
+          ? `eduFleet: ${nameOf(vacancy)} was taken down on eduFleet, so IDAP can no longer change or close its advert — take it up on eduFleet if that was not expected.`
+          : `eduFleet: ${nameOf(vacancy)} has been claimed on eduFleet, so IDAP can no longer change or close its advert — manage it from your eduFleet account.`,
       );
       continue;
     }
@@ -963,6 +976,77 @@ function classifyJobPush(
   throw new Error(`eduFleet: job push failed (${describeFailure(resp)})`);
 }
 
+/**
+ * What a `403 claimed` actually means — read from the one endpoint that can
+ * say, at no cost.
+ *
+ * `updatePartnerJob` raises the single reason `claimed` for THREE different
+ * states (`partner-jobs.ts`): `claimed`, `claim_pending` and `withdrawn`.
+ * They do not behave alike. A claim that has been approved is permanent and
+ * the advert is the school's; a takedown is permanent and the advert is gone;
+ * a claim still PENDING reverts to `unclaimed` the moment an admin rejects
+ * it, so treating it as terminal would abandon a live public advert IDAP is
+ * still responsible for. The reason field cannot separate them and no success
+ * body ever reports a claim state at all — a create hardcodes
+ * `claimStatus: "unclaimed"`, Contract One's PATCH 403s before it can answer,
+ * and neither Contract Two route returns the field. Before this existed,
+ * `listing.claimState` could therefore only ever hold `"unclaimed"`, and
+ * every consumer of a claimed listing was dead code.
+ *
+ * `GET /api/partner/jobs` is the source that can say. It authenticates with
+ * the platform key, returns `claimStatus` per job alongside `externalJobId`,
+ * and — verified in `app/api/partner/jobs/route.ts` rather than assumed — its
+ * GET handler calls `requirePlatformKey` and then `listPartnerJobs`, with NO
+ * `spendWrite` anywhere on the path. So this read is free in write units. It
+ * is not free in rate limit: `requirePlatformKey` runs the per-minute burst
+ * limiter, which is why this is called only on a 403 and never speculatively.
+ *
+ * Three deliberate non-failures. The read is best-effort: a push has already
+ * happened and already been classified, and a listing lookup that cannot be
+ * made must never turn a recorded `BLOCKED` into a thrown error the caller
+ * has no listing state for. A job absent from the list (it caps at 200, newest
+ * first) likewise yields `undefined`, which every caller must read as "still
+ * unknown" and never as "not claimed". And it is Contract One only: a
+ * `school_posted` job is already the school's and is never claimable, so
+ * there is nothing to disambiguate and no list to read.
+ */
+async function resolveClaimState(
+  ctx: AdapterContext,
+  externalJobId: string,
+): Promise<string | undefined> {
+  try {
+    const resp = await ctx.http("/api/partner/jobs", { method: "GET", token: ctx.platformKey });
+    if (resp.status !== 200) return undefined;
+    const jobs = arr(rec(resp.body)?.jobs) ?? [];
+    for (const entry of jobs) {
+      const job = rec(entry);
+      if (job && str(job.externalJobId) === externalJobId) return str(job.claimStatus);
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Attaches the true claim state to a `403 claimed` on Contract One, leaving
+ * every other answer exactly as classified. Contract Two is skipped for the
+ * reason in `resolveClaimState`: its jobs are the school's own and carry no
+ * claim at all.
+ */
+async function withClaimState(
+  ctx: AdapterContext,
+  result: JobPushResult,
+  externalJobId: string,
+  contract: VacancyListingContract,
+): Promise<JobPushResult> {
+  if (contract !== "AGGREGATED" || result.kind !== "BLOCKED" || result.reason !== "claimed") {
+    return result;
+  }
+  const claimState = await resolveClaimState(ctx, externalJobId);
+  return claimState !== undefined ? { ...result, claimState } : result;
+}
+
 async function createJob(
   ctx: AdapterContext,
   connection: ConnectionState,
@@ -1033,7 +1117,10 @@ async function patchJob(
     token: credential.token,
     body,
   });
-  return classifyJobPush(resp, credential.kind);
+  // `jobId` IS the `externalJobId` on Contract One (`addressOf` picks the
+  // external id for AGGREGATED and eduFleet's own `_id` for SCHOOL_POSTED),
+  // which is the key the free list read matches on.
+  return withClaimState(ctx, classifyJobPush(resp, credential.kind), jobId, contract);
 }
 
 /**
@@ -1062,7 +1149,10 @@ async function closeJob(
     token: credential.token,
     body: { status: "closed" },
   });
-  return classifyJobPush(resp, credential.kind);
+  // A close is where the claim trap used to close for good: without the true
+  // state the caller refuses the delete, and refuses it again on every later
+  // attempt, because the close 403s forever.
+  return withClaimState(ctx, classifyJobPush(resp, credential.kind), jobId, contract);
 }
 
 // ---------------------------------------------------------------------------

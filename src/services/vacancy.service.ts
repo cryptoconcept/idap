@@ -3,7 +3,7 @@ import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Vacancy, type VacancyDoc } from "@/models";
 import { notFound, validationError } from "@/lib/api/errors";
-import { PLATFORM_LABELS, VACANCY_MAX_RECORDS } from "@/lib/constants";
+import { PLATFORM_LABELS, VACANCY_MAX_RECORDS, isTerminalClaim } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
 import {
@@ -225,13 +225,20 @@ function deleteRefusedAfterFailedClose(
  * to delete. Anything else — a `BLOCKED`/`CONFLICT` outcome, or an error
  * `pushClose` itself threw (the disconnected-`SCHOOL_POSTED` case chief among
  * them) — refuses the delete rather than risk an orphaned public advert.
+ *
+ * Returns `true` when the advert was left LIVE because the close can never be
+ * made — a terminal claim discovered by this very push. `remove` needs that
+ * to say so in the audit trail, and the school needs it because otherwise the
+ * first delete after a claim always fails: the close 403s, the claim state is
+ * recorded, and only the SECOND attempt sees it. One refusal that has to be
+ * repeated to clear is a trap with an extra step, not an exit.
  */
 async function closeListingBeforeDelete(
   institutionId: string,
   vacancyId: string,
   contract: string,
   actor: { id: string; name: string },
-): Promise<void> {
+): Promise<boolean> {
   let outcome: VacancyPublishOutcome;
   try {
     outcome = await VacancyPublishService.pushClose(institutionId, vacancyId, actor);
@@ -245,9 +252,16 @@ async function closeListingBeforeDelete(
   switch (outcome.status) {
     case "CLOSED":
     case "NOT_LISTED":
-      return;
+      return false;
     case "BLOCKED":
     case "CONFLICT":
+      // A `403 claimed` whose real state the adapter just established as
+      // terminal is not a close that FAILED — it is a close that can never be
+      // made, on an advert that is no longer IDAP's to take down. The same
+      // reasoning as the pre-read exception below, reached from the other
+      // side: refusing here would protect nothing and would make the row
+      // undeletable until a second attempt.
+      if (isTerminalClaim(outcome.listing?.claimState)) return true;
       throw deleteRefusedAfterFailedClose(contract, outcome.message);
     case "PUSHED":
       // `pushClose` never creates a listing, so this arm is unreachable in
@@ -451,19 +465,27 @@ export const VacancyService = {
     // than this function merely hoping it still does.
     const deleteFilter: Record<string, unknown> = { _id: objectId, institutionId };
 
-    // Fix round 1: a CLAIMED listing is deleted without closing it, and this
-    // is the one exception to Task 5's close-first rule.
+    // Fix round 1: a TERMINALLY CLAIMED listing is deleted without closing
+    // it, and this is the one exception to Task 5's close-first rule.
     //
     // The rule exists because deleting IDAP's row destroys the only id that
     // could ever close the advert — an orphan nobody can take down. A claim
     // inverts that. Claiming moves the advert onto the school's OWN eduFleet
     // account: they can see it, edit it and close it from their own dashboard,
     // and IDAP cannot touch it at all — `pushClose` answers `403` and will
-    // answer `403` forever, because `claimed` is one of the two terminal
-    // triggers. Refusing the delete therefore protects nothing (the advert is
-    // already outside IDAP's reach and inside theirs) and costs everything: the
-    // IDAP row becomes permanently undeletable, a trap with no exit, which is
-    // exactly what Task 5 set out not to build.
+    // answer `403` forever. Refusing the delete therefore protects nothing
+    // (the advert is already outside IDAP's reach and inside theirs) and costs
+    // everything: the IDAP row becomes permanently undeletable, a trap with no
+    // exit, which is exactly what Task 5 set out not to build.
+    //
+    // `isTerminalClaim` (`constants.ts`), not `=== "claimed"`, and it is the
+    // fix wave's correction rather than a widening for its own sake.
+    // `withdrawn` — an admin-approved takedown — is refused by
+    // `updatePartnerJob` under the same one `403 claimed` reason, is equally
+    // permanent, and has even less to protect: the advert is already down.
+    // `claim_pending` stays OUT, because a rejected claim returns the job to
+    // `unclaimed` and the advert becomes IDAP's problem again — deleting the
+    // row over a claim that might not stand is how a live advert is orphaned.
     //
     // This is genuinely narrower than the disconnected-`SCHOOL_POSTED` case,
     // which still refuses. There, IDAP's inability is TEMPORARY — reconnecting
@@ -474,11 +496,22 @@ export const VacancyService = {
     // behind". The advert stays live until the school closes it on eduFleet,
     // so the confirmation dialog says so before they press Delete, and the
     // activity entry below records it after.
-    const claimedByTheSchool = existing.listing?.claimState === "claimed";
+    let claimedByTheSchool = isTerminalClaim(existing.listing?.claimState);
 
     if (existing.listing) {
       if (!claimedByTheSchool) {
-        await closeListingBeforeDelete(institutionId, vacancyId, existing.listing.contract, actor);
+        // The close may itself be what DISCOVERS the claim: until a push
+        // 403s, IDAP has no way to learn a school claimed its advert, so the
+        // very first delete after a claim always arrives here with
+        // `claimState` still reading `unclaimed`. `closeListingBeforeDelete`
+        // reports back when that happened, so this attempt succeeds instead
+        // of refusing and telling the school to try the same thing again.
+        claimedByTheSchool = await closeListingBeforeDelete(
+          institutionId,
+          vacancyId,
+          existing.listing.contract,
+          actor,
+        );
       }
       // Conditioned on the SAME listing this call just closed still being
       // present — not "any listing" — because a fresh publish landing in

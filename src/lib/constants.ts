@@ -621,12 +621,49 @@ export const VACANCY_MAX_RECORDS = 200;
 export const VACANCY_LISTING_CONTRACTS = ["AGGREGATED", "SCHOOL_POSTED"] as const;
 export type VacancyListingContract = (typeof VACANCY_LISTING_CONTRACTS)[number];
 
-/** eduFleet's claim states, as far as IDAP can observe them. `claim_pending`
- *  is NOT terminal — an admin rejecting the claim returns the job to
- *  `unclaimed` (jobs-reverification S4), so IDAP must never treat a 403 as a
- *  permanent retirement. */
-export const VACANCY_CLAIM_STATES = ["unclaimed", "claim_pending", "claimed"] as const;
+/**
+ * eduFleet's claim states, mirroring `Job.CLAIM_STATUSES` in full.
+ *
+ * All four are now here. `withdrawn` used to be left out as "eduFleet-only,
+ * nothing IDAP calls can return it" — true of the SUCCESS bodies, and beside
+ * the point: eduFleet never reports a claim state on a body IDAP can read,
+ * because Contract One's PATCH `403`s on `claimed`, `claim_pending` AND
+ * `withdrawn` before it can answer, and Contract Two reports no claim state
+ * at all. The state is learned from the free `GET /api/partner/jobs` read
+ * that follows a `403 claimed` (`edufleet.ts`'s `resolveClaimState`), and
+ * that read reports all four — so dropping `withdrawn` there would silently
+ * turn "eduFleet took this advert down" into "state unknown".
+ *
+ * Terminal-ness is the distinction every consumer actually needs, and it does
+ * NOT follow the 403: one `reason: "claimed"` covers three states with two
+ * different futures. `isTerminalClaim` below is the single spelling of it.
+ */
+export const VACANCY_CLAIM_STATES = ["unclaimed", "claim_pending", "claimed", "withdrawn"] as const;
 export type VacancyClaimState = (typeof VACANCY_CLAIM_STATES)[number];
+
+/**
+ * Whether IDAP can ever act on this listing again — the one rule three
+ * separate surfaces key off (the delete's close-first exception, the
+ * reconciler's skip, and the dashboard card's read-only state), written once
+ * so it cannot drift between them.
+ *
+ * - `claimed` — the advert moved onto the school's OWN eduFleet account.
+ *   IDAP's platform key is refused on it permanently, and the school can
+ *   edit and close it there. Terminal.
+ * - `withdrawn` — an admin-approved takedown removed the listing from public
+ *   view. `updatePartnerJob` refuses a partner key on it precisely so a
+ *   partner cannot resurrect what admin took down. Terminal, and there is
+ *   nothing live left to protect.
+ * - `claim_pending` — a claim is awaiting an admin's decision, and a
+ *   REJECTED claim returns the job to `unclaimed`. **Not terminal**: IDAP
+ *   must still close before deleting, and the reconciler must still retry,
+ *   or a rejected claim leaves a live advert IDAP has already stopped
+ *   managing.
+ * - `unclaimed`/absent — ordinary; nothing to skip.
+ */
+export function isTerminalClaim(claimState: string | null | undefined): boolean {
+  return claimState === "claimed" || claimState === "withdrawn";
+}
 
 /**
  * The status eduFleet's own `Job` carries, mirrored verbatim

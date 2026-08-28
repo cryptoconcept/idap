@@ -934,7 +934,16 @@ describe("VacancyService.remove closes the eduFleet listing before deleting (Tas
   it("refuses to delete when eduFleet blocks the close, and leaves the vacancy and its listing intact", async () => {
     await makeCredential();
     const vacancy = await makeListedVacancy("INS0001");
-    const fetchMock = stubFetch(jsonResponse(403, { error: "claimed", reason: "claimed" }));
+    const fetchMock = stubFetch(
+      jsonResponse(403, { error: "claimed", reason: "claimed" }),
+      // The free list read that follows a Contract One `403 claimed`. This
+      // one reports `claim_pending`, which is NOT terminal — an admin
+      // rejecting the claim returns the job to `unclaimed` and the advert
+      // becomes IDAP's problem again — so the delete must still be refused.
+      jsonResponse(200, {
+        jobs: [{ externalJobId: String(vacancy._id), claimStatus: "claim_pending" }],
+      }),
+    );
 
     await expect(
       VacancyService.remove("INS0001", String(vacancy._id), actor),
@@ -944,7 +953,9 @@ describe("VacancyService.remove closes the eduFleet listing before deleting (Tas
     // to prevent an action, assert the action did not happen — not merely
     // that an error came back. A 403 has already been answered by the time
     // this rejects; what matters is that the DELETE itself never landed.
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Two HTTP calls now: the close, then the free GET that reads the true
+    // claim state. Neither is a retry of the close.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     const survived = await Vacancy.findById(vacancy._id).lean();
     expect(survived).not.toBeNull();
     expect(survived?.listing?.jobId).toBe(`ef-job-${String(vacancy._id)}`);
@@ -1230,6 +1241,68 @@ describe("VacancyService.remove and a claimed eduFleet listing (fix round 1)", (
     await VacancyService.remove("INS0001", String(vacancy._id), actor);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+  });
+
+  /**
+   * H1. The stored `claimState` cannot lead the claim: nothing in IDAP learns
+   * a school claimed its advert until a push is refused, so the FIRST delete
+   * after a claim always arrives with the listing still reading `unclaimed`.
+   * The close 403s, the adapter's free list read establishes the true state,
+   * and this attempt has to succeed — refusing and telling the school to try
+   * the same thing again is a trap with an extra step, not an exit.
+   *
+   * MUTATION CHECK: make `withClaimState` in `edufleet.ts` return its result
+   * unchanged (skip the list read) and this fails — the outcome is BLOCKED
+   * with no claim state, `closeListingBeforeDelete` refuses, and the row
+   * survives. Asserting only "it rejected/resolved" would be weaker; what is
+   * asserted is that the ROW IS GONE and that the claim was recorded from the
+   * read rather than assumed.
+   */
+  it("MUTATION-DISTINGUISHING: a claim discovered BY the close deletes on this attempt, not the next one", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(403, {
+        error: "This listing has been claimed by the school and can no longer be edited by a partner key",
+        reason: "claimed",
+      }),
+      jsonResponse(200, {
+        jobs: [{ externalJobId: String(vacancy._id), claimStatus: "claimed", status: "active" }],
+      }),
+    );
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    // The close was attempted once (it had to be — that is how the claim was
+    // discovered), then the free GET, and no third call.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+    // ...and the audit trail says the advert outlived the row, exactly as it
+    // does when the claim was already known.
+    const entry = await Activity.findOne({
+      institutionId: "INS0001",
+      entityId: vacancy._id,
+      action: "Vacancy deleted",
+    }).lean();
+    expect(entry?.description).toMatch(/left live under the school's own eduFleet Exchange account/i);
+  });
+
+  /**
+   * `withdrawn` — an admin-approved takedown — is refused by
+   * `updatePartnerJob` under the same one `403 claimed` reason and is equally
+   * permanent, with even less to protect: the advert is already down. Before
+   * the fix wave IDAP's enum had no value for it at all, so it was recorded
+   * as nothing and the row would have been trapped.
+   */
+  it("deletes a withdrawn listing's vacancy without attempting a close", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001", { claimState: "withdrawn" });
+    const fetchMock = stubFetch();
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
   });
 

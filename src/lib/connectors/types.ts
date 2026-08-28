@@ -125,7 +125,18 @@ export type JobPushResult =
    * would be stored XSS.
    */
   | { kind: "OK"; jobId: string; claimState?: string; publicUrl?: string }
-  | { kind: "BLOCKED"; reason: string; detail: string }
+  /**
+   * `claimState` is the answer to a question the `403` itself cannot settle.
+   * eduFleet raises ONE reason — `claimed` — for `claimed`, `claim_pending`
+   * AND `withdrawn`, and those have two different futures: a rejected claim
+   * returns the job to `unclaimed`, while a claim or a takedown that stands
+   * is permanent. An adapter that can find out which (eduFleet's is a free,
+   * `spendWrite`-less list read) reports it here so the caller can record the
+   * real state rather than guessing from the reason. Optional: absent means
+   * the adapter could not establish one, which must read as "still unknown",
+   * never as "not claimed".
+   */
+  | { kind: "BLOCKED"; reason: string; detail: string; claimState?: string }
   | { kind: "CONFLICT"; ownedByContract: string; jobId?: string; detail: string };
 
 export interface PlatformAdapter {

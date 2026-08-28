@@ -823,6 +823,24 @@ describe("edufleetAdapter", () => {
       expect(outcome.warnings.some((w) => w.includes(claimedFilled.vacancyId) && /claimed/i.test(w))).toBe(true);
     });
 
+    it("MUTATION-DISTINGUISHING: a withdrawn listing is skipped too, and the warning says takedown rather than claim", async () => {
+      // `withdrawn` is the second terminal state behind eduFleet's one
+      // `403 claimed` reason: an admin-approved takedown, which
+      // `updatePartnerJob` refuses precisely so a partner key cannot
+      // resurrect what admin took down. Repushing it burns a unit per sync.
+      const withdrawn = makeVacancy({
+        status: "FILLED",
+        listing: { ...LIVE, claimState: "withdrawn" },
+      });
+
+      const outcome = await edufleetAdapter.sync(makeCtx(makeHttp()), grantConnection(), makeData([withdrawn]));
+
+      expect(withdrawn.close).not.toHaveBeenCalled();
+      expect(withdrawn.repush).not.toHaveBeenCalled();
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.warnings.some((w) => w.includes(withdrawn.vacancyId) && /taken down/i.test(w))).toBe(true);
+    });
+
     it("a claim still pending is NOT treated as claimed — it reverts on rejection, so the push is still attempted", async () => {
       const pending = makeVacancy({
         status: "FILLED",
@@ -1445,6 +1463,140 @@ describe("edufleetAdapter", () => {
       const result = await edufleetAdapter.closeJob!(ctx, makeConnection(), "vac-1", "AGGREGATED");
 
       expect(result.kind).toBe("BLOCKED");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // H1 — resolving a 403 `claimed` against the free job list
+  //
+  // `updatePartnerJob` raises ONE reason for `claimed`, `claim_pending` AND
+  // `withdrawn`, which have two different futures, and no success body on any
+  // of the four job routes ever reports a claim state. `GET
+  // /api/partner/jobs` is the only source that can say, and its route calls
+  // `requirePlatformKey` then `listPartnerJobs` — no `spendWrite` anywhere.
+  // -------------------------------------------------------------------------
+
+  describe("claim state resolution behind a 403", () => {
+    /** A 403 `claimed` first, then whatever the job list answers. */
+    function claimedThen(listResponse: { status: number; body: unknown }) {
+      return vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 403,
+          body: {
+            error: "This listing has been claimed by the school and can no longer be edited by a partner key",
+            reason: "claimed",
+          },
+        })
+        .mockResolvedValueOnce(listResponse);
+    }
+
+    it("MUTATION-DISTINGUISHING: a Contract One 403 claimed is followed by a free GET, and the matched job's claimStatus rides on the result", async () => {
+      const http = claimedThen({
+        status: 200,
+        body: {
+          jobs: [
+            { externalJobId: "someone-else", claimStatus: "unclaimed" },
+            { externalJobId: "vac-1", claimStatus: "claimed", status: "active", jobId: "job-1" },
+          ],
+        },
+      });
+
+      const result = await edufleetAdapter.patchJob!(
+        makeCtx(http),
+        makeConnection(),
+        "vac-1",
+        { title: "x" },
+        "AGGREGATED",
+      );
+
+      expect(result).toEqual({
+        kind: "BLOCKED",
+        reason: "claimed",
+        detail: expect.any(String),
+        claimState: "claimed",
+      });
+      expect(http).toHaveBeenCalledTimes(2);
+      const [path, init] = http.mock.calls[1];
+      expect(path).toBe("/api/partner/jobs");
+      expect(init.method).toBe("GET");
+      expect(init.token).toBe(PLATFORM_KEY);
+      // No body: a GET that carried one would be a write in disguise.
+      expect(init.body).toBeUndefined();
+    });
+
+    it("MUTATION-DISTINGUISHING: matches on externalJobId rather than taking whichever job came first", async () => {
+      const http = claimedThen({
+        status: 200,
+        body: {
+          jobs: [
+            { externalJobId: "newest-first", claimStatus: "claimed" },
+            { externalJobId: "vac-1", claimStatus: "claim_pending" },
+          ],
+        },
+      });
+
+      const result = await edufleetAdapter.closeJob!(makeCtx(http), makeConnection(), "vac-1", "AGGREGATED");
+
+      // The list is newest-first and caps at 200, so "the first row" is a
+      // different job almost every time — and `claim_pending` reverts on
+      // rejection while `claimed` never does, so getting this wrong retires a
+      // live advert IDAP is still responsible for.
+      expect(result).toMatchObject({ kind: "BLOCKED", claimState: "claim_pending" });
+    });
+
+    it("reports no claim state when the job is not on the list — unknown is not unclaimed", async () => {
+      const http = claimedThen({ status: 200, body: { jobs: [{ externalJobId: "other", claimStatus: "claimed" }] } });
+
+      const result = await edufleetAdapter.closeJob!(makeCtx(http), makeConnection(), "vac-1", "AGGREGATED");
+
+      expect(result.kind).toBe("BLOCKED");
+      expect("claimState" in (result as object)).toBe(false);
+    });
+
+    it("a failed list read never turns a classified BLOCKED into a throw", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValueOnce({ status: 403, body: { error: "claimed", reason: "claimed" } })
+        .mockRejectedValueOnce(new Error("network down"));
+
+      const result = await edufleetAdapter.closeJob!(makeCtx(http), makeConnection(), "vac-1", "AGGREGATED");
+
+      expect(result.kind).toBe("BLOCKED");
+      expect("claimState" in (result as object)).toBe(false);
+    });
+
+    it("MUTATION-DISTINGUISHING: a 403 that is not `claimed` reads no list — nothing about it is ambiguous", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValue({ status: 403, body: { error: "no room", reason: "upgrade_required" } });
+
+      const result = await edufleetAdapter.patchJob!(
+        makeCtx(http),
+        makeConnection(),
+        "vac-1",
+        { title: "x" },
+        "AGGREGATED",
+      );
+
+      expect(result).toMatchObject({ kind: "BLOCKED", reason: "upgrade_required" });
+      expect(http).toHaveBeenCalledTimes(1);
+    });
+
+    it("MUTATION-DISTINGUISHING: a Contract Two 403 reads no list — a school_posted job is never claimable", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 403, body: { error: "claimed", reason: "claimed" } });
+
+      const result = await edufleetAdapter.closeJob!(
+        makeCtx(http),
+        makeGrantConnection(),
+        "job-2",
+        "SCHOOL_POSTED",
+      );
+
+      expect(result.kind).toBe("BLOCKED");
+      // The action that must not happen: Contract One's job list is not this
+      // school's, so reading it spends a rate-limit slot to learn nothing.
+      expect(http).toHaveBeenCalledTimes(1);
     });
   });
 });
