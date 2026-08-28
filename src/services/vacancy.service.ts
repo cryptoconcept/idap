@@ -6,8 +6,10 @@ import { notFound, validationError } from "@/lib/api/errors";
 import { PLATFORM_LABELS, VACANCY_MAX_RECORDS, isTerminalClaim } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
+import { ConnectorAuthError } from "@/lib/connectors/types";
 import {
   EDUFLEET_PATCHABLE_KEYS,
+  GRANT_REVOKED_MESSAGE,
   VacancyPublishService,
   toListingDTO,
   type VacancyListingDTO,
@@ -245,7 +247,16 @@ async function closeListingBeforeDelete(
   } catch (error) {
     throw deleteRefusedAfterFailedClose(
       contract,
-      error instanceof Error ? error.message : String(error),
+      // H3. The connection has already been dropped to DISCONNECTED by the
+      // time this runs; the refusal still stands (a live advert with no id
+      // left to close it is worse than a row that will not delete yet), but
+      // the reason has to name the fix — reconnect — rather than repeating
+      // the adapter's description of the fault.
+      error instanceof ConnectorAuthError
+        ? GRANT_REVOKED_MESSAGE
+        : error instanceof Error
+          ? error.message
+          : String(error),
     );
   }
 

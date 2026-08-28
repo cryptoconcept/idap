@@ -961,6 +961,41 @@ describe("VacancyService.remove closes the eduFleet listing before deleting (Tas
     expect(survived?.listing?.jobId).toBe(`ef-job-${String(vacancy._id)}`);
   });
 
+  it("MUTATION-DISTINGUISHING: a revoked grant on DELETE disconnects the row and refuses in words that name the fix", async () => {
+    // H3, third entry point. The refusal itself is right — a live advert with
+    // no id left to close it is worse than a row that will not delete yet —
+    // but before the fix wave it disconnected nothing, so the card kept
+    // reading Connected over a ciphertext eduFleet had already refused, and
+    // the reason repeated the adapter's description of the fault rather than
+    // naming the one thing the school can do about it.
+    await makeCredential();
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "EDUFLEET",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("ef_pgrant_dead"),
+      scopes: ["jobs:write"],
+    });
+    const vacancy = await makeListedVacancy("INS0001", { contract: "SCHOOL_POSTED" });
+    stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
+
+    const error = await VacancyService.remove("INS0001", String(vacancy._id), actor).catch(
+      (e: unknown) => e,
+    );
+
+    expect((error as Error).message).toMatch(/reconnect/i);
+    // The action that must not happen: the row is still here, unclosed
+    // advert and all.
+    expect(await Vacancy.findById(vacancy._id).lean()).not.toBeNull();
+    // ...and the action that must: the dead credential is gone.
+    const row = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(row?.status).toBe("DISCONNECTED");
+    expect(row?.grantTokenEncrypted).toBeUndefined();
+  });
+
   it("refuses to delete when eduFleet reports the id already belongs to another listing, and leaves the vacancy intact", async () => {
     await makeCredential();
     const vacancy = await makeListedVacancy("INS0001");

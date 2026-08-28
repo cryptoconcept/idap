@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { PlatformConnection, PlatformCredential, Vacancy } from "@/models";
+import { Activity, PlatformConnection, PlatformCredential, Vacancy } from "@/models";
 import type { VacancyDoc } from "@/models";
 import { encryptCredential } from "@/lib/security/credentials";
 import { ConnectorAuthError } from "@/lib/connectors/types";
@@ -1047,19 +1047,112 @@ describe("rule 6: CONFLICT trusts the response's contract", () => {
 // ---------------------------------------------------------------------------
 
 describe("rule 7: ConnectorAuthError propagates", () => {
-  it("lets a revoked grant surface as ConnectorAuthError instead of a generic failure", async () => {
+  it("MUTATION-DISTINGUISHING: a revoked grant on PUBLISH disconnects the row, drops the ciphertext, and says so", async () => {
+    // H3. `ConnectorAuthError` was caught in exactly two places, both in
+    // `connection.service.ts`, and the publish route reached neither: the
+    // error fell through `handleApiError` to "Something went wrong. Please
+    // try again." while the row kept `status: "CONNECTED"` and a ciphertext
+    // eduFleet had already refused. The card still read Connected and nothing
+    // told the school to reconnect.
     await makeInstitution("INS0001");
     await makeCredential();
     await makeConnectedGrant("INS0001");
     const vacancy = await makeVacancy("INS0001");
     stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
 
-    await expect(
-      VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
-    ).rejects.toBeInstanceOf(ConnectorAuthError);
+    const error = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor).catch(
+      (e: unknown) => e,
+    );
 
-    // Nothing was recorded: the credential is dead, not the vacancy.
+    // Not the scrubbed 500, and not "try again shortly" — nothing changes by
+    // waiting, and the school is the only one who can fix it.
+    expect(error).toMatchObject({ code: "CONFLICT" });
+    expect((error as Error).message).toMatch(/revoked/i);
+    expect((error as Error).message).toMatch(/reconnect/i);
+
+    // The action that had to happen, asserted on the row rather than on the
+    // message: the connection is out of CONNECTED and the dead ciphertext is
+    // gone, so the next poll cannot resurrect the connection from it.
+    const row = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(row?.status).toBe("DISCONNECTED");
+    expect(row?.grantTokenEncrypted).toBeUndefined();
+
+    // Nothing was recorded on the vacancy: the credential is dead, not the vacancy.
     expect(await storedListing(String(vacancy._id))).toBeUndefined();
+  });
+
+  it("MUTATION-DISTINGUISHING: a revoked grant on an EDIT push disconnects, and the card says reconnect", async () => {
+    // `pushEdit` cannot throw — the school's edit is already saved — so the
+    // only place this can be reported is `blockedReason`, and the raw adapter
+    // message ("this school's grant has been revoked") names the fault, not
+    // the fix.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    await makeConnectedGrant("INS0001");
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-80", contract: "SCHOOL_POSTED", lastPushedAt: new Date() },
+    });
+    stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
+
+    await VacancyPublishService.pushEdit("INS0001", String(vacancy._id), actor);
+
+    expect((await storedListing(String(vacancy._id)))?.blockedReason).toMatch(/reconnect/i);
+    const row = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(row?.status).toBe("DISCONNECTED");
+    expect(row?.grantTokenEncrypted).toBeUndefined();
+  });
+
+  it("MUTATION-DISTINGUISHING: the raw ConnectorAuthError still leaves repush — syncNow is the reconciler's only revocation detector", async () => {
+    // The translation is deliberately at the three NON-sync entry points
+    // only. `syncNow` discriminates this exact type to carry out the steps
+    // the sweep already accumulated and to record the run; converting it
+    // inside the shared push path would retire that whole detector while
+    // every test about pushing still passed.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    await makeConnectedGrant("INS0001");
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-81", contract: "SCHOOL_POSTED", lastPushedAt: new Date() },
+    });
+    stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
+
+    await expect(
+      VacancyPublishService.repush("INS0001", String(vacancy._id), actor),
+    ).rejects.toBeInstanceOf(ConnectorAuthError);
+  });
+
+  it("records the disconnect in the activity trail, once, for whoever asks why the school is disconnected", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    await makeConnectedGrant("INS0001");
+    const vacancy = await makeVacancy("INS0001");
+    stubFetch(jsonResponse(401, { error: "Grant revoked", reason: "revoked" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor).catch(() => undefined);
+
+    const entries = await Activity.find({
+      institutionId: "INS0001",
+      action: "Connection revoked remotely",
+    }).lean();
+    expect(entries).toHaveLength(1);
+  });
+
+  it("never touches a connection that is not CONNECTED — a platform-key failure must not disconnect anyone", async () => {
+    // A revoked PLATFORM KEY takes the plain-`Error` path in
+    // `classifyJobPush` precisely so it can never reach here; this asserts the
+    // other half, that the disconnect cannot invent or resurrect a row.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    stubFetch(jsonResponse(401, { error: "Partner key revoked", reason: "revoked" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor).catch(() => undefined);
+
+    expect(await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" }).lean()).toBeNull();
   });
 
   it("maps every other transport failure to an actionable upstream error, not a scrubbed 500", async () => {

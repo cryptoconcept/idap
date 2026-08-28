@@ -171,28 +171,116 @@ function upstreamError(): AppError {
 }
 
 /**
+ * What a school is told, and what the Integrations card must say, when
+ * eduFleet refuses the grant IDAP is holding for it. Exported so the three
+ * entry points that have to render it — the publish route's thrown error,
+ * `pushEdit`'s `blockedReason`, and the delete's refusal — all say the same
+ * sentence rather than three near-misses.
+ */
+export const GRANT_REVOKED_MESSAGE =
+  `Your ${LABEL} connection was revoked, so IDAP can no longer post as your school. Reconnect to ${LABEL} from Integrations, then try again.`;
+
+/** A 409, not a 502: nothing is wrong with eduFleet and nothing will change
+ *  by waiting — the school has to reconnect. */
+function grantRevokedError(): AppError {
+  return new AppError("CONFLICT", GRANT_REVOKED_MESSAGE);
+}
+
+/**
+ * H3. eduFleet has refused this school's grant, so IDAP must stop treating
+ * the connection as live — the same two writes `connection.service.ts` makes
+ * from `refresh` and `syncNow`: drop the ciphertext eduFleet already rejected,
+ * and set `DISCONNECTED`, which is the status that re-offers "Request
+ * connection" on the card.
+ *
+ * Duplicated rather than imported, and that is forced rather than chosen:
+ * `connection.service.ts` imports THIS file (its sync worklist calls
+ * `repush`/`pushClose`), so importing it back would close a runtime cycle.
+ * The same reason `buildContext` duplicates `loadAdapterContext`.
+ *
+ * Conditional on the row still being `CONNECTED`, for two reasons. It cannot
+ * resurrect or invent a row for a school that has none, and it makes the
+ * write idempotent, so the audit entry below is written by whichever caller
+ * actually observed the transition rather than by every one that follows it.
+ *
+ * TENANT-SENSITIVE: `institutionId` scopes the write like every other here. A
+ * revocation is about exactly one school's grant, and a filter that matched
+ * only on `platform` would disconnect every school on IDAP.
+ */
+async function disconnectRevokedGrant(
+  institutionId: string,
+  message: string,
+  actor: Actor,
+): Promise<void> {
+  const flipped = await PlatformConnection.findOneAndUpdate(
+    { institutionId, platform: PLATFORM, status: "CONNECTED" },
+    { $set: { status: "DISCONNECTED", lastError: clip(message) }, $unset: { grantTokenEncrypted: "" } },
+  ).lean();
+  if (!flipped) return;
+  // The same entry `refresh` and `syncNow` write for the same fact. A record
+  // that only said "a push failed" would leave the next person guessing why
+  // the school is suddenly disconnected.
+  await ActivityService.record({
+    institutionId,
+    entityType: "PLATFORM_CONNECTION",
+    entityRef: PLATFORM,
+    action: "Connection revoked remotely",
+    description: clip(message),
+    performedBy: actor.id,
+    performedByName: actor.name,
+  });
+}
+
+/**
  * Runs one adapter call and sorts what comes back out of it into three kinds.
  *
- * `ConnectorAuthError` and `AppError` pass through untouched — the first
- * because rule 7 requires it (the connection service's existing handler
- * discriminates it to flip the connection out of `CONNECTED`, and swallowing
- * it here would leave IDAP holding a credential it already knows is dead),
- * the second because it is a refusal this service itself raised.
+ * `ConnectorAuthError` **disconnects the connection and is then rethrown** —
+ * this is H3, and the docblock this replaces asserted the opposite. It used
+ * to say the error "passes through untouched ... because the connection
+ * service's existing handler discriminates it". That handler exists in
+ * `syncNow` and `refresh` and is reached from neither of this service's three
+ * other entry points: on publish it reached `handleApiError` and the school
+ * saw "Something went wrong. Please try again."; on an edit `pushEdit`'s
+ * catch-all swallowed it into `blockedReason`; on a delete it became a
+ * truthful refusal that still disconnected nothing. In all three the row kept
+ * `status: "CONNECTED"` and a ciphertext eduFleet had already refused, so
+ * the card still read Connected and nothing told the school to reconnect. The
+ * comment was not merely wrong, it was the reason nobody added a handler.
+ *
+ * It is still RETHROWN, unchanged, and that is load-bearing: `syncNow` is the
+ * reconciler's only revocation detector, and it discriminates this exact type
+ * to carry out the steps the sweep had already accumulated. Converting it
+ * here would retire that path silently. The three non-sync callers translate
+ * it themselves into wording their own surface can act on.
+ *
+ * This is only ever a GRANT revocation. `classifyJobPush` raises
+ * `ConnectorAuthError` on a `401 revoked` only when the credential sent was
+ * the school's grant; a revoked platform key takes the plain-`Error` path
+ * precisely so it can never touch a school's connection status.
+ *
+ * `AppError` passes through untouched — it is a refusal this service raised.
  *
  * `ConnectorRejectedError` — a 400 — becomes a VALIDATION_ERROR carrying
  * eduFleet's own words, deliberately NOT the 502 below. The 502 says "try
  * again shortly", which is true of an outage and false of a 400: the same
- * body will be refused identically, and `spendWrite` takes another of the
- * school's 100 daily units for each attempt. Copy that invites a retry on a
- * deterministic refusal is how a school's whole day disappears.
+ * body will be refused identically, and `spendWrite` takes another daily unit
+ * for each attempt. Copy that invites a retry on a deterministic refusal is
+ * how a school's whole day disappears.
  *
  * Everything else really is a transport or server failure, and gets the 502.
  */
-async function callAdapter(run: () => Promise<JobPushResult>): Promise<JobPushResult> {
+async function callAdapter(
+  institutionId: string,
+  actor: Actor,
+  run: () => Promise<JobPushResult>,
+): Promise<JobPushResult> {
   try {
     return await run();
   } catch (error) {
-    if (error instanceof ConnectorAuthError) throw error;
+    if (error instanceof ConnectorAuthError) {
+      await disconnectRevokedGrant(institutionId, error.message, actor);
+      throw error;
+    }
     if (error instanceof AppError) throw error;
     if (error instanceof ConnectorRejectedError) {
       const said = error.detail ?? error.reason;
@@ -1049,7 +1137,7 @@ async function pushFields(
   const adapter = jobAdapter();
   const ctx = await buildContext();
 
-  const result = await callAdapter(() =>
+  const result = await callAdapter(institutionId, actor, () =>
     live
       ? adapter.patchJob(ctx, connection, addressOf({ ...listing, contract }), toPatchBody(body), contract)
       : adapter.createJob(ctx, connection, body, contract),
@@ -1117,7 +1205,7 @@ async function pushCloseFor(
   const adapter = jobAdapter();
   const ctx = await buildContext();
 
-  const result = await callAdapter(() =>
+  const result = await callAdapter(institutionId, actor, () =>
     adapter.closeJob(ctx, connection, addressOf({ ...listing, contract }), contract),
   );
 
@@ -1190,11 +1278,25 @@ export const VacancyPublishService = {
     await connectToDatabase();
     const vacancy = await loadVacancy(institutionId, vacancyId);
 
-    if (vacancy.status === "DRAFT") return draftAction(institutionId, vacancy, actor);
-    if (vacancy.status === "FILLED" || vacancy.status === "CLOSED") {
-      return pushCloseFor(institutionId, vacancy, actor);
+    // H3. `callAdapter` has already dropped the dead ciphertext and flipped
+    // the connection to DISCONNECTED by the time this catch runs; what is
+    // left is telling the school. Untranslated, a `ConnectorAuthError` is not
+    // an `AppError`, so `handleApiError` falls through every branch to
+    // "Something went wrong. Please try again." — a 500 for the one failure
+    // the school can actually fix, on a card still reading Connected.
+    // Translated only HERE and not inside `pushFields`, because `repush`
+    // shares that path and `syncNow` needs the raw error to reach its own
+    // revocation handler.
+    try {
+      if (vacancy.status === "DRAFT") return await draftAction(institutionId, vacancy, actor);
+      if (vacancy.status === "FILLED" || vacancy.status === "CLOSED") {
+        return await pushCloseFor(institutionId, vacancy, actor);
+      }
+      return await pushFields(institutionId, vacancy, actor, true);
+    } catch (error) {
+      if (error instanceof ConnectorAuthError) throw grantRevokedError();
+      throw error;
     }
-    return pushFields(institutionId, vacancy, actor, true);
   },
 
   /**
@@ -1249,7 +1351,15 @@ export const VacancyPublishService = {
       await recordPushFailure(
         institutionId,
         vacancyId,
-        error instanceof Error ? error.message : String(error),
+        // H3. The connection is already disconnected by the time this runs
+        // (`callAdapter`), but the raw message — "eduFleet: this school's
+        // grant has been revoked" — describes the fault rather than the fix.
+        // The card is where the school reads this, so it says what to do.
+        error instanceof ConnectorAuthError
+          ? GRANT_REVOKED_MESSAGE
+          : error instanceof Error
+            ? error.message
+            : String(error),
       );
     }
   },
