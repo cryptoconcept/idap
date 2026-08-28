@@ -259,10 +259,12 @@ export const AchievementService = {
       // `create` already refuses the 201st record, so this limit is never the
       // thing that truncates a list an admin built through the UI. It is here
       // for the institution that somehow holds more anyway — a direct write, a
-      // future import, a cap lowered later — because without it the sort is a
-      // blocking in-memory sort over the whole collection slice (neither sort
-      // key is indexed) and an unbounded response. With it, MongoDB does a
-      // top-K sort bounded by this number instead.
+      // future import, a cap lowered later — to bound the response size.
+      //
+      // Unlike the other three read paths, this one's sort IS index-covered:
+      // `{institutionId: 1, createdAt: -1}` on the model matches this filter
+      // and sort exactly, so there is no blocking in-memory sort to avoid
+      // here. The limit earns its place on response size alone.
       .limit(ACHIEVEMENT_MAX_RECORDS)
       .lean<AchievementDoc[]>();
     return rows.map(serialize);
