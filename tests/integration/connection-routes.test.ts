@@ -100,6 +100,7 @@ describe("connections routes — happy paths", () => {
     const body = await response.json();
     expect(body.success).toBe(true);
     expect(body.connections.map((c: { platform: string }) => c.platform).sort()).toEqual([
+      "EDUFLEET",
       "FEESBASKET",
       "PASSPERCENT",
     ]);

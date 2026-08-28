@@ -154,7 +154,7 @@ describe("list", () => {
   it("always returns one entry per PLATFORMS, connected or not", async () => {
     await makeConnectableInstitution("INS0001");
     const entries = await ConnectionService.list("INS0001");
-    expect(entries.map((entry) => entry.platform).sort()).toEqual(["FEESBASKET", "PASSPERCENT"]);
+    expect(entries.map((entry) => entry.platform).sort()).toEqual(["EDUFLEET", "FEESBASKET", "PASSPERCENT"]);
   });
 });
 

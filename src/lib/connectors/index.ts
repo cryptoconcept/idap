@@ -7,6 +7,7 @@ import type { PlatformAdapter } from "./types";
 // live bindings. The registry it writes into is NOT safe to build the same
 // way, though (Task 8 fix — see the comment below).
 import "./passpercent";
+import "./edufleet";
 
 /**
  * One registry, one lookup point. Adapters register themselves as a

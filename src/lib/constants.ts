@@ -442,12 +442,13 @@ export const OFFER_KIND_LABELS: Record<OfferKind, string> = {
 export const SCHOLARSHIP_MAX_PER_INSTITUTION = 40;
 export const OFFER_MAX_PER_INSTITUTION = 40;
 
-export const PLATFORMS = ["PASSPERCENT", "FEESBASKET"] as const;
+export const PLATFORMS = ["PASSPERCENT", "FEESBASKET", "EDUFLEET"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const PLATFORM_LABELS: Record<Platform, string> = {
   PASSPERCENT: "PassPercent",
   FEESBASKET: "FeesBasket",
+  EDUFLEET: "eduFleet Exchange",
 };
 
 export const CONNECTION_STATUSES = [
