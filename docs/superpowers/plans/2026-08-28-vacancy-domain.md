@@ -424,7 +424,7 @@ git commit -m "feat: add the Vacancy model"
 
 **The three-state patch.** Clearable fields are exactly `salaryMin`, `salaryMax`, `experienceRequired`. Absent leaves the stored value; a value `$set`s it; explicit `null` `$unset`s it. Follow `buildProfileUpdate` in `src/services/institution.service.ts` (`if (value === null) unset[path] = ""; else set[path] = value;`). `facilities` is not clearable — `[]` already expresses "none".
 
-**Add a `PATCHABLE_FIELDS` allow-list** and ignore anything outside it. `institutionId` is a Mongoose schema path, so strict mode would **not** strip it from a patch; the only other thing standing between a client and a tenant escalation is Task 4's route remembering to `.parse`. This is defence in depth, not a replacement.
+**Add a `PATCHABLE_FIELDS` allow-list** matching `vacancyPatchSchema`'s keys **exactly** — `title`, `subject`, `description`, `salaryMin`, `salaryMax`, `experienceRequired`, `facilities`, `status`. An allow-list that silently omits one is a bug in the opposite direction: `status` in particular is legitimately patchable and its absence would make every status transition a silent no-op. Verify by direct comparison against the schema, and ignore anything outside it. `institutionId` is a Mongoose schema path, so strict mode would **not** strip it from a patch; the only other thing standing between a client and a tenant escalation is Task 4's route remembering to `.parse`. This is defence in depth, not a replacement.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -469,13 +469,18 @@ git commit -m "feat: add the vacancy service"
 
 **The route MUST call `.parse`.** The service's allow-list is defence in depth, not a substitute.
 
-**Pin the parse with a field the service does not independently neutralise.** Do **not** use `institutionId`: `create` re-assigns it after the input spread, so removing the parse does not fail an institutionId test — that test guards the service, not the route. Use **`status`**, which `create` must force to `"DRAFT"` regardless of the body, and **`_id`**, a real Mongoose path that `strict` will not drop and `create` does not re-assign.
+**Pin the parse with a field the service does not independently neutralise.** Do **not** use `institutionId`: `create` re-assigns it after the input spread, so removing the parse does not fail an institutionId test — that test guards the service, not the route.
+
+**Do not use `status` either**, for the same reason, unless you have checked. If Task 3's `create` mirrors `achievement.service.ts` literally it will write `{ ...input, institutionId, status: "DRAFT" }` — re-assigning `status` *after* the spread, which neutralises a smuggled status independently of the parse and makes a status-based pin confounded exactly as an institutionId one would be.
+
+Use **`_id`**: a real Mongoose path, so `strict` will not drop it, and nothing re-assigns it. Read Task 3's `create` before writing the test and state in your report which fields it re-assigns after the spread — that list is precisely the set of fields that cannot pin the parse.
 
 - [ ] **Step 1: Write the failing tests**
 
 - Happy path per route; unknown id 404s.
 - **Per mutating route, a cross-origin request is refused 403 AND changes nothing** — assert the record count and contents, not merely the status code. A route that wrote before asserting origin would pass a status-only check, so `assertSameOrigin` must be the first statement in every mutating handler, before any parsing or I/O.
-- A POST body carrying `status: "OPEN"` and `_id` creates a `DRAFT` vacancy with a server-generated id — assert the **raw stored document**.
+- A POST body carrying `_id` creates a vacancy with a **server-generated** id — assert the raw stored document. This is the test that pins the route's `.parse`; verify by mutation that it fails when the parse is removed.
+- A POST body carrying `status: "OPEN"` still creates a `DRAFT` vacancy. Keep this test — the behaviour matters — but do **not** treat it as pinning the parse if Task 3's `create` re-assigns `status` after the spread.
 - A POST body carrying another institution's `institutionId` creates under the caller's.
 - **End-to-end three-state over HTTP, not through the service:** PATCH `{"salaryMin": null}` and assert the property is gone from the raw stored document; PATCH omitting the key and assert the value is untouched. Every layer is tested at its own layer and none of that proves the chain is connected — a route that normalises the body or strips nullish values turns "clear this" into "leave it alone" silently, which this repo shipped once with media captions.
 - A 401 per route file, each asserting the status **and** that nothing was written; one 403 with a `SUPER_ADMIN` session.
