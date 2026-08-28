@@ -480,6 +480,21 @@ function toPatchBody(body: Record<string, unknown>): Record<string, unknown> {
  * first time a closed listing is republished under a fresh one; deriving it
  * after that would address the school's PREVIOUS, closed advert.
  */
+/**
+ * One definition of "eduFleet is still showing this advert to teachers", used
+ * by every caller that has to decide between pushing, closing and refusing.
+ *
+ * A type predicate rather than a plain boolean so the narrowing survives the
+ * `const live = …` alias in `pushFields` — the alternative was this same
+ * condition written twice, and "is the listing live?" is exactly the kind of
+ * rule that must not be able to drift between two spellings.
+ */
+function isListingLive(
+  listing: VacancyDoc["listing"] | undefined,
+): listing is NonNullable<VacancyDoc["listing"]> {
+  return listing !== undefined && listing !== null && listing.remoteStatus !== "closed";
+}
+
 function addressOf(listing: {
   jobId: string;
   externalJobId: string;
@@ -934,7 +949,7 @@ async function pushFields(
   allowCreate: boolean,
 ): Promise<VacancyPublishOutcome> {
   const listing = vacancy.listing ?? undefined;
-  const live = listing !== undefined && listing.remoteStatus !== "closed";
+  const live = isListingLive(listing);
 
   if (!live && !allowCreate) {
     throw validationError(
@@ -953,9 +968,13 @@ async function pushFields(
 
   // The two shapes diverge here, and every difference below follows from one
   // fact: a create sends the whole record, an update sends six fields.
+  // `vacancy.listing` rather than the narrowed `listing` on the false branch:
+  // `isListingLive` is a type predicate, so `!live` narrows the alias away
+  // entirely and the previous id — the one a republish must not reuse — has to
+  // be read from the unnarrowed source.
   const externalJobId = live
     ? listing.externalJobId
-    : nextExternalJobId(String(vacancy._id), listing?.externalJobId);
+    : nextExternalJobId(String(vacancy._id), vacancy.listing?.externalJobId);
   const vacancyInput = toVacancyInput(vacancy, externalJobId);
   const institutionInput = toInstitutionInput(institution);
 
@@ -1066,6 +1085,44 @@ async function pushCloseFor(
   );
 }
 
+/**
+ * Rule 4's `DRAFT` branch, shared by `publish` and `repush` (fix round 1).
+ *
+ * The refusal below exists to keep a half-written vacancy off a public jobs
+ * board. That is a rule about CREATING an advert, and applying it to a
+ * *close* inverts it: a school that moves a published vacancy back to Draft —
+ * one click, and the status control offers `DRAFT` for every vacancy
+ * unconditionally — would be left with a live public advert and a button that
+ * refuses to take it down, telling them to set the vacancy Open, which is the
+ * opposite of what they just asked for.
+ *
+ * So a `DRAFT` vacancy still holding a live listing closes it. That is exactly
+ * the reasoning `pushCloseFor` already records for the city gate and
+ * `preflight`: gating a close on a rule about pushes "would strand a live
+ * public advert on eduFleet ... That is the exact harm the close path exists
+ * to prevent." A close carries none of the vacancy's own fields — it sends
+ * `{status: "closed"}` and nothing else — so nothing half-written can reach
+ * eduFleet through it.
+ *
+ * With no live listing there is genuinely nothing to do but refuse, and the
+ * original wording is right: the only thing a `DRAFT` vacancy can do next is
+ * become `OPEN`.
+ *
+ * Not a way back in, either: closing is one-way on both contracts, and
+ * `pushFields`'s `allowCreate` is what governs re-publishing. This branch can
+ * only ever take an advert down.
+ */
+async function draftAction(
+  institutionId: string,
+  vacancy: VacancyDoc,
+  actor: Actor,
+): Promise<VacancyPublishOutcome> {
+  if (isListingLive(vacancy.listing ?? undefined)) {
+    return pushCloseFor(institutionId, vacancy, actor);
+  }
+  throw validationError(`Set this vacancy to Open before publishing it to ${LABEL}`);
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -1084,9 +1141,7 @@ export const VacancyPublishService = {
     await connectToDatabase();
     const vacancy = await loadVacancy(institutionId, vacancyId);
 
-    if (vacancy.status === "DRAFT") {
-      throw validationError(`Set this vacancy to Open before publishing it to ${LABEL}`);
-    }
+    if (vacancy.status === "DRAFT") return draftAction(institutionId, vacancy, actor);
     if (vacancy.status === "FILLED" || vacancy.status === "CLOSED") {
       return pushCloseFor(institutionId, vacancy, actor);
     }
@@ -1105,9 +1160,7 @@ export const VacancyPublishService = {
     await connectToDatabase();
     const vacancy = await loadVacancy(institutionId, vacancyId);
 
-    if (vacancy.status === "DRAFT") {
-      throw validationError(`Set this vacancy to Open before publishing it to ${LABEL}`);
-    }
+    if (vacancy.status === "DRAFT") return draftAction(institutionId, vacancy, actor);
     if (vacancy.status === "FILLED" || vacancy.status === "CLOSED") {
       return pushCloseFor(institutionId, vacancy, actor);
     }

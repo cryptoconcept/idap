@@ -1173,12 +1173,53 @@ describe("edufleetAdapter", () => {
       ).rejects.toThrow(/contract/);
     });
 
-    it("a 401 revoked throws ConnectorAuthError", async () => {
+    it("a 401 revoked on a GRANT-authenticated push throws ConnectorAuthError", async () => {
       const http = vi.fn().mockResolvedValue({ status: 401, body: { error: "Grant revoked", reason: "revoked" } });
       const ctx = makeCtx(http);
 
       await expect(
         edufleetAdapter.createJob!(ctx, makeGrantConnection(), SCHOOL_BODY, "SCHOOL_POSTED"),
+      ).rejects.toBeInstanceOf(ConnectorAuthError);
+    });
+
+    it("MUTATION-DISTINGUISHING: the SAME 401 revoked body on a PLATFORM-KEY push does NOT throw ConnectorAuthError", async () => {
+      // Fix round 1. eduFleet answers a revoked platform key
+      // (`partner-auth.ts:100`) and a revoked school grant (`:121`) with the
+      // byte-identical `{reason: "revoked"}`. Only the credential IDAP sent
+      // separates them — and `ConnectorAuthError` is wired to disconnect a
+      // school, which is the wrong answer to "IDAP's own key was pulled":
+      // no school caused it, none can fix it, and the reconciler would have
+      // marched through them one at a time.
+      const body = { error: "Partner key revoked", reason: "revoked" };
+      const http = vi.fn().mockResolvedValue({ status: 401, body });
+      const ctx = makeCtx(http);
+
+      let caught: unknown;
+      try {
+        await edufleetAdapter.createJob!(ctx, makeGrantConnection(), AGGREGATED_BODY, "AGGREGATED");
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught).not.toBeInstanceOf(ConnectorAuthError);
+      // The operator fix is not guessable from anywhere downstream, so the
+      // message has to name it.
+      expect((caught as Error).message).toMatch(/platform key/i);
+      expect((caught as Error).message).toMatch(/re-issued/i);
+    });
+
+    it("the platform-key/grant split holds on closeJob too, not just createJob", async () => {
+      const body = { error: "Partner key revoked", reason: "revoked" };
+
+      const platformHttp = vi.fn().mockResolvedValue({ status: 401, body });
+      await expect(
+        edufleetAdapter.closeJob!(makeCtx(platformHttp), makeGrantConnection(), "vac-1", "AGGREGATED"),
+      ).rejects.not.toBeInstanceOf(ConnectorAuthError);
+
+      const grantHttp = vi.fn().mockResolvedValue({ status: 401, body });
+      await expect(
+        edufleetAdapter.closeJob!(makeCtx(grantHttp), makeGrantConnection(), "ef-job-1", "SCHOOL_POSTED"),
       ).rejects.toBeInstanceOf(ConnectorAuthError);
     });
 

@@ -410,6 +410,82 @@ describe("rule 4: only OPEN vacancies publish", () => {
     expect(await storedListing(String(vacancy._id))).toBeUndefined();
   });
 
+  it("MUTATION-DISTINGUISHING: a DRAFT vacancy still holding a live advert CLOSES it instead of being refused", async () => {
+    // Fix round 1. The status control offers DRAFT for every vacancy, so a
+    // published one is a single click away — and the card offers "Close on
+    // eduFleet" for it. Before this, the service answered "Set this vacancy to
+    // Open before publishing", which is the opposite of what was asked, and the
+    // public advert stayed up.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      status: "DRAFT",
+      listing: {
+        jobId: "ef-job-draft",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "active",
+      },
+    });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-draft", status: "closed" }));
+
+    const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("CLOSED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const call = callAt(fetchMock, 0);
+    expect(call.method).toBe("PATCH");
+    // A close sends `{status: "closed"}` and nothing else, so nothing
+    // half-written can reach eduFleet through this route.
+    expect(call.body).toEqual({ status: "closed" });
+    expect((await storedListing(String(vacancy._id)))?.remoteStatus).toBe("closed");
+  });
+
+  it("MUTATION-DISTINGUISHING: a DRAFT vacancy whose advert is ALREADY closed is still refused, and still sends nothing", async () => {
+    // The close route must not become a general exemption: with nothing live
+    // there is nothing to take down, and the only thing a draft can do next is
+    // become Open.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      status: "DRAFT",
+      listing: {
+        jobId: "ef-job-dead",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "closed",
+      },
+    });
+    const fetchMock = stubFetch();
+
+    await expect(
+      VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
+    ).rejects.toThrow("Set this vacancy to Open before publishing it to eduFleet Exchange");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await storedListing(String(vacancy._id)))?.remoteStatus).toBe("closed");
+  });
+
+  it("repush takes the same DRAFT route — an advert is closable however the request arrived", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      status: "DRAFT",
+      listing: {
+        jobId: "ef-job-draft-2",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "active",
+      },
+    });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-draft-2", status: "closed" }));
+
+    const outcome = await VacancyPublishService.repush("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("CLOSED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("MUTATION-DISTINGUISHING: pushes a close — not a create — when the vacancy is FILLED, addressed the way Contract One addresses jobs", async () => {
     await makeInstitution("INS0001");
     await makeCredential();

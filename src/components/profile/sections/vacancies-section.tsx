@@ -291,9 +291,15 @@ function isLive(listing?: VacancyListingDTO): boolean {
  * state, because the single service method behind it does four different
  * things and a button that always said "Publish" would be wrong three times:
  *
- * - `DRAFT` — refused by the service outright, so no button. A half-written
- *   vacancy must never reach a public jobs board, and offering a control whose
- *   only outcome is a 400 teaches an admin to ignore errors.
+ * - `DRAFT` with nothing published — refused by the service outright, so no
+ *   button. A half-written vacancy must never reach a public jobs board, and
+ *   offering a control whose only outcome is a 400 teaches an admin to ignore
+ *   errors.
+ * - `DRAFT` still holding a live advert — the "Close" button below, and it
+ *   works. The status control offers `DRAFT` for every vacancy, so a published
+ *   one is a single click from here; until fix round 1 of Task 7 the button was
+ *   shown and the service refused it with "set this vacancy to Open", leaving a
+ *   live public advert and no wording that named the way out.
  * - claimed and live — no button, for the reason in `isClaimed`.
  * - `OPEN` — creates the listing, or PATCHes the live one, or (after a close)
  *   mints a NEW one, since eduFleet cannot reopen a closed advert.

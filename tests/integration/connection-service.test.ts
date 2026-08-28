@@ -1285,6 +1285,7 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     return updated!;
   }
 
+  /** A listing IDAP published under its platform key — Contract One. */
   const LIVE_LISTING = {
     jobId: "ef-job-1",
     contract: "AGGREGATED",
@@ -1292,6 +1293,10 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     remoteStatus: "active",
     claimState: "unclaimed",
   };
+
+  /** A listing the school published under its own grant — Contract Two.
+   *  Addressed by eduFleet's own `jobId`, not the `externalJobId`. */
+  const LIVE_SCHOOL_LISTING = { ...LIVE_LISTING, contract: "SCHOOL_POSTED" };
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -1458,10 +1463,15 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
   // are the ones the `syncNow` unit-level test above already carries the label
   // for. What this adds is the whole real path — eduFleet's own 401 body,
   // classified by the real adapter, mid-sweep — reaching them.
-  it("a 401 `revoked` mid-sweep takes the connection down and drops the ciphertext, and the run keeps what it had already done", async () => {
+  //
+  // Fix round 1: the listings here are `SCHOOL_POSTED` deliberately. Written
+  // first with `AGGREGATED` ones, this test passed — and it was asserting the
+  // defect, because a Contract One push carries the PLATFORM KEY and a
+  // `revoked` on that says nothing about this school.
+  it("a GRANT-authenticated 401 `revoked` mid-sweep takes the connection down and drops the ciphertext, and the run keeps what it had already done", async () => {
     await edufleetFixture();
-    const done = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
-    const dies = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+    const done = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_SCHOOL_LISTING });
+    const dies = await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_SCHOOL_LISTING });
 
     stubFetch(
       jsonResponse(200, SCHOOL_OK),
@@ -1509,6 +1519,41 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
       .lean();
     expect(conn?.status).not.toBe("CONNECTED");
     expect(conn?.grantTokenEncrypted).toBeUndefined();
+  });
+
+  it("MUTATION-DISTINGUISHING: a PLATFORM-KEY 401 `revoked` never disconnects a school — the connection and its grant are left exactly as they were", async () => {
+    // The other half of fix round 1, at the level where the damage would have
+    // happened: the reconciler is the first thing that pushes for many schools
+    // in sequence, so a revoked platform key would have walked through them
+    // disconnecting each one.
+    await edufleetFixture();
+    await makeVacancy("INS0001", { status: "FILLED", listing: LIVE_LISTING });
+
+    const before = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+
+    stubFetch(
+      jsonResponse(200, SCHOOL_OK),
+      jsonResponse(401, { error: "Partner key revoked", reason: "revoked" }),
+    );
+
+    const result = await ConnectionService.syncNow("INS0001", "EDUFLEET", actor);
+
+    // The run fails — the push genuinely did not land — but the school keeps
+    // its connection and its consent.
+    expect(result.run.status).toBe("FAILED");
+    expect(result.connection.status).toBe("CONNECTED");
+
+    const after = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "EDUFLEET" })
+      .select("+grantTokenEncrypted")
+      .lean();
+    expect(after?.status).toBe("CONNECTED");
+    expect(after?.grantTokenEncrypted).toBe(before?.grantTokenEncrypted);
+
+    // And no "the school revoked us" entry was written against them.
+    const entries = await Activity.find({ entityType: "PLATFORM_CONNECTION" }).lean();
+    expect(entries.some((entry) => entry.action === "Connection revoked remotely")).toBe(false);
   });
 
   it("eduFleet unreachable partway through abandons the rest of the sweep rather than retrying it per vacancy", async () => {

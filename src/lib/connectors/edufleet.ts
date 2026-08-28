@@ -592,11 +592,12 @@ async function probeGrant(
  *   `403` triggers (`claim_pending`, `hiddenPendingReview`) reverse on their
  *   own, which is exactly why `JobPushResult` refuses to latch a vacancy as
  *   dead: something has to retry later, and this is that something.
- * - **`DRAFT` with a live listing → `DRAFT_LIVE`.** A real drift with no
- *   sanctioned resolution: the spec never pushes a `DRAFT` (§4), and closing
- *   the advert would destroy a listing that cannot be reopened, on nothing
- *   more than a status toggle. Named in a warning instead, so the school can
- *   resolve it in the direction they meant.
+ * - **`DRAFT` with a live listing → `DRAFT_LIVE`.** Real drift, deliberately
+ *   left for the school: the spec never pushes a `DRAFT` (§4), and closing an
+ *   advert that cannot be reopened, over nothing more than a status toggle, is
+ *   not a decision a background sweep should make. Named in a warning instead,
+ *   which points at the per-vacancy Close control — a control that, since fix
+ *   round 1, actually works for a draft holding a live advert.
  */
 type VacancyPlan = "NONE" | "CLOSE" | "REPUSH" | "DRAFT_LIVE";
 
@@ -679,7 +680,7 @@ async function sync(
     if (plan === "DRAFT_LIVE") {
       skipped = true;
       warnings.push(
-        `eduFleet: ${nameOf(vacancy)} is back in draft, but its advert is still live on eduFleet. IDAP will not take down an advert over a draft toggle — set the vacancy to Filled or Closed to close it, or back to Open to keep it.`,
+        `eduFleet: ${nameOf(vacancy)} is back in draft, but its advert is still live on eduFleet. A sync will not take down an advert over a draft toggle — use Close on eduFleet on the vacancy itself, or set it back to Open to keep the advert.`,
       );
       continue;
     }
@@ -766,6 +767,9 @@ function jobsPath(contract: VacancyListingContract): string {
 }
 
 /**
+ * Which of the two credentials a push uses, and — inseparably — which one it
+ * therefore just proved something about.
+ *
  * Contract One is authenticated with the platform key (`ctx.platformKey`);
  * Contract Two is authenticated with the school's own grant
  * (`connection.grantToken`) — there is no fallback between the two, because
@@ -773,15 +777,32 @@ function jobsPath(contract: VacancyListingContract): string {
  * exactly one. A `SCHOOL_POSTED` call with no grant on the connection is a
  * caller bug (this plan's orchestration never reaches here without one), so
  * it throws immediately rather than sending a request with no credential.
+ *
+ * **`kind` travels with the token on purpose, rather than being re-derived
+ * from the contract at the point of classification.** eduFleet answers a
+ * revoked platform key and a revoked school grant with the byte-identical
+ * body `{"error": …, "reason": "revoked"}` (`partner-auth.ts:100` for
+ * `PartnerKey.revokedAt`, `:121` for `PartnerGrant.revokedAt`), so the
+ * response cannot tell the two apart and the ONLY thing that can is which
+ * credential IDAP chose to send. Deciding that here, once, and handing the
+ * answer to `classifyJobPush` is what stops the two from ever drifting apart:
+ * a future contract, or a change to which token a contract uses, updates both
+ * halves in one place or not at all.
  */
-function tokenFor(ctx: AdapterContext, connection: ConnectionState, contract: VacancyListingContract): string {
+type PushCredential = { token: string; kind: "GRANT" | "PLATFORM_KEY" };
+
+function credentialFor(
+  ctx: AdapterContext,
+  connection: ConnectionState,
+  contract: VacancyListingContract,
+): PushCredential {
   if (contract === "SCHOOL_POSTED") {
     if (!connection.grantToken) {
       throw new Error("eduFleet: pushing to Contract Two requires a grant token, but this connection has none");
     }
-    return connection.grantToken;
+    return { token: connection.grantToken, kind: "GRANT" };
   }
-  return ctx.platformKey;
+  return { token: ctx.platformKey, kind: "PLATFORM_KEY" };
 }
 
 /**
@@ -803,11 +824,40 @@ function tokenFor(ctx: AdapterContext, connection: ConnectionState, contract: Va
  * retry against a PATCH endpoint that 404s on it.
  *
  * `401 revoked` is the one case worth distinguishing from an ordinary
- * failure: it means the credential this call just used is already dead, the
- * same signal `fetchRemoteInstitution` above throws `ConnectorAuthError`
- * for. Every other 401 (a bad/missing token, `partner_revoked`,
- * `partner_inactive`) throws a plain `Error` — those are not "reconnect this
- * school" signals in the way `revoked` is.
+ * failure — but ONLY on a grant-authenticated call, and the distinction is
+ * the whole of fix round 1.
+ *
+ * eduFleet returns the identical `{reason: "revoked"}` for two completely
+ * unrelated facts:
+ *
+ * - `partner-auth.ts:121` — `PartnerGrant.revokedAt` — **this school**
+ *   withdrew its consent. IDAP must stop treating the connection as live and
+ *   ask that school to reconnect. That is `ConnectorAuthError`.
+ * - `partner-auth.ts:100` — `PartnerKey.revokedAt` — **IDAP's own platform
+ *   key** was revoked by eduFleet. Nothing about any school changed, no
+ *   school can fix it, and no school can even see it.
+ *
+ * The strings are byte-identical, so — unlike the `partner_revoked` substring
+ * hazard, where exact matching was enough — no amount of reading the response
+ * can separate them. The credential IDAP sent is the only discriminator, and
+ * `credentialFor` above is what carries it here.
+ *
+ * Getting this wrong is not a cosmetic misreport. `ConnectorAuthError` is
+ * wired to flip a connection out of CONNECTED and drop its grant ciphertext,
+ * and Task 7's reconciler is the first thing that runs pushes for many
+ * schools in sequence — so a revoked platform key would have disconnected
+ * school after school, each one prompted to re-consent for a fault none of
+ * them caused and none of them could clear.
+ *
+ * A platform-key `revoked` therefore takes the plain-`Error` path, which is
+ * this module's "the platform itself is at fault" lane: it never touches a
+ * school's connection status. The message names the real cause for whoever
+ * reads a log or a failed run, because the operator fix — re-issue IDAP's
+ * eduFleet key — is not something the wording anywhere downstream can guess.
+ *
+ * Every other 401 (a bad/missing token, `partner_revoked`, `partner_inactive`)
+ * throws a plain `Error` too, for the same reason it always did: those are not
+ * "reconnect this school" signals in the way a revoked grant is.
  */
 /**
  * The advert's public page, as eduFleet reports it on a create
@@ -835,7 +885,10 @@ function safePublicUrl(raw: string | undefined): string | undefined {
   return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : undefined;
 }
 
-function classifyJobPush(resp: { status: number; body: unknown }): JobPushResult {
+function classifyJobPush(
+  resp: { status: number; body: unknown },
+  credential: PushCredential["kind"],
+): JobPushResult {
   if (resp.status === 200 || resp.status === 201) {
     const body = rec(resp.body) ?? {};
     const jobId = str(body.jobId);
@@ -855,7 +908,12 @@ function classifyJobPush(resp: { status: number; body: unknown }): JobPushResult
   if (resp.status === 401) {
     const body = rec(resp.body);
     if (str(body?.reason) === "revoked") {
-      throw new ConnectorAuthError("eduFleet: the credential used for this job push has been revoked");
+      if (credential === "GRANT") {
+        throw new ConnectorAuthError("eduFleet: this school's grant has been revoked");
+      }
+      throw new Error(
+        "eduFleet: IDAP's eduFleet platform key has been revoked — every push under it will fail until the key is re-issued in eduFleet and updated in the platform credential. No school connection is affected.",
+      );
     }
     throw new Error(`eduFleet: job push failed (${describeFailure(resp)})`);
   }
@@ -903,12 +961,13 @@ async function createJob(
   body: Record<string, unknown>,
   contract: VacancyListingContract,
 ): Promise<JobPushResult> {
+  const credential = credentialFor(ctx, connection, contract);
   const resp = await ctx.http(jobsPath(contract), {
     method: "POST",
-    token: tokenFor(ctx, connection, contract),
+    token: credential.token,
     body,
   });
-  return classifyJobPush(resp);
+  return classifyJobPush(resp, credential.kind);
 }
 
 /**
@@ -960,12 +1019,13 @@ async function patchJob(
       "eduFleet: patchJob cannot carry a status key — Contract Two silently discards every other field once status is present; call closeJob to close a listing",
     );
   }
+  const credential = credentialFor(ctx, connection, contract);
   const resp = await ctx.http(`${jobsPath(contract)}/${encodeURIComponent(jobId)}`, {
     method: "PATCH",
-    token: tokenFor(ctx, connection, contract),
+    token: credential.token,
     body,
   });
-  return classifyJobPush(resp);
+  return classifyJobPush(resp, credential.kind);
 }
 
 /**
@@ -988,12 +1048,13 @@ async function closeJob(
   jobId: string,
   contract: VacancyListingContract,
 ): Promise<JobPushResult> {
+  const credential = credentialFor(ctx, connection, contract);
   const resp = await ctx.http(`${jobsPath(contract)}/${encodeURIComponent(jobId)}`, {
     method: "PATCH",
-    token: tokenFor(ctx, connection, contract),
+    token: credential.token,
     body: { status: "closed" },
   });
-  return classifyJobPush(resp);
+  return classifyJobPush(resp, credential.kind);
 }
 
 // ---------------------------------------------------------------------------
