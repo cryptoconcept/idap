@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Plus, X } from "lucide-react";
+import { Plus, TriangleAlert, X } from "lucide-react";
 import type { z } from "zod";
 import { updateProfileSchema } from "@/lib/validation/institution";
-import { FACILITY_GROUPS } from "@/lib/profile/facilities";
+import { FACILITY_GROUPS, UNMAPPABLE_LEGACY_CODES } from "@/lib/profile/facilities";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -25,6 +26,20 @@ type Parsed = z.output<typeof updateProfileSchema>;
 type Facility = NonNullable<Values["facilities"]>[number];
 
 const MAX_FACILITIES = 40;
+
+/**
+ * Explains, per legacy code, why `UNMAPPABLE_LEGACY_CODES`
+ * (`lib/profile/facilities.ts`) couldn't be auto-converted — reasons an
+ * admin needs to actually act on the notice, not just a code. Deliberately
+ * NOT auto-converted here either: doing so from the UI would be the same
+ * guess `LEGACY_FACILITY_CODE_MAP` already refuses to make, by another route.
+ */
+const UNMAPPABLE_FACILITY_NOTES: Record<string, string> = {
+  HOSTEL:
+    "Imported from your old listing as \"HOSTEL\", which didn't record which genders are accommodated. Remove this entry and add Boys Hostel and/or Girls Hostel instead — whichever actually apply.",
+  SPORTS:
+    "Imported from your old listing as \"SPORTS\", a general category rather than a specific facility. Remove this entry and add the specific sports facilities you offer instead — e.g. Playground, Swimming Pool, Basketball Court.",
+};
 
 /**
  * Facilities are one array, replaced wholesale on save. The suggestions are a
@@ -185,49 +200,67 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                   </p>
                 ) : (
                   <ul className="divide-y divide-border rounded-lg border border-border">
-                    {selected.map((facility, index) => (
-                      <li key={facility.code} className="space-y-2 px-3 py-3">
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">{facility.label}</p>
-                            <p className="font-mono text-[11px] text-muted-foreground">
-                              {facility.code}
-                            </p>
+                    {selected.map((facility, index) => {
+                      const unmappable = UNMAPPABLE_LEGACY_CODES.includes(facility.code);
+
+                      return (
+                        <li key={facility.code} className="space-y-2 px-3 py-3">
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <p className="truncate text-sm font-medium">{facility.label}</p>
+                                {unmappable ? (
+                                  <Badge variant="outline" className="gap-1">
+                                    <TriangleAlert className="size-3" />
+                                    Needs re-picking
+                                  </Badge>
+                                ) : null}
+                              </div>
+                              <p className="font-mono text-[11px] text-muted-foreground">
+                                {facility.code}
+                              </p>
+                            </div>
+
+                            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                              <Switch
+                                checked={facility.available !== false}
+                                onCheckedChange={(checked) => update(index, { available: checked })}
+                                aria-label={`${facility.label} available`}
+                              />
+                              {facility.available !== false ? "Available" : "Not available"}
+                            </label>
+
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Remove ${facility.label}`}
+                              onClick={() =>
+                                field.onChange(
+                                  selected.filter((entry) => entry.code !== facility.code),
+                                )
+                              }
+                            >
+                              <X className="size-3.5" />
+                            </Button>
                           </div>
 
-                          <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Switch
-                              checked={facility.available !== false}
-                              onCheckedChange={(checked) => update(index, { available: checked })}
-                              aria-label={`${facility.label} available`}
-                            />
-                            {facility.available !== false ? "Available" : "Not available"}
-                          </label>
+                          {unmappable ? (
+                            <p className="text-xs text-muted-foreground">
+                              {UNMAPPABLE_FACILITY_NOTES[facility.code]}
+                            </p>
+                          ) : null}
 
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Remove ${facility.label}`}
-                            onClick={() =>
-                              field.onChange(
-                                selected.filter((entry) => entry.code !== facility.code),
-                              )
-                            }
-                          >
-                            <X className="size-3.5" />
-                          </Button>
-                        </div>
-
-                        <Input
-                          value={facility.note ?? ""}
-                          placeholder="Note — e.g. 12,000 titles, open until 6pm"
-                          maxLength={200}
-                          aria-label={`Note for ${facility.label}`}
-                          onChange={(event) => update(index, { note: event.target.value })}
-                        />
-                      </li>
-                    ))}
+                          <Input
+                            value={facility.note ?? ""}
+                            placeholder="Note — e.g. 12,000 titles, open until 6pm"
+                            maxLength={200}
+                            aria-label={`Note for ${facility.label}`}
+                            onChange={(event) => update(index, { note: event.target.value })}
+                          />
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
 
