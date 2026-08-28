@@ -165,9 +165,18 @@ matched**, stamped `decidedBy: "system:auto-remap"`, and returned as
 `201 {"status":"awaiting_school"}` — Step 2 is skipped entirely. A new request
 therefore no longer always starts at `pending`, and a connector that assumes
 it does will report "Requested" while eduFleet is already waiting on the
-school to act. Read `status` off the 201 body rather than assuming it (the
-same applies to the 409 `duplicate_open_request` body, which carries the
-existing request's real status).
+school to act. Read `status` off the 201 body rather than assuming it.
+
+**A 409 carries no request state — do not read one off it.** The 409
+`duplicate_open_request` body is exactly `{error, reason, requestId?}`:
+`connection-requests/route.ts:30` calls `jsonError(e.status, e.message,
+{reason, ...(requestId ? {requestId} : {})})`, and `jsonError`
+(`partner-auth.ts:26-28`) spreads that over `{error}`. `ConnectionError`
+(`partner-connections.ts:13-18`) has no request-state field at all, so there is
+no `status` key on a 409 ever. An adopting partner therefore cannot learn the
+adopted request's status from the 409 and **must poll for it** — treat an
+adopted request as `pending` until `GET
+/api/partner/connection-requests/{id}` says otherwise.
 
 **What does and does not disable auto-remap** (`partner-connections.ts:~144-157`):
 a **school's own decline does not**, an eduFleet **admin's rejection does**.

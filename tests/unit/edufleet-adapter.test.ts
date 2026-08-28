@@ -59,9 +59,18 @@ describe("edufleetAdapter", () => {
     });
 
     it("MUTATION-DISTINGUISHING: an existing open request is adopted, not treated as a failure", async () => {
+      // The Path-A body is exactly what eduFleet sends: `{error, reason,
+      // requestId?}` and nothing else (`route.ts:30` + `jsonError`,
+      // `partner-auth.ts:26-28`). There is no `status` key on a 409 ever, so
+      // an adopted request's state is unknowable until the first poll and the
+      // adapter must fall back to "pending".
       const http = vi.fn().mockResolvedValue({
         status: 409,
-        body: { error: "duplicate_open_request", requestId: "req-existing", status: "awaiting_school" },
+        body: {
+          error: 'A request for externalRef "inst-1" is already open',
+          reason: "duplicate_open_request",
+          requestId: "req-existing",
+        },
       });
       const ctx = makeCtx(http);
 
@@ -69,9 +78,25 @@ describe("edufleetAdapter", () => {
 
       expect(result).toEqual({
         remoteRequestId: "req-existing",
-        remoteStatus: "awaiting_school",
-        kind: "AWAITING_APPROVAL",
+        remoteStatus: "pending",
+        kind: "PENDING",
       });
+    });
+
+    it("MUTATION-DISTINGUISHING: refuses an auto-remap clash instead of adopting another institution's request", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 409,
+        body: {
+          error: "Another open request already targets this school",
+          reason: "duplicate_open_request",
+          requestId: "req-belonging-to-someone-else",
+        },
+      });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow(
+        /another institution already has an open connection request for this school/,
+      );
     });
 
     it("a 201 auto-remap (`awaiting_school`) reports AWAITING_APPROVAL, not PENDING", async () => {

@@ -134,13 +134,55 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
 
   if (resp.status === 409) {
     const body = rec(resp.body) ?? {};
-    // 409 `duplicate_open_request` (api-map §5): at most one open request per
-    // (partner, externalRef) already exists. That is not a failure — it means
-    // a request for this school is already in flight, so IDAP adopts its id
-    // and carries on, exactly like PassPercent's `initiate` for the same
-    // collision shape. But only when the id is actually present: a malformed
-    // 409 with no `requestId` must throw rather than let `undefined` become a
+    // Two different collisions share the reason `duplicate_open_request`
+    // (api-map §1.2), and only one of them is safe to adopt:
+    //
+    //   Path A — the same-`externalRef` race. Message: `A request for
+    //   externalRef "X" is already open`. The `requestId` that comes back is
+    //   this institution's own earlier request, so adopting it is right: the
+    //   request IDAP wanted is already in flight.
+    //
+    //   Path B — the auto-remap clash. Message: the fixed literal "Another
+    //   open request already targets this school". eduFleet looked up
+    //   `{partnerId, schoolId, open: true}`, so the request it hands back is
+    //   scoped to the *school* and may have been opened under a different
+    //   `externalRef` entirely — i.e. it can belong to another institution.
+    //
+    // Path B is refused below. The 409 body carries no `externalRef`
+    // (`ConnectionError`, eduFleet `partner-connections.ts:13-18`), so the
+    // only authoritative check is the `externalRef` comparison in `refresh`,
+    // at the first poll that can see one — that is where the security
+    // boundary lives, not here.
+    //
+    // The body also carries no `status`: it is exactly
+    // `{error, reason, requestId?}` (`route.ts:30` + `jsonError`,
+    // `partner-auth.ts:26-28`). An adopted request's real state is therefore
+    // unknowable from the 409 and only a poll can supply it, so the adopt
+    // below falls through to `"pending"` every time.
+    //
+    // The `requestId` presence check is not decoration: a malformed 409 with
+    // no `requestId` must throw rather than let `undefined` become a
     // connection pointing at nothing.
+
+    // eduFleet's auto-remap clash (api-map §1.2): the request it points at is
+    // scoped to the *school*, not to this externalRef, so adopting it would
+    // attach this institution to another institution's request. Refuse at the
+    // door with something an operator can act on, rather than adopting and
+    // stranding the row at PENDING — `showRequest` excludes PENDING, so a
+    // stranded row's only move is Cancel-then-Request, straight back into the
+    // same clash.
+    //
+    // This match is best-effort early detection, NOT the security boundary:
+    // it reads a human-readable string eduFleet may reword at any time. The
+    // authoritative check is the `externalRef` comparison in `refresh`, which
+    // runs against a machine-readable field and catches this even if the
+    // wording changes.
+    if (str(body.error)?.includes("already targets this school")) {
+      throw new Error(
+        "eduFleet: another institution already has an open connection request for this school — an eduFleet admin must resolve the duplicate before this school can be connected",
+      );
+    }
+
     if (body.requestId !== undefined && body.requestId !== null) {
       const remoteStatus = str(body.status) ?? "pending";
       return { remoteRequestId: String(body.requestId), remoteStatus, kind: initiateKind(remoteStatus) };
