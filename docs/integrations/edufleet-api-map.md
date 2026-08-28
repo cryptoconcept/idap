@@ -114,7 +114,7 @@ credential is never issued for a school that did not agree to it."*
 
 **Step 1 — Partner opens a request.** `POST /api/partner/connection-requests`
 (platform key). `openConnectionRequest()`
-(`web/src/lib/services/partner-connections.ts:99-107` — note the file moved
+(`web/src/lib/services/partner-connections.ts:100-115` — note the file moved
 from the `partner-connections.ts` path the rest of this document cites).
 Required (contract 1.1.0): `externalRef` (the partner's own institution id),
 `payload.institutionName`, **and a non-empty `scopes` array**. Live
@@ -135,6 +135,30 @@ duplicate insert is caught (Mongo error code 11000) and turned into the same
 requestId, status }` at 201; on collision, 409 `duplicate_open_request` with
 the existing `requestId` in the body.
 
+**Two different collisions share the reason `duplicate_open_request`, and they
+are not equivalent — read this before adopting a 409's `requestId`.**
+
+| Collision | Message | Whose `requestId` comes back |
+|---|---|---|
+| Same-`externalRef` race | *A request for externalRef "X" is already open* | This institution's own request. Safe to adopt. |
+| **Auto-remap clash** | *Another open request already targets this school* | Whichever open request already targets that school — **possibly opened under a different `externalRef`**. |
+
+The clash branch queries `{partnerId, schoolId: priorMatch.schoolId, open: true}`,
+so the row it finds is scoped to the school, not to the caller's `externalRef`.
+The 409 body carries `error`, `reason` and `requestId` and **no `externalRef`**
+(`ConnectionError`, `partner-connections.ts:13-18`), so the two cases are
+distinguishable only by the human-readable `error` string.
+
+A partner that blindly adopts the `requestId` from either 409 can attach itself
+to another institution's request. When the school approves that request,
+whichever side polls first redeems the single grant — so the wrong institution
+ends up holding a live credential for a school that never consented to it,
+which is precisely the boundary this four-step chain exists to hold. IDAP's
+defence is at the next poll rather than at the 409: `GET
+/api/partner/connection-requests/{id}` does return `externalRef`
+(`getConnectionRequestRow`, `:241-254`, itself partner-scoped), and the adapter
+refuses to act on a request whose `externalRef` is not its own.
+
 **Auto-remap — a request can be born past `pending`.** A request whose
 `externalRef` eduFleet has matched to a school before is created **already
 matched**, stamped `decidedBy: "system:auto-remap"`, and returned as
@@ -144,6 +168,22 @@ it does will report "Requested" while eduFleet is already waiting on the
 school to act. Read `status` off the 201 body rather than assuming it (the
 same applies to the 409 `duplicate_open_request` body, which carries the
 existing request's real status).
+
+**What does and does not disable auto-remap** (`partner-connections.ts:~144-157`):
+a **school's own decline does not**, an eduFleet **admin's rejection does**.
+Both write `status: "rejected"` with the `schoolId` still on the row, so the
+status alone cannot separate them — `decidedBy` is what does, stamping
+`school:<id>` for the school's decision and `admin:<id>` for the admin's. The
+reasoning is that `adminRejectRequest` exists precisely for *"this was matched
+to the wrong school"*, so it retracts the identity verification auto-remap is
+built on, whereas a school saying no does not unmake the identity. Only the most
+recent matched row is consulted — an admin retraction is the latest word, and
+there is no fall back to an older pre-retraction match.
+
+The consequence worth carrying into Plan B2: **after a school declines, a
+re-connect goes straight back to that same school with no admin step in
+between.** The school sees the request again, and nothing on eduFleet's side
+rate-limits how often a partner may re-ask.
 
 **Step 2 — An eduFleet admin matches it to a real school.**
 `adminMatchRequest()` (`partner-connections.ts:154-195`) — **not** exposed on
