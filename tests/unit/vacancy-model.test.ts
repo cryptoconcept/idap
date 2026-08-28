@@ -21,6 +21,16 @@ describe("Vacancy model", () => {
     expect(err?.errors.institutionId).toBeDefined();
   });
 
+  it("requires title", () => {
+    const err = new Vacancy({ ...base, title: undefined }).validateSync();
+    expect(err?.errors.title).toBeDefined();
+  });
+
+  it("requires description", () => {
+    const err = new Vacancy({ ...base, description: undefined }).validateSync();
+    expect(err?.errors.description).toBeDefined();
+  });
+
   it("rejects an unknown subject", () => {
     const err = new Vacancy({ ...base, subject: "Astrology" }).validateSync();
     expect(err?.errors.subject).toBeDefined();
