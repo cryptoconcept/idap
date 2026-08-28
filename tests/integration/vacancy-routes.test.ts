@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
@@ -9,8 +9,10 @@ import {
   PATCH as patchVacancy,
   DELETE as deleteVacancy,
 } from "@/app/api/settings/vacancies/[vacancyId]/route";
+import { POST as publishVacancy } from "@/app/api/settings/vacancies/[vacancyId]/publish/route";
 import { VacancyService } from "@/services/vacancy.service";
-import { Vacancy } from "@/models";
+import { PlatformCredential, Vacancy } from "@/models";
+import { encryptCredential } from "@/lib/security/credentials";
 import type { VacancyCreateInput } from "@/lib/validation/vacancy";
 import { PLATFORM_ADMIN_DENIED } from "@/lib/tenant";
 
@@ -34,6 +36,53 @@ const vacancyInput: VacancyCreateInput = {
 
 async function makeVacancy(institutionId: string, overrides: Record<string, unknown> = {}) {
   return VacancyService.create(institutionId, { ...vacancyInput, ...overrides }, actor);
+}
+
+// ---------------------------------------------------------------------------
+// eduFleet, for the publish route
+//
+// `vacancy-publish-service.test.ts` already covers WHICH contract a push uses,
+// which credential authorises it, and how every eduFleet answer is recorded.
+// None of that is re-tested here. What this file needs eduFleet for is the
+// opposite: to make the publish route's own guards distinguishable. A tenant
+// filter that lets a foreign vacancy through has to be observable as a push
+// that SUCCEEDS — if the only reachable failure were "eduFleet is not
+// configured", a 404 would prove nothing about scoping, because an unscoped
+// route would 404 for the same unrelated reason.
+//
+// `fetch` is stubbed rather than the adapter faked, for the same reason that
+// file gives: it keeps the real adapter and the real URL construction in the
+// path, so "no HTTP call was made" means exactly that.
+// ---------------------------------------------------------------------------
+
+const PLATFORM_KEY = "ef_pkey_vacancy_routes";
+const EDUFLEET_BASE_URL = "https://api.edufleet.test";
+const VALID_VAULT_KEY = Buffer.alloc(32, 11).toString("base64");
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/** Stubs `fetch` with one queued response per call, in order. */
+function stubFetch(...responses: Response[]) {
+  const mock = vi.fn();
+  for (const response of responses) mock.mockResolvedValueOnce(response);
+  vi.stubGlobal("fetch", mock);
+  return mock;
+}
+
+/** The active platform credential — no grant anywhere, so every push here
+ *  goes out under Contract One as an aggregated listing. */
+async function makeEdufleetCredential() {
+  return PlatformCredential.create({
+    platform: "EDUFLEET",
+    keyEncrypted: encryptCredential(PLATFORM_KEY),
+    baseUrl: EDUFLEET_BASE_URL,
+    active: true,
+  });
 }
 
 /** A request carrying only a session cookie, for JSON body routes. */
@@ -93,12 +142,14 @@ beforeEach(async () => {
   await clearDatabase();
   await makeInstitution("INS0001");
   await makeInstitution("INS0002");
+  process.env.IDAP_CREDENTIAL_KEY = VALID_VAULT_KEY;
 });
 
 // The cookie store is module-level, so a session left behind would silently
 // authenticate the tests that expect no credentials at all.
 afterEach(async () => {
   (await cookies()).delete(SESSION_COOKIE);
+  vi.unstubAllGlobals();
 });
 
 describe("GET /api/settings/vacancies", () => {
@@ -588,4 +639,218 @@ describe("DELETE /api/settings/vacancies/[vacancyId]", () => {
   // guard as PATCH above, in the same file — that branch is already pinned
   // there, same reasoning as the single SUPER_ADMIN 403 covering every
   // non-admin role rather than one test per role.
+});
+
+describe("POST /api/settings/vacancies/[vacancyId]/publish", () => {
+  /** An OPEN vacancy is the only status the publish route creates a listing
+   *  for; `makeVacancy` produces DRAFTs, which the service refuses. */
+  async function makeOpenVacancy(institutionId: string, overrides: Record<string, unknown> = {}) {
+    const created = await makeVacancy(institutionId, overrides);
+    await Vacancy.updateOne({ _id: created.id }, { $set: { status: "OPEN" } });
+    return created;
+  }
+
+  function publishRequest(vacancyId: string, origin?: string) {
+    return jsonRequest({
+      url: `http://localhost/api/settings/vacancies/${vacancyId}/publish`,
+      origin,
+    });
+  }
+
+  const params = (vacancyId: string) =>
+    ({ params: Promise.resolve({ vacancyId }) }) as never;
+
+  it("publishes an OPEN vacancy and returns the recorded listing", async () => {
+    const created = await makeOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(201, {
+        jobId: "ef-job-published",
+        externalJobId: created.id,
+        status: "active",
+        claimStatus: "unclaimed",
+        publicUrl: "https://edufleetexchange.test/jobs/maths-teacher/ef-job-published",
+      }),
+    );
+
+    const response = await publishVacancy(
+      publishRequest(created.id, "http://localhost"),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.outcome.status).toBe("PUSHED");
+    expect(payload.outcome.listing.jobId).toBe("ef-job-published");
+    expect(payload.outcome.listing.remoteStatus).toBe("active");
+    // The card renders this as a link, so the route must actually carry it.
+    expect(payload.outcome.listing.publicUrl).toBe(
+      "https://edufleetexchange.test/jobs/maths-teacher/ef-job-published",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toBe(`${EDUFLEET_BASE_URL}/api/partner/jobs`);
+
+    const stored = await Vacancy.findById(created.id).lean();
+    expect(stored?.listing?.jobId).toBe("ef-job-published");
+  });
+
+  /**
+   * THE tenant test for this route, and the reason the eduFleet stub above
+   * exists. `INS0002`'s vacancy is OPEN, its institution has a city, the
+   * credential is active and `fetch` is primed to answer `201` — so the ONLY
+   * thing standing between `INS0001`'s session and a live public advert for
+   * another school's vacancy is the `institutionId` in
+   * `VacancyPublishService.loadVacancy`'s filter.
+   *
+   * MUTATION CHECK: drop `institutionId` from that filter (make it
+   * `Vacancy.findOne({ _id: toObjectId(vacancyId) })`) and this test fails on
+   * the very first assertion — the response is a 200 carrying a `PUSHED`
+   * outcome, the stubbed `fetch` is called once, and `INS0002`'s vacancy comes
+   * back with a listing it never asked for. Asserting the status alone would
+   * NOT distinguish it: an unscoped route reaching an unconfigured eduFleet
+   * would 404 as well, for a completely different reason. Hence the three
+   * assertions below the status: nothing was sent, and nothing was recorded.
+   */
+  it("MUTATION-DISTINGUISHING: 404s on another institution's vacancy, sends nothing and records nothing", async () => {
+    const foreign = await makeOpenVacancy("INS0002");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-job-foreign", externalJobId: foreign.id, status: "active" }),
+    );
+
+    const response = await publishVacancy(
+      publishRequest(foreign.id, "http://localhost"),
+      params(foreign.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(404);
+    expect(payload.error.message).toBe("Vacancy not found");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await Vacancy.findById(foreign.id).lean())?.listing).toBeUndefined();
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects a cross-origin publish, sends nothing and records nothing", async () => {
+    const created = await makeOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-job-csrf", externalJobId: created.id, status: "active" }),
+    );
+
+    const response = await publishVacancy(
+      publishRequest(created.id, "https://not-the-app.test"),
+      params(created.id),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toMatch(/cross-origin/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await Vacancy.findById(created.id).lean())?.listing).toBeUndefined();
+  });
+
+  it("returns 401 without a session and publishes nothing", async () => {
+    const created = await makeOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-job-anon", externalJobId: created.id, status: "active" }),
+    );
+
+    const response = await publishVacancy(
+      publishRequest(created.id, "http://localhost"),
+      params(created.id),
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await Vacancy.findById(created.id).lean())?.listing).toBeUndefined();
+  });
+
+  it("returns 403 for an authenticated platform admin and publishes nothing", async () => {
+    const created = await makeOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInPlatformAdmin();
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-job-admin", externalJobId: created.id, status: "active" }),
+    );
+
+    const response = await publishVacancy(
+      publishRequest(created.id, "http://localhost"),
+      params(created.id),
+    );
+
+    expect(response.status).toBe(403);
+    expect((await response.json()).error.message).toBe(PLATFORM_ADMIN_DENIED);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for an unknown id", async () => {
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+
+    const response = await publishVacancy(
+      publishRequest(UNKNOWN_ID, "http://localhost"),
+      params(UNKNOWN_ID),
+    );
+
+    expect(response.status).toBe(404);
+  });
+
+  /**
+   * A refusal the service made before the wire has to reach the browser as a
+   * 4xx carrying its own words — that message is what the section toasts, and
+   * it is the only thing telling an admin what to do. A `DRAFT` is the
+   * cheapest of those refusals to reach and the one the UI's own gating is
+   * built around.
+   */
+  it("returns the service's refusal verbatim for a DRAFT vacancy, and sends nothing", async () => {
+    const created = await makeVacancy("INS0001"); // DRAFT by default
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-job-draft", externalJobId: created.id, status: "active" }),
+    );
+
+    const response = await publishVacancy(
+      publishRequest(created.id, "http://localhost"),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(payload.error.code).toBe("VALIDATION_ERROR");
+    expect(payload.error.message).toBe(
+      "Set this vacancy to Open before publishing it to eduFleet Exchange",
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The route's other half of the same rule: a push eduFleet ANSWERED is not a
+   * failed request, however unwelcome the answer. A `403` comes back 200 with
+   * a `BLOCKED` outcome and eduFleet's reason, because the push happened and
+   * one of the school's daily write units is already spent — reporting it as a
+   * 4xx would say "this didn't happen" about something that did, and would
+   * invite the retry that spends another unit for the same answer.
+   */
+  it("returns a 403 from eduFleet as a 200 BLOCKED outcome carrying the reason", async () => {
+    const created = await makeOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    stubFetch(jsonResponse(403, { reason: "upgrade_required", message: "Plan is full" }));
+
+    const response = await publishVacancy(
+      publishRequest(created.id, "http://localhost"),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.outcome.status).toBe("BLOCKED");
+    expect(payload.outcome.message).toMatch(/plan has no room for another live listing/i);
+  });
 });
