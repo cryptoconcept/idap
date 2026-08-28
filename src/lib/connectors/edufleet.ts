@@ -22,7 +22,16 @@
  * `./http`'s docblock. It throws only on a network failure or a timeout.
  */
 
-import type { AdapterContext, InitiateResult, InstitutionSummary, PlatformAdapter, SyncOutcome } from "./types";
+import { ConnectorAuthError } from "./types";
+import type {
+  AdapterContext,
+  ConnectionState,
+  InitiateResult,
+  InstitutionSummary,
+  PlatformAdapter,
+  RefreshResult,
+  SyncOutcome,
+} from "./types";
 import { registerAdapter } from "./index";
 
 type Rec = Record<string, unknown>;
@@ -34,6 +43,23 @@ function rec(v: unknown): Rec | undefined {
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
+
+function arr(v: unknown): unknown[] | undefined {
+  return Array.isArray(v) ? v : undefined;
+}
+
+function stringArray(v: unknown): string[] {
+  return (arr(v) ?? []).filter((x): x is string => typeof x === "string");
+}
+
+/**
+ * Shared "the state moved under us" detail (api-map §5: 409
+ * `already_redeemed`, 409 `not_approved`, and reaching `"completed"` via
+ * polling are all the same class). eduFleet's grant is returned exactly
+ * once at redeem time — if IDAP didn't win that exchange, no token is
+ * recoverable here, only a fresh connection request.
+ */
+const REDEEM_STATE_MOVED_DETAIL = "already redeemed (or no longer approved) — reconnect from eduFleet if needed";
 
 // ---------------------------------------------------------------------------
 // initiate — POST /api/partner/connection-requests (platform key)
@@ -83,6 +109,131 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
 }
 
 // ---------------------------------------------------------------------------
+// refresh — GET .../connection-requests/:id, then redeem on "approved"
+// (both platform key); the redeem response's follow-up school lookup uses
+// the freshly minted grant.
+// ---------------------------------------------------------------------------
+
+async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: string): Promise<Rec> {
+  const resp = await ctx.http(`/api/partner/connection-requests/${remoteRequestId}`, {
+    method: "GET",
+    token: ctx.platformKey,
+  });
+  if (resp.status !== 200) {
+    throw new Error(`eduFleet: polling the connection request failed (status ${resp.status})`);
+  }
+  return rec(resp.body) ?? {};
+}
+
+/**
+ * The redeem response (api-map §1.2 step 4) carries no school name, city,
+ * or slug — just ids. This is a second call, using the grant token that was
+ * just minted, purely to populate `RefreshResult.remoteInstitution` for
+ * display.
+ *
+ * This call must never be able to cost the grant: a network throw, a
+ * timeout, or any ordinary non-2xx status here is swallowed and simply
+ * yields no `remoteInstitution` — a `CONNECTED` result with an unnamed
+ * school is still a working connection. The one deliberate exception is a
+ * 401 with body reason `revoked` (api-map §1.3): that is not a cosmetic
+ * failure, it means the credential IDAP just received is already dead, which
+ * is worth surfacing distinctly via `ConnectorAuthError` rather than quietly
+ * handing back a token that will never work. Any other 401 reason (e.g. a
+ * partner-wide pause) is not that signal and is swallowed like everything
+ * else.
+ */
+async function fetchRemoteInstitution(
+  ctx: AdapterContext,
+  grantToken: string,
+): Promise<{ name?: string; city?: string; slug?: string } | undefined> {
+  let resp: { status: number; body: unknown };
+  try {
+    resp = await ctx.http("/api/partner/school", { method: "GET", token: grantToken });
+  } catch {
+    return undefined;
+  }
+
+  if (resp.status === 200) {
+    const school = rec(resp.body);
+    if (!school) return undefined;
+    // eduFleet's School model has no slug field at all — `slug` stays
+    // undefined always; never derive one from the name.
+    return { name: str(school.schoolName), city: str(school.city) };
+  }
+
+  if (resp.status === 401 && str(rec(resp.body)?.reason) === "revoked") {
+    throw new ConnectorAuthError("eduFleet: the grant this connection just redeemed is already revoked");
+  }
+
+  return undefined;
+}
+
+async function redeem(ctx: AdapterContext, remoteRequestId: string): Promise<RefreshResult> {
+  const resp = await ctx.http(`/api/partner/connection-requests/${remoteRequestId}/redeem`, {
+    method: "POST",
+    token: ctx.platformKey,
+  });
+
+  if (resp.status === 200) {
+    const body = rec(resp.body) ?? {};
+    const grantToken = str(body.token);
+    if (!grantToken) {
+      throw new Error("eduFleet: redeem succeeded but the response carried no grant token");
+    }
+    // Never log `grantToken`, never fold it into an error message, never
+    // return it anywhere but this `RefreshResult` — it is returned exactly
+    // once and is gone for good if lost.
+    const remoteInstitution = await fetchRemoteInstitution(ctx, grantToken);
+    return {
+      kind: "CONNECTED",
+      remoteStatus: "completed",
+      grantToken,
+      scopes: stringArray(body.scopes),
+      remoteInstitution,
+    };
+  }
+
+  if (resp.status === 409) {
+    // api-map §5: 409 `already_redeemed` (someone else won the race) and
+    // 409 `not_approved` (the request slipped out of "approved" before this
+    // redeem landed) are both "the state moved under us" — same defensive
+    // shape as the "completed" branch in `refresh` below, and PassPercent's
+    // identical redeem race.
+    return { kind: "REJECTED", remoteStatus: "rejected", detail: REDEEM_STATE_MOVED_DETAIL };
+  }
+
+  throw new Error(`eduFleet: redeeming the connection request failed (status ${resp.status})`);
+}
+
+async function refresh(ctx: AdapterContext, connection: ConnectionState): Promise<RefreshResult> {
+  if (!connection.remoteRequestId) {
+    throw new Error("eduFleet: refresh requires a remoteRequestId, but the connection has none");
+  }
+
+  const body = await pollConnectionRequest(ctx, connection.remoteRequestId);
+  const remoteStatus = str(body.status) ?? "";
+
+  switch (remoteStatus) {
+    case "pending":
+      return { kind: "PENDING", remoteStatus };
+    case "awaiting_school":
+      return { kind: "AWAITING_APPROVAL", remoteStatus };
+    case "rejected":
+      return { kind: "REJECTED", remoteStatus, detail: str(body.rejectReason) };
+    case "approved":
+      return redeem(ctx, connection.remoteRequestId);
+    case "completed":
+      // Defensive (mirrors PassPercent's `refresh`): reaching "completed" via
+      // polling means something else redeemed this request between polls,
+      // without IDAP's own redeem call ever succeeding. eduFleet's grant is
+      // returned exactly once, so there is no token to recover from here.
+      return { kind: "REJECTED", remoteStatus, detail: REDEEM_STATE_MOVED_DETAIL };
+    default:
+      throw new Error(`eduFleet: connection request has an unrecognized status "${remoteStatus}"`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // sync — placeholder (see module docblock); Plan B2 implements the real push
 // ---------------------------------------------------------------------------
 
@@ -106,6 +257,7 @@ export const edufleetAdapter: PlatformAdapter = {
   platform: "EDUFLEET",
   connectMode: "REQUEST_APPROVE_REDEEM",
   initiate,
+  refresh,
   sync,
 };
 

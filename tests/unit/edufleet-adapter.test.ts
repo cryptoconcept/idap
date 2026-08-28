@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConnectorHttp } from "@/lib/connectors/http";
-import type { AdapterContext, InstitutionSummary } from "@/lib/connectors/types";
+import type { AdapterContext, ConnectionState, InstitutionSummary, SyncSourceData } from "@/lib/connectors/types";
+import { ConnectorAuthError } from "@/lib/connectors/types";
 import { edufleetAdapter } from "@/lib/connectors/edufleet";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,15 @@ function makeInstitution(overrides: Partial<InstitutionSummary> = {}): Instituti
     website: "https://dps.example",
     contactName: "Principal",
     contactEmail: "principal@dps.example",
+    ...overrides,
+  };
+}
+
+function makeConnection(overrides: Partial<ConnectionState> = {}): ConnectionState {
+  return {
+    institutionId: "inst-1",
+    externalRef: "inst-1",
+    remoteRequestId: "req-abc",
     ...overrides,
   };
 }
@@ -90,6 +100,255 @@ describe("edufleetAdapter", () => {
       expect(JSON.stringify(body)).not.toContain(PLATFORM_KEY);
       expect(body.platformKey).toBeUndefined();
       expect(body.token).toBeUndefined();
+    });
+  });
+
+  describe("refresh", () => {
+    it("throws when called without a remoteRequestId", async () => {
+      const http = vi.fn();
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection({ remoteRequestId: undefined }))).rejects.toThrow();
+      expect(http).not.toHaveBeenCalled();
+    });
+
+    it("throws when polling the connection request fails", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 500, body: { error: "internal" } });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow();
+    });
+
+    it("maps pending to PENDING", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "pending" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result).toEqual({ kind: "PENDING", remoteStatus: "pending" });
+      const [path, init] = http.mock.calls[0];
+      expect(path).toBe("/api/partner/connection-requests/req-abc");
+      expect(init.method).toBe("GET");
+      expect(init.token).toBe(PLATFORM_KEY);
+    });
+
+    it("maps awaiting_school to AWAITING_APPROVAL", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "awaiting_school" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result).toEqual({ kind: "AWAITING_APPROVAL", remoteStatus: "awaiting_school" });
+    });
+
+    it("maps rejected to REJECTED, carrying the school's rejectReason as detail", async () => {
+      const http = vi
+        .fn()
+        .mockResolvedValue({ status: 200, body: { status: "rejected", rejectReason: "Declined by the school" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result).toEqual({ kind: "REJECTED", remoteStatus: "rejected", detail: "Declined by the school" });
+    });
+
+    it("throws on an unrecognized status", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "mystery" } });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow();
+    });
+
+    it("completed returns a non-CONNECTED result carrying an actionable detail", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "completed" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result.kind).not.toBe("CONNECTED");
+      expect((result as { detail?: string }).detail).toBeTruthy();
+    });
+
+    describe("approved -> redeem", () => {
+      function mockApprovedThenRedeem(
+        http: ReturnType<typeof vi.fn>,
+        redeemResponse: { status: number; body: unknown },
+      ) {
+        http.mockResolvedValueOnce({ status: 200, body: { status: "approved" } }).mockResolvedValueOnce(redeemResponse);
+      }
+
+      it("redeems and returns CONNECTED with the grant token and scopes", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: {
+            token: "ef_pgrant_abc123",
+            schoolId: "school-1",
+            externalRef: "inst-1",
+            scopes: ["jobs:write"],
+            prefix: "ef_pgrant_abc1",
+          },
+        });
+        http.mockResolvedValueOnce({
+          status: 200,
+          body: { schoolId: "school-1", schoolName: "Delhi Public School", city: "Bengaluru", plan: "free" },
+        });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).toBe("CONNECTED");
+        if (result.kind !== "CONNECTED") throw new Error("unreachable");
+        expect(result.grantToken).toBe("ef_pgrant_abc123");
+        expect(result.scopes).toEqual(["jobs:write"]);
+        expect(result.remoteInstitution).toEqual({ name: "Delhi Public School", city: "Bengaluru" });
+
+        const redeemCall = http.mock.calls[1];
+        expect(redeemCall[0]).toBe("/api/partner/connection-requests/req-abc/redeem");
+        expect(redeemCall[1].method).toBe("POST");
+        expect(redeemCall[1].token).toBe(PLATFORM_KEY);
+
+        const followUpCall = http.mock.calls[2];
+        expect(followUpCall[0]).toBe("/api/partner/school");
+        expect(followUpCall[1].method).toBe("GET");
+        // The follow-up call must use the just-minted grant, never the
+        // platform key.
+        expect(followUpCall[1].token).toBe("ef_pgrant_abc123");
+      });
+
+      it("MUTATION-DISTINGUISHING: slug has no source in eduFleet and is never invented", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: { token: "ef_pgrant_xyz789", scopes: ["jobs:write"] },
+        });
+        http.mockResolvedValueOnce({
+          status: 200,
+          body: { schoolName: "St. Xavier's High School", city: "Mangaluru" },
+        });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        if (result.kind !== "CONNECTED") throw new Error("expected CONNECTED");
+        expect(result.remoteInstitution?.slug).toBeUndefined();
+      });
+
+      it("MUTATION-DISTINGUISHING: a cosmetic lookup failure never costs the grant", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: { token: "ef_pgrant_keep_me", scopes: ["jobs:write"] },
+        });
+        // The follow-up school lookup fails outright (a plain 500) — this
+        // must not stop the just-redeemed grant from coming back.
+        http.mockResolvedValueOnce({ status: 500, body: { error: "internal" } });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).toBe("CONNECTED");
+        if (result.kind !== "CONNECTED") throw new Error("unreachable");
+        expect(result.grantToken).toBe("ef_pgrant_keep_me");
+      });
+
+      it("a follow-up call that throws outright (network failure) also never costs the grant", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: { token: "ef_pgrant_keep_me_too", scopes: ["jobs:write"] },
+        });
+        http.mockRejectedValueOnce(new Error("network down"));
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).toBe("CONNECTED");
+        if (result.kind !== "CONNECTED") throw new Error("unreachable");
+        expect(result.grantToken).toBe("ef_pgrant_keep_me_too");
+        expect(result.remoteInstitution).toBeUndefined();
+      });
+
+      it("a 401 reason `revoked` on the follow-up call throws ConnectorAuthError, and the grant token appears nowhere in it", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: { token: "ef_pgrant_secret_dead_on_arrival", scopes: ["jobs:write"] },
+        });
+        http.mockResolvedValueOnce({ status: 401, body: { reason: "revoked" } });
+        const ctx = makeCtx(http);
+
+        let caught: unknown;
+        try {
+          await edufleetAdapter.refresh!(ctx, makeConnection());
+        } catch (error) {
+          caught = error;
+        }
+
+        expect(caught).toBeInstanceOf(ConnectorAuthError);
+        expect((caught as Error).message).not.toContain("ef_pgrant_secret_dead_on_arrival");
+      });
+
+      it("a 401 with a different reason on the follow-up call does NOT throw ConnectorAuthError — the grant still comes back", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, {
+          status: 200,
+          body: { token: "ef_pgrant_still_ok", scopes: ["jobs:write"] },
+        });
+        http.mockResolvedValueOnce({ status: 401, body: { reason: "partner_inactive" } });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).toBe("CONNECTED");
+        if (result.kind !== "CONNECTED") throw new Error("unreachable");
+        expect(result.grantToken).toBe("ef_pgrant_still_ok");
+      });
+
+      it("returns a non-CONNECTED result on a 409 already_redeemed race", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, { status: 409, body: { error: "already_redeemed" } });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).not.toBe("CONNECTED");
+      });
+
+      it("returns a non-CONNECTED result on a 409 not_approved race", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, { status: 409, body: { error: "not_approved" } });
+        const ctx = makeCtx(http);
+
+        const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+        expect(result.kind).not.toBe("CONNECTED");
+      });
+
+      it("throws on any other non-2xx redeem status", async () => {
+        const http = vi.fn();
+        mockApprovedThenRedeem(http, { status: 500, body: { error: "internal" } });
+        const ctx = makeCtx(http);
+
+        await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow();
+      });
+    });
+  });
+
+  describe("sync", () => {
+    it("returns PARTIAL with a single failed step and a warning naming the reason, without throwing or calling out", async () => {
+      const http = vi.fn();
+      const ctx = makeCtx(http);
+      const connection = makeConnection({ grantToken: "ef_pgrant_whatever" });
+      const data: SyncSourceData = { institution: {}, results: [], readPublicMedia: vi.fn() };
+
+      const outcome = await edufleetAdapter.sync(ctx, connection, data);
+
+      expect(outcome.status).toBe("PARTIAL");
+      expect(outcome.steps).toEqual([{ step: "vacancies", ok: false, detail: expect.any(String) }]);
+      expect(outcome.warnings.length).toBeGreaterThan(0);
+      expect(outcome.warnings.some((w) => /vacanc/i.test(w))).toBe(true);
+      expect(http).not.toHaveBeenCalled();
     });
   });
 });
