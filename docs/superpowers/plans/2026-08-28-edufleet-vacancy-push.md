@@ -19,7 +19,8 @@
 - **`403 claimed` is NOT terminal.** It has four triggers; `claimed` and `withdrawn` are terminal, but `claim_pending` reverts to `unclaimed` on admin claim-rejection and `hiddenPendingReview` clears on takedown-restore. **Never permanently retire a vacancy on a 403.** The spec's §7.1 is wrong on this point and this plan overrides it.
 - **Contract Two's PATCH short-circuits on `status: "closed"`** — every other field in the same body is silently discarded and the 200 reports the pre-patch values. **Never combine a close with field edits in one call.**
 - **A missing `title` or `description` escapes as an uncataloged 500 with no `reason`**, after burning a write. IDAP's model requires both, so this must stay structurally impossible; do not add a code path that can push a vacancy without them.
-- `state` defaults to `"Karnataka"` on **Contract One only**. Contract Two never accepts `state`.
+- **Contract Two REQUIRES `city` (or `branchId`).** `postSchoolJob` passes `location: input.city` and `createJob` does `let location = input.location ?? ""` with **no fallback to the school's own record**, then throws `"Job needs a location or branch"` when it is empty (`jobs.ts:38`, `:59`; `partner-school-jobs.ts:82`). eduFleet's published `schoolJob` required-field list omits this. A Contract Two body without `city` 400s **every time** and burns a write unit.
+- Contract Two accepts `city` and `branchId`; it does **not** accept `institutionName`, `district`, `state` or `sourceUrl`. `state` defaults to `"Karnataka"` on **Contract One only**.
 - `externalJobId` uniqueness is `(partnerId, externalJobId)` and **shared across both contracts**. On a 409, trust the response's `contract` field over any local assumption.
 - **`sanitizeFacilities()` silently discards** unrecognised benefit labels — no error, no signal. Validate against `VACANCY_BENEFITS` before sending.
 - Suite, `tsc --noEmit` and `eslint src` must stay green. Baseline: **1578 tests / 122 files, tsc 0, eslint 0 errors / 7 warnings.**
@@ -198,7 +199,7 @@ describe("buildAggregatedJobBody", () => {
 
 - [ ] **Step 2: Run them, confirm they fail** — `npx vitest run tests/unit/edufleet-vacancy-map.test.ts`. Expect "module not found".
 
-- [ ] **Step 3: Implement the module.** `preflight` must check, in this order: `title` non-empty, `description` non-empty, `subject` in `VACANCY_SUBJECTS`, salary ordering when both present, `experienceRequired` non-negative, and — for `AGGREGATED` only — `institutionName` and `city` present. Each returns a sentence a school admin can act on, never an error code. `buildAggregatedJobBody` sends `institutionName`, `city`, optional `district`/`state`; `buildSchoolJobBody` sends none of them. Both filter `facilities` through `VACANCY_BENEFITS`.
+- [ ] **Step 3: Implement the module.** `preflight` must check, in this order: `title` non-empty, `description` non-empty, `subject` in `VACANCY_SUBJECTS`, salary ordering when both present, `experienceRequired` non-negative, `city` present for **both** contracts (see the Global Constraints — Contract Two 400s without it just as Contract One does), and `institutionName` present for `AGGREGATED` only. Each returns a sentence a school admin can act on, never an error code. `buildAggregatedJobBody` sends `institutionName`, `city`, optional `district`/`state`; `buildSchoolJobBody` sends `city` (or `branchId`) and **none of** `institutionName`/`district`/`state`/`sourceUrl`. Both filter `facilities` through `VACANCY_BENEFITS`.
 
 - [ ] **Step 4: Run the tests, confirm they pass.**
 
