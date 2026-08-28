@@ -81,8 +81,18 @@ async function makeConnectedGrant(institutionId: string, overrides: Record<strin
   });
 }
 
+/**
+ * A vacancy, optionally already listed on eduFleet.
+ *
+ * A fixture listing gets `externalJobId: String(vacancy._id)` unless it says
+ * otherwise, because that is what a first listing's external id genuinely is
+ * — the id only diverges once a closed listing has been republished. It has
+ * to be filled in after creation rather than passed through, since the value
+ * is the document's own id.
+ */
 async function makeVacancy(institutionId: string, overrides: Record<string, unknown> = {}) {
-  return Vacancy.create({
+  const { listing, ...rest } = overrides as { listing?: Record<string, unknown> };
+  const vacancy = await Vacancy.create({
     institutionId,
     title: "Mathematics Teacher",
     subject: "Mathematics",
@@ -91,8 +101,16 @@ async function makeVacancy(institutionId: string, overrides: Record<string, unkn
     salaryMax: 50000,
     experienceRequired: 3,
     status: "OPEN",
-    ...overrides,
+    ...rest,
   });
+  if (!listing) return vacancy;
+
+  const updated = await Vacancy.findByIdAndUpdate(
+    vacancy._id,
+    { $set: { listing: { externalJobId: String(vacancy._id), ...listing } } },
+    { new: true, runValidators: true },
+  );
+  return updated!;
 }
 
 /** The stored `listing` sub-document, read back from the database. */
@@ -493,6 +511,206 @@ describe("rule 4: only OPEN vacancies publish", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Republishing a closed listing
+// ---------------------------------------------------------------------------
+
+describe("a closed listing is replaced, never revived", () => {
+  it("MUTATION-DISTINGUISHING: publish -> close -> republish issues a CREATE under a fresh externalJobId", async () => {
+    // eduFleet cannot reopen a job through either partner contract, and a
+    // closed job keeps its externalJobId forever (the dedupe pre-check and the
+    // unique index both ignore status). PATCHing fields onto it would return
+    // a cheerful 200 over an advert no teacher can see.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    const id = String(vacancy._id);
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-job-100", status: "active" }),
+      jsonResponse(200, { jobId: "ef-job-100", status: "closed" }),
+      jsonResponse(201, { jobId: "ef-job-101", status: "active" }),
+    );
+
+    await VacancyPublishService.publish("INS0001", id, actor);
+    await Vacancy.updateOne({ _id: vacancy._id }, { $set: { status: "FILLED" } });
+    await VacancyPublishService.publish("INS0001", id, actor);
+    expect((await storedListing(id))?.remoteStatus).toBe("closed");
+
+    await Vacancy.updateOne({ _id: vacancy._id }, { $set: { status: "OPEN" } });
+    const outcome = await VacancyPublishService.publish("INS0001", id, actor);
+
+    expect(outcome.status).toBe("PUSHED");
+    const republish = callAt(fetchMock, 2);
+    expect(republish.method).toBe("POST");
+    expect(republish.url).toBe(`${BASE_URL}/api/partner/jobs`);
+    // A fresh id, because eduFleet would 409 on the old one — and that 409
+    // costs a write unit to learn what IDAP already knew.
+    expect(republish.body.externalJobId).toBe(`${id}-2`);
+    expect(republish.body.externalJobId).not.toBe(callAt(fetchMock, 0).body.externalJobId);
+
+    // The listing block is replaced outright: it now describes a different
+    // advert, and keeping any of the old one would point at both.
+    const listing = await storedListing(id);
+    expect(listing?.jobId).toBe("ef-job-101");
+    expect(listing?.externalJobId).toBe(`${id}-2`);
+    expect(listing?.remoteStatus).toBe("active");
+  });
+
+  it("keeps suffixing on each further republish", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: {
+        jobId: "ef-job-110",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "closed",
+      },
+    });
+    const id = String(vacancy._id);
+    // A vacancy that has already been republished once carries the
+    // second-generation id, which is only knowable after creation.
+    await Vacancy.updateOne({ _id: vacancy._id }, { $set: { "listing.externalJobId": `${id}-2` } });
+    const fetchMock = stubFetch(jsonResponse(201, { jobId: "ef-job-111", status: "active" }));
+
+    await VacancyPublishService.publish("INS0001", id, actor);
+
+    expect(callAt(fetchMock, 0).body.externalJobId).toBe(`${id}-3`);
+  });
+
+  it("a live listing still PATCHes — the control for the mutation above", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: {
+        jobId: "ef-job-120",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "active",
+      },
+    });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-120", status: "active" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(callAt(fetchMock, 0).method).toBe("PATCH");
+    expect(callAt(fetchMock, 0).url).toBe(`${BASE_URL}/api/partner/jobs/${String(vacancy._id)}`);
+  });
+
+  it("repush refuses to put a closed listing back on a public board", async () => {
+    // Consent: republishing is a new publication, not an edit.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: {
+        jobId: "ef-job-130",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "closed",
+      },
+    });
+    const fetchMock = stubFetch();
+
+    await expect(
+      VacancyPublishService.repush("INS0001", String(vacancy._id), actor),
+    ).rejects.toThrow("This listing was closed on eduFleet Exchange — publish this vacancy again to create a new one");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule 3, on the patch path — eduFleet validates the MERGED record
+// ---------------------------------------------------------------------------
+
+describe("rule 3: a patch is preflighted against what eduFleet already holds", () => {
+  it("MUTATION-DISTINGUISHING: a lone minimum that inverts against the stored maximum never reaches the wire", async () => {
+    // Published at 20000-30000; the school then clears the maximum and raises
+    // the minimum to 40000. The patch would send `{salaryMin: 40000}` alone,
+    // eduFleet would merge it over its stored 30000 and 400 — after
+    // `spendWrite`. Comparing only the bounds being sent sees nothing wrong.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      salaryMin: 20000,
+      salaryMax: 30000,
+      listing: {
+        jobId: "ef-job-140",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "active",
+        remoteSalaryMin: 20000,
+        remoteSalaryMax: 30000,
+      },
+    });
+    await Vacancy.updateOne(
+      { _id: vacancy._id },
+      { $set: { salaryMin: 40000 }, $unset: { salaryMax: "" } },
+    );
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-140", status: "active" }));
+
+    await expect(
+      VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
+    ).rejects.toThrow(/still has a salary maximum of 30000/);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("records the merged pair after a successful patch, so the next one is judged against the truth", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      salaryMin: 20000,
+      salaryMax: 30000,
+      listing: {
+        jobId: "ef-job-141",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "active",
+        remoteSalaryMin: 20000,
+        remoteSalaryMax: 30000,
+      },
+    });
+    await Vacancy.updateOne({ _id: vacancy._id }, { $set: { salaryMax: 60000 } });
+    stubFetch(jsonResponse(200, { jobId: "ef-job-141", status: "active" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    const listing = await storedListing(String(vacancy._id));
+    expect(listing?.remoteSalaryMin).toBe(20000);
+    expect(listing?.remoteSalaryMax).toBe(60000);
+  });
+
+  it("a cleared bound leaves eduFleet's copy alone, and IDAP records that it did", async () => {
+    // There is no way to clear a bound over the partner API: both patch types
+    // declare `salaryMin?: number`, never null, and both routes gate on
+    // `!== undefined`. So the two sides disagree until the listing is closed
+    // and republished, and IDAP must remember eduFleet's value rather than
+    // its own.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: {
+        jobId: "ef-job-142",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date(),
+        remoteStatus: "active",
+        remoteSalaryMin: 20000,
+        remoteSalaryMax: 90000,
+      },
+    });
+    await Vacancy.updateOne({ _id: vacancy._id }, { $unset: { salaryMin: "", salaryMax: "" } });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-142", status: "active" }));
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    expect(callAt(fetchMock, 0).body.salaryMin).toBeUndefined();
+    expect(callAt(fetchMock, 0).body.salaryMax).toBeUndefined();
+    const listing = await storedListing(String(vacancy._id));
+    expect(listing?.remoteSalaryMin).toBe(20000);
+    expect(listing?.remoteSalaryMax).toBe(90000);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Rule 5 — BLOCKED is recorded, never latched
 // ---------------------------------------------------------------------------
 
@@ -617,9 +835,64 @@ describe("rule 6: CONFLICT trusts the response's contract", () => {
     // Exactly one call: a 409 has already burned a write unit, and the
     // endpoint that would "obviously" own it is the one that just refused.
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    // No listing is fabricated. eduFleet named a contract, not a jobId IDAP
-    // could address, and a made-up one would show the school a "published"
-    // vacancy pointing at nothing.
+
+    // Nothing here is fabricated — every field came off the 409 itself. The
+    // response names the contract that owns the row AND carries the existing
+    // job's id, so the advert stays addressable.
+    const listing = await storedListing(String(vacancy._id));
+    expect(listing?.jobId).toBe("ef-job-30");
+    expect(listing?.contract).toBe("AGGREGATED");
+    expect(listing?.externalJobId).toBe(String(vacancy._id));
+    expect(listing?.blockedReason).toMatch(/platform key/i);
+  });
+
+  it("MUTATION-DISTINGUISHING: the adopted id is the one a later close reaches for", async () => {
+    // The scenario this exists for: a create succeeded at eduFleet and the
+    // local write did not land, so IDAP holds a live public advert and no
+    // listing. Publishing again 409s. If the id on that 409 is discarded,
+    // `pushClose` answers NOT_LISTED with no HTTP call — which Task 5 reads
+    // as safe-to-delete, and the advert stays up forever with nothing left
+    // that can address it.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(409, {
+        error: "already exists",
+        reason: "duplicate_external_job",
+        jobId: "ef-job-orphan",
+        contract: "platform",
+      }),
+      jsonResponse(200, { jobId: "ef-job-orphan", status: "closed" }),
+    );
+
+    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+    const closed = await VacancyPublishService.pushClose("INS0001", String(vacancy._id), actor);
+
+    expect(closed.status).toBe("CLOSED");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const close = callAt(fetchMock, 1);
+    expect(close.method).toBe("PATCH");
+    expect(close.url).toBe(`${BASE_URL}/api/partner/jobs/${String(vacancy._id)}`);
+    expect(close.body).toEqual({ status: "closed" });
+  });
+
+  it("adopts nothing when the 409 carries no jobId — an unaddressable listing is worse than none", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    stubFetch(
+      jsonResponse(409, { error: "already exists", reason: "duplicate_external_job", contract: "platform" }),
+    );
+
+    const outcome = expectOutcome(
+      await VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
+      "CONFLICT",
+    );
+
+    expect(outcome.message).toMatch(/platform key/i);
+    // A listing block with no reachable id would read as "published" in every
+    // surface that shows one, while addressing nothing.
     expect(await storedListing(String(vacancy._id))).toBeUndefined();
   });
 
@@ -631,6 +904,7 @@ describe("rule 6: CONFLICT trusts the response's contract", () => {
       jsonResponse(409, {
         error: "already exists",
         reason: "duplicate_external_job",
+        jobId: "ef-job-elsewhere",
         contract: "some-future-contract",
       }),
     );
@@ -642,6 +916,9 @@ describe("rule 6: CONFLICT trusts the response's contract", () => {
 
     expect(outcome.ownedByContract).toBeUndefined();
     expect(outcome.message).toContain("some-future-contract");
+    // An id is not enough on its own: without a contract IDAP can name, there
+    // is no endpoint to address it at, so there is nothing to adopt.
+    expect(await storedListing(String(vacancy._id))).toBeUndefined();
   });
 });
 
@@ -671,9 +948,40 @@ describe("rule 7: ConnectorAuthError propagates", () => {
     const vacancy = await makeVacancy("INS0001");
     stubFetch(jsonResponse(500, { error: "boom" }));
 
-    await expect(
-      VacancyPublishService.publish("INS0001", String(vacancy._id), actor),
-    ).rejects.toMatchObject({ code: "INTERNAL_ERROR", status: 502 });
+    const error = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toMatchObject({ code: "INTERNAL_ERROR", status: 502 });
+    // An outage IS worth retrying, so this wording is honest here.
+    expect((error as Error).message).toMatch(/try again shortly/);
+  });
+
+  it("MUTATION-DISTINGUISHING: a 400 is never sold as a transient outage", async () => {
+    // `spendWrite` runs before eduFleet validates, so every retry of a
+    // deterministic refusal costs another of the school's 100 daily units.
+    // Copy that says "try again shortly" over a 400 is what spends them.
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(400, {
+        error: "Validation failed",
+        reason: "validation_failed",
+        details: [{ field: "body", message: "City is required" }],
+      }),
+    );
+
+    const error = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect((error as Error).message).not.toMatch(/try again/i);
+    // eduFleet's own words, so the school can act rather than guess.
+    expect((error as Error).message).toContain("City is required");
+    expect(fetchMock).toHaveBeenCalledTimes(1); // and never retried
+    expect(await storedListing(String(vacancy._id))).toBeUndefined();
   });
 });
 
@@ -738,6 +1046,54 @@ describe("tenant scoping", () => {
 // ---------------------------------------------------------------------------
 
 describe("repush", () => {
+  it("pushes the vacancy's current values to a listing it already has", async () => {
+    await makeInstitution("INS0001");
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: {
+        jobId: "ef-job-200",
+        contract: "AGGREGATED",
+        lastPushedAt: new Date("2026-08-01T00:00:00.000Z"),
+        claimState: "unclaimed",
+      },
+    });
+    await Vacancy.updateOne({ _id: vacancy._id }, { $set: { title: "Senior Mathematics Teacher" } });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-200", status: "active" }));
+
+    const outcome = expectOutcome(
+      await VacancyPublishService.repush("INS0001", String(vacancy._id), actor),
+      "PUSHED",
+    );
+
+    const call = callAt(fetchMock, 0);
+    expect(call.method).toBe("PATCH");
+    expect(call.body.title).toBe("Senior Mathematics Teacher");
+    expect(outcome.listing.jobId).toBe("ef-job-200");
+    expect(outcome.listing.lastPushedAt).not.toBe("2026-08-01T00:00:00.000Z");
+  });
+
+  it("MUTATION-DISTINGUISHING: patches a title edit even when the city is gone and the subject has drifted", async () => {
+    // No PATCH route reads city, institutionName or subject, so refusing this
+    // would block a correction to a live public advert over fields the
+    // request does not contain — preventing no rejection and saving no unit.
+    // The create path still checks all of them.
+    await makeInstitution("INS0001", { city: undefined });
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001", {
+      listing: { jobId: "ef-job-201", contract: "AGGREGATED", lastPushedAt: new Date() },
+    });
+    await Vacancy.collection.updateOne({ _id: vacancy._id }, { $set: { subject: "Astrology" } });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-201", status: "active" }));
+
+    const outcome = await VacancyPublishService.repush("INS0001", String(vacancy._id), actor);
+
+    expect(outcome.status).toBe("PUSHED");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // ...and neither field is sent, which is why neither can be refused.
+    expect(callAt(fetchMock, 0).body.subject).toBeUndefined();
+    expect(callAt(fetchMock, 0).body.city).toBeUndefined();
+  });
+
   it("refuses to create a listing for a vacancy the school never published", async () => {
     await makeInstitution("INS0001");
     await makeCredential();

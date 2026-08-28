@@ -627,3 +627,21 @@ export type VacancyListingContract = (typeof VACANCY_LISTING_CONTRACTS)[number];
  *  permanent retirement. */
 export const VACANCY_CLAIM_STATES = ["unclaimed", "claim_pending", "claimed"] as const;
 export type VacancyClaimState = (typeof VACANCY_CLAIM_STATES)[number];
+
+/**
+ * The status eduFleet's own `Job` carries, mirrored verbatim
+ * (`models/Job.ts:45` — `enum: ["active", "closed"]`), because IDAP has to
+ * know whether the advert a listing points at is still visible to teachers.
+ *
+ * It is NOT the same thing as the IDAP vacancy's own status. A closed job
+ * keeps its `externalJobId` forever — the dedupe pre-check
+ * (`partner-jobs.ts:126`, `partner-school-jobs.ts:67`) and the unique index
+ * (`models/Job.ts:82-91`) both filter on `{partnerId, partnerExternalJobId}`
+ * with no status condition — and neither partner contract can reopen one
+ * (Contract Two's PATCH accepts only `"closed"`). So a vacancy that is
+ * refilled and published again needs a NEW listing under a NEW
+ * `externalJobId`, which is the spec's own decision (§7) and is only
+ * possible if IDAP records that the old advert went dark.
+ */
+export const VACANCY_LISTING_REMOTE_STATUSES = ["active", "closed"] as const;
+export type VacancyListingRemoteStatus = (typeof VACANCY_LISTING_REMOTE_STATUSES)[number];

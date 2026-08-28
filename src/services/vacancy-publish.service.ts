@@ -9,12 +9,14 @@ import {
   VACANCY_CLAIM_STATES,
   type VacancyClaimState,
   type VacancyListingContract,
+  type VacancyListingRemoteStatus,
 } from "@/lib/constants";
 import { credentialVaultReady, decryptCredential } from "@/lib/security/credentials";
 import { adapterFor } from "@/lib/connectors";
 import { createConnectorHttp } from "@/lib/connectors/http";
 import {
   ConnectorAuthError,
+  ConnectorRejectedError,
   type AdapterContext,
   type ConnectionState,
   type JobPushResult,
@@ -24,7 +26,9 @@ import {
   buildAggregatedJobBody,
   buildSchoolJobBody,
   preflight,
+  preflightPatch,
   type InstitutionPushInput,
+  type RemoteJobSalary,
   type VacancyPushInput,
 } from "@/lib/connectors/edufleet-vacancy-map";
 import { ActivityService } from "./activity.service";
@@ -65,8 +69,10 @@ type Actor = { id: string; name: string };
 
 export type VacancyListingDTO = {
   jobId: string;
+  externalJobId: string;
   contract: VacancyListingContract;
   lastPushedAt: string;
+  remoteStatus: VacancyListingRemoteStatus;
   claimState?: VacancyClaimState;
   blockedReason?: string;
 };
@@ -138,12 +144,22 @@ function upstreamError(): AppError {
 }
 
 /**
- * Runs one adapter call, letting exactly two things through untouched:
- * `ConnectorAuthError` (rule 7 — the connection service's existing handler
- * discriminates it to flip the connection out of `CONNECTED`; swallowing it
- * here would leave IDAP holding a credential it already knows is dead) and
- * `AppError` (a refusal this service itself raised). Everything else becomes
- * the 502 above.
+ * Runs one adapter call and sorts what comes back out of it into three kinds.
+ *
+ * `ConnectorAuthError` and `AppError` pass through untouched — the first
+ * because rule 7 requires it (the connection service's existing handler
+ * discriminates it to flip the connection out of `CONNECTED`, and swallowing
+ * it here would leave IDAP holding a credential it already knows is dead),
+ * the second because it is a refusal this service itself raised.
+ *
+ * `ConnectorRejectedError` — a 400 — becomes a VALIDATION_ERROR carrying
+ * eduFleet's own words, deliberately NOT the 502 below. The 502 says "try
+ * again shortly", which is true of an outage and false of a 400: the same
+ * body will be refused identically, and `spendWrite` takes another of the
+ * school's 100 daily units for each attempt. Copy that invites a retry on a
+ * deterministic refusal is how a school's whole day disappears.
+ *
+ * Everything else really is a transport or server failure, and gets the 502.
  */
 async function callAdapter(run: () => Promise<JobPushResult>): Promise<JobPushResult> {
   try {
@@ -151,6 +167,14 @@ async function callAdapter(run: () => Promise<JobPushResult>): Promise<JobPushRe
   } catch (error) {
     if (error instanceof ConnectorAuthError) throw error;
     if (error instanceof AppError) throw error;
+    if (error instanceof ConnectorRejectedError) {
+      const said = error.detail ?? error.reason;
+      throw validationError(
+        said
+          ? `${LABEL} refused this vacancy: ${clip(said)}. Publishing it again unchanged will be refused again.`
+          : `${LABEL} refused this vacancy. Publishing it again unchanged will be refused again.`,
+      );
+    }
     throw upstreamError();
   }
 }
@@ -309,9 +333,15 @@ async function resolveTarget(
 // Mapping-module inputs
 // ---------------------------------------------------------------------------
 
-function toVacancyInput(vacancy: VacancyDoc): VacancyPushInput {
+/**
+ * `externalJobId` is passed in rather than taken from the vacancy: it is the
+ * vacancy id only for a vacancy's FIRST listing. `VacancyPushInput.vacancyId`
+ * is the field Task 2's builders emit as `externalJobId`, so this is the one
+ * place the id being pushed under is chosen.
+ */
+function toVacancyInput(vacancy: VacancyDoc, externalJobId: string): VacancyPushInput {
   return {
-    vacancyId: String(vacancy._id),
+    vacancyId: externalJobId,
     title: vacancy.title,
     subject: vacancy.subject,
     description: vacancy.description,
@@ -348,12 +378,7 @@ function toInstitutionInput(institution: {
  * field) and NOTHING is sent: this throws before `buildContext` has even
  * decrypted a credential.
  */
-function assertPreflight(
-  vacancy: VacancyPushInput,
-  institution: InstitutionPushInput,
-  contract: VacancyListingContract,
-): void {
-  const reasons = preflight(vacancy, institution, contract);
+function refuse(reasons: string[]): void {
   if (reasons.length === 0) return;
   throw validationError(
     reasons.length === 1
@@ -361,6 +386,24 @@ function assertPreflight(
       : `This vacancy cannot be published to ${LABEL} yet — ${reasons.length} things need fixing`,
     reasons,
   );
+}
+
+function assertPreflight(
+  vacancy: VacancyPushInput,
+  institution: InstitutionPushInput,
+  contract: VacancyListingContract,
+): void {
+  refuse(preflight(vacancy, institution, contract));
+}
+
+/**
+ * The same shield over an update, which refuses a different set because a
+ * PATCH sends a different body — see `preflightPatch`. The extra input is
+ * what eduFleet already holds: it validates the merged record, so the bounds
+ * IDAP is NOT sending are as capable of causing a 400 as the ones it is.
+ */
+function assertPreflightPatch(vacancy: VacancyPushInput, remote: RemoteJobSalary): void {
+  refuse(preflightPatch(vacancy, remote));
 }
 
 // ---------------------------------------------------------------------------
@@ -407,12 +450,48 @@ function toPatchBody(body: Record<string, unknown>): Record<string, unknown> {
  * How each contract addresses an existing job — the two are opposites, and
  * getting it backwards is a silent 404 against a listing that is very much
  * alive. Contract One's `updatePartnerJob` looks the job up by
- * `partnerExternalJobId`, which is IDAP's own vacancy id; Contract Two's
- * `updateSchoolJob` looks it up by `_id`, which is the `jobId` eduFleet
- * returned when it created the job.
+ * `partnerExternalJobId`; Contract Two's `updateSchoolJob` looks it up by
+ * `_id`, which is the `jobId` eduFleet returned when it created the job.
+ *
+ * Both halves are read from the stored listing, never rebuilt. The external
+ * id used to be derivable — it was the vacancy id — and stops being so the
+ * first time a closed listing is republished under a fresh one; deriving it
+ * after that would address the school's PREVIOUS, closed advert.
  */
-function addressOf(vacancyId: string, listing: { jobId: string; contract: VacancyListingContract }): string {
-  return listing.contract === "SCHOOL_POSTED" ? listing.jobId : vacancyId;
+function addressOf(listing: {
+  jobId: string;
+  externalJobId: string;
+  contract: VacancyListingContract;
+}): string {
+  return listing.contract === "SCHOOL_POSTED" ? listing.jobId : listing.externalJobId;
+}
+
+/**
+ * The `externalJobId` for the next listing this vacancy gets.
+ *
+ * The first is the vacancy id itself, which keeps the common case
+ * recognisable on both sides. Every later one is suffixed, because eduFleet
+ * never releases the id: a closed job still matches the dedupe pre-check
+ * (`partner-jobs.ts:126`, `partner-school-jobs.ts:67`) and still occupies the
+ * unique index (`models/Job.ts:82-91`), neither of which filters on status,
+ * so reusing it would 409 — burning a write unit to be told what IDAP could
+ * have known locally.
+ *
+ * The suffix is safe to send as-is: `partnerExternalJobId` is declared
+ * `{type: String, trim: true}` with no `maxlength`, `match` or enum, neither
+ * create path validates it beyond a non-empty trim, and the published
+ * contract types it as a bare string. `-2` adds only ASCII digits and a
+ * hyphen, which also survive Contract One's URL path segment
+ * (`/api/partner/jobs/{externalJobId}`) untouched.
+ */
+function nextExternalJobId(vacancyId: string, previous: string | undefined): string {
+  if (!previous) return vacancyId;
+  const suffixed = new RegExp(`^${vacancyId}-(\\d+)$`).exec(previous);
+  if (suffixed) return `${vacancyId}-${Number(suffixed[1]) + 1}`;
+  // `previous` is always an id this function minted, so the only remaining
+  // case is the first republish (`previous === vacancyId`). Anything else
+  // would still get a strictly different id rather than a guaranteed clash.
+  return previous === vacancyId ? `${vacancyId}-2` : `${previous}-2`;
 }
 
 // ---------------------------------------------------------------------------
@@ -441,10 +520,20 @@ function toClaimState(value: string | undefined): VacancyClaimState | undefined 
 function toListingDTO(listing: NonNullable<VacancyDoc["listing"]>): VacancyListingDTO {
   return {
     jobId: listing.jobId,
+    externalJobId: listing.externalJobId,
     contract: listing.contract as VacancyListingContract,
     lastPushedAt: listing.lastPushedAt.toISOString(),
+    remoteStatus: (listing.remoteStatus as VacancyListingRemoteStatus | undefined) ?? "active",
     claimState: (listing.claimState as VacancyClaimState | undefined) ?? undefined,
     blockedReason: listing.blockedReason ?? undefined,
+  };
+}
+
+/** What eduFleet holds for a listing, for `preflightPatch` to merge against. */
+function remoteSalaryOf(listing: NonNullable<VacancyDoc["listing"]>): RemoteJobSalary {
+  return {
+    salaryMin: listing.remoteSalaryMin ?? undefined,
+    salaryMax: listing.remoteSalaryMax ?? undefined,
   };
 }
 
@@ -547,38 +636,79 @@ async function recordBlockedReason(
   return updated?.listing ? toListingDTO(updated.listing) : undefined;
 }
 
+/**
+ * Everything one successful push needs to leave behind. Assembled by the
+ * caller that made the push, because only it knows which shape it sent.
+ */
+type PushShape = {
+  kind: "PUSHED" | "CLOSED";
+  contract: VacancyListingContract;
+  /** The id this push was made under — a fresh one whenever `create`. */
+  externalJobId: string;
+  /** True when this replaced (or first created) the listing block. */
+  create: boolean;
+  /** What eduFleet holds afterwards. Absent on a close, which changes neither
+   *  bound and must not overwrite what is recorded. */
+  remoteSalary?: RemoteJobSalary;
+};
+
 /** A successful push: the listing block is created (on a create) or refreshed
  *  (on a patch/close), and any recorded block is cleared — the push that just
  *  worked is proof the refusal is over. */
 async function recordSuccess(
   institutionId: string,
   vacancy: VacancyDoc,
-  contract: VacancyListingContract,
+  shape: PushShape,
   result: Extract<JobPushResult, { kind: "OK" }>,
 ): Promise<VacancyListingDTO> {
   const now = new Date();
   const claimState = toClaimState(result.claimState);
+  const remoteStatus: VacancyListingRemoteStatus = shape.kind === "CLOSED" ? "closed" : "active";
 
-  // A create replaces the whole sub-document; a patch/close touches only the
+  // A create replaces the whole sub-document — including on a republish, where
+  // the previous block described a different, now-closed advert and keeping
+  // any of it would mean pointing at both. A patch/close touches only the
   // fields it actually learned about. `$set` on `listing` and `$unset` on
   // `listing.blockedReason` are conflicting paths in one update, so the two
   // shapes stay separate rather than being merged.
-  const update = vacancy.listing
+  const update = shape.create
     ? {
-        $set: {
-          "listing.lastPushedAt": now,
-          ...(claimState ? { "listing.claimState": claimState } : {}),
-        },
-        $unset: { "listing.blockedReason": "" },
-      }
-    : {
         $set: {
           listing: {
             jobId: result.jobId,
-            contract,
+            externalJobId: shape.externalJobId,
+            contract: shape.contract,
             lastPushedAt: now,
+            remoteStatus,
             claimState: claimState ?? "unclaimed",
+            remoteSalaryMin: shape.remoteSalary?.salaryMin,
+            remoteSalaryMax: shape.remoteSalary?.salaryMax,
           },
+        },
+      }
+    : {
+        $set: {
+          "listing.lastPushedAt": now,
+          "listing.remoteStatus": remoteStatus,
+          ...(claimState ? { "listing.claimState": claimState } : {}),
+          // Only the bounds eduFleet now holds; the absent ones are `$unset`
+          // below rather than written as null, so "eduFleet has no maximum"
+          // and "IDAP never asked" stay the same absent state.
+          ...(shape.remoteSalary?.salaryMin !== undefined
+            ? { "listing.remoteSalaryMin": shape.remoteSalary.salaryMin }
+            : {}),
+          ...(shape.remoteSalary?.salaryMax !== undefined
+            ? { "listing.remoteSalaryMax": shape.remoteSalary.salaryMax }
+            : {}),
+        },
+        $unset: {
+          "listing.blockedReason": "",
+          ...(shape.remoteSalary && shape.remoteSalary.salaryMin === undefined
+            ? { "listing.remoteSalaryMin": "" }
+            : {}),
+          ...(shape.remoteSalary && shape.remoteSalary.salaryMax === undefined
+            ? { "listing.remoteSalaryMax": "" }
+            : {}),
         },
       };
 
@@ -590,25 +720,76 @@ async function recordSuccess(
   return toListingDTO(updated.listing);
 }
 
+/**
+ * Rule 6, second half — a `409` hands back the id of the job that already
+ * holds this `externalJobId`, and IDAP adopts it when it has nowhere else
+ * recorded.
+ *
+ * This is not a fabricated listing: every field comes from the wire (the
+ * existing job's `jobId` and the contract eduFleet says owns it) or from the
+ * id this push was made under. It matters because the collision IS the
+ * recovery path. A create that succeeded remotely and then lost its local
+ * write leaves a live, public advert with no listing block — and from there
+ * `pushClose` would answer `NOT_LISTED` with no HTTP call, which Task 5 reads
+ * as "safe to delete". The vacancy would go, the advert would stay up, and
+ * the only id that could ever have closed it was on this 409.
+ *
+ * `remoteStatus` is recorded as `active` because that is the state that
+ * keeps the advert addressable, and it is what a duplicate almost always is;
+ * if the existing job turns out to be closed, the close pushed against it is
+ * a harmless second `status: "closed"` (`jobs.ts:closeJob` assigns and saves
+ * unconditionally), which is the right way round for a guess to be wrong.
+ */
+async function adoptConflict(
+  institutionId: string,
+  vacancy: VacancyDoc,
+  externalJobId: string,
+  result: Extract<JobPushResult, { kind: "CONFLICT" }>,
+  message: string,
+): Promise<VacancyListingDTO | undefined> {
+  const contract = toContract(result.ownedByContract);
+  // No id, or a contract IDAP has no name for, means nothing addressable to
+  // record — and a listing block that cannot be addressed is worse than none,
+  // since it would read as "published" everywhere it is shown.
+  if (!result.jobId || !contract) return undefined;
+
+  const updated = await Vacancy.findOneAndUpdate(
+    { _id: vacancy._id, institutionId },
+    {
+      $set: {
+        listing: {
+          jobId: result.jobId,
+          externalJobId,
+          contract,
+          lastPushedAt: new Date(),
+          remoteStatus: "active",
+          blockedReason: message,
+        },
+      },
+    },
+    { new: true },
+  ).lean<VacancyDoc>();
+  return updated?.listing ? toListingDTO(updated.listing) : undefined;
+}
+
 /** Turns one classified answer into an outcome, and records it. */
 async function settle(
   institutionId: string,
   vacancy: VacancyDoc,
-  contract: VacancyListingContract,
+  shape: PushShape,
   result: JobPushResult,
-  kind: "PUSHED" | "CLOSED",
   actor: Actor,
 ): Promise<VacancyPublishOutcome> {
   if (result.kind === "OK") {
-    const listing = await recordSuccess(institutionId, vacancy, contract, result);
+    const listing = await recordSuccess(institutionId, vacancy, shape, result);
     await record(
       institutionId,
       vacancy,
-      kind === "CLOSED" ? "Vacancy closed on eduFleet" : "Vacancy published to eduFleet",
+      shape.kind === "CLOSED" ? "Vacancy closed on eduFleet" : "Vacancy published to eduFleet",
       `${vacancy.title} — ${LABEL} job ${listing.jobId}`,
       actor,
     );
-    return kind === "CLOSED" ? { status: "CLOSED", listing } : { status: "PUSHED", listing };
+    return shape.kind === "CLOSED" ? { status: "CLOSED", listing } : { status: "PUSHED", listing };
   }
 
   if (result.kind === "BLOCKED") {
@@ -619,7 +800,11 @@ async function settle(
   }
 
   const message = conflictMessage(result.ownedByContract);
-  const listing = await recordBlockedReason(institutionId, vacancy, message);
+  // An existing listing keeps its own identity and only records the reason;
+  // a vacancy with none adopts the id the 409 just handed back.
+  const listing = vacancy.listing
+    ? await recordBlockedReason(institutionId, vacancy, message)
+    : await adoptConflict(institutionId, vacancy, shape.externalJobId, result, message);
   await record(institutionId, vacancy, "eduFleet push conflicted", `${vacancy.title} — ${result.detail}`, actor);
   return {
     status: "CONFLICT",
@@ -634,9 +819,22 @@ async function settle(
 // ---------------------------------------------------------------------------
 
 /**
- * Create or update the listing for one vacancy. `allowCreate` is false for
- * `repush`: an edit must never be what first puts a vacancy on a public jobs
- * board (spec §10 — a vacancy is pushed only by an explicit school action).
+ * Create or update the listing for one vacancy.
+ *
+ * Which of the two it is turns on whether the advert eduFleet holds is still
+ * live, not merely on whether a listing block exists. A listing whose
+ * `remoteStatus` is `closed` points at a job no teacher can see and no
+ * partner contract can revive — Contract Two's PATCH accepts only `"closed"`,
+ * and `patchJob` refuses a `status` key on both contracts by design. PATCHing
+ * fields onto it would get a cheerful 200 back and put IDAP in the worst
+ * available state: a vacancy that reports "published" over an advert that is
+ * dead. So a closed listing is republished as a NEW one, which is the spec's
+ * own decision (§7: reopening creates a new listing rather than reviving the
+ * old one) and the only thing eduFleet actually offers.
+ *
+ * `allowCreate` is false for `repush`: an edit must never be what first puts
+ * a vacancy on a public jobs board, nor what puts it back on one (spec §10 —
+ * a vacancy is pushed only by an explicit school action).
  */
 async function pushFields(
   institutionId: string,
@@ -645,43 +843,86 @@ async function pushFields(
   allowCreate: boolean,
 ): Promise<VacancyPublishOutcome> {
   const listing = vacancy.listing ?? undefined;
-  if (!listing && !allowCreate) {
-    throw validationError(`Publish this vacancy to ${LABEL} before updating its listing`);
+  const live = listing !== undefined && listing.remoteStatus !== "closed";
+
+  if (!live && !allowCreate) {
+    throw validationError(
+      listing
+        ? `This listing was closed on ${LABEL} — publish this vacancy again to create a new one`
+        : `Publish this vacancy to ${LABEL} before updating its listing`,
+    );
   }
 
   const institution = await loadInstitution(institutionId);
-  assertCity(institution.city); // rule 2 — before anything else can spend a unit
 
   const { contract, connection } = await resolveTarget(
     institutionId,
-    listing?.contract as VacancyListingContract | undefined,
+    live ? (listing.contract as VacancyListingContract) : undefined,
   );
 
-  const vacancyInput = toVacancyInput(vacancy);
+  // The two shapes diverge here, and every difference below follows from one
+  // fact: a create sends the whole record, an update sends six fields.
+  const externalJobId = live
+    ? listing.externalJobId
+    : nextExternalJobId(String(vacancy._id), listing?.externalJobId);
+  const vacancyInput = toVacancyInput(vacancy, externalJobId);
   const institutionInput = toInstitutionInput(institution);
-  assertPreflight(vacancyInput, institutionInput, contract); // rule 3 — still no HTTP
 
   const body =
     contract === "SCHOOL_POSTED"
       ? buildSchoolJobBody(vacancyInput, institutionInput)
       : buildAggregatedJobBody(vacancyInput, institutionInput);
 
+  if (live) {
+    // No city gate and no full preflight on an update. Neither PATCH route
+    // reads `city`, `institutionName` or `subject`, so refusing a title or
+    // salary edit because one of those is missing would refuse a request that
+    // does not contain them — a refusal that prevents no rejection and saves
+    // no write unit, while leaving a school unable to correct a typo on a
+    // live public advert. The create path below still checks all of it, which
+    // is where those fields are actually sent.
+    assertPreflightPatch(vacancyInput, remoteSalaryOf(listing)); // rule 3, patch-shaped
+  } else {
+    assertCity(institution.city); // rule 2 — before anything else can spend a unit
+    assertPreflight(vacancyInput, institutionInput, contract); // rule 3 — still no HTTP
+  }
+
   const adapter = jobAdapter();
   const ctx = await buildContext();
 
   const result = await callAdapter(() =>
-    listing
-      ? adapter.patchJob(
-          ctx,
-          connection,
-          addressOf(String(vacancy._id), { jobId: listing.jobId, contract }),
-          toPatchBody(body),
-          contract,
-        )
+    live
+      ? adapter.patchJob(ctx, connection, addressOf({ ...listing, contract }), toPatchBody(body), contract)
       : adapter.createJob(ctx, connection, body, contract),
   );
 
-  return settle(institutionId, vacancy, contract, result, "PUSHED", actor);
+  return settle(
+    institutionId,
+    vacancy,
+    {
+      kind: "PUSHED",
+      contract,
+      externalJobId,
+      create: !live,
+      // What eduFleet holds once this lands: on a create, exactly what was
+      // sent; on an update, the merge of what was sent over what it already
+      // had, since an omitted bound leaves the stored one alone and no value
+      // means "clear it" (see `preflightPatch`).
+      // `toPatchBody` forwards these two straight from `body`, so reading
+      // them here is reading exactly what was sent.
+      remoteSalary: live
+        ? {
+            salaryMin: (body.salaryMin as number | undefined) ?? listing.remoteSalaryMin ?? undefined,
+            salaryMax: (body.salaryMax as number | undefined) ?? listing.remoteSalaryMax ?? undefined,
+          }
+        : {
+            salaryMin: body.salaryMin as number | undefined,
+            salaryMax: body.salaryMax as number | undefined,
+          },
+    },
+    result,
+    actor,
+  );
 }
 
 /**
@@ -713,15 +954,20 @@ async function pushCloseFor(
   const ctx = await buildContext();
 
   const result = await callAdapter(() =>
-    adapter.closeJob(
-      ctx,
-      connection,
-      addressOf(String(vacancy._id), { jobId: listing.jobId, contract }),
-      contract,
-    ),
+    adapter.closeJob(ctx, connection, addressOf({ ...listing, contract }), contract),
   );
 
-  return settle(institutionId, vacancy, contract, result, "CLOSED", actor);
+  // `create: false` and no `remoteSalary`: a close changes neither bound, and
+  // writing the pair again from a body that never carried one would erase what
+  // eduFleet still holds. `kind: "CLOSED"` is what flips `remoteStatus`, which
+  // is what lets a later publish know to mint a new listing.
+  return settle(
+    institutionId,
+    vacancy,
+    { kind: "CLOSED", contract, externalJobId: listing.externalJobId, create: false },
+    result,
+    actor,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -755,7 +1001,9 @@ export const VacancyPublishService = {
    * Push the vacancy's current values to a listing it already has — the hook
    * an edit uses. Identical to `publish` in every respect but one: it never
    * creates. A vacancy the school never chose to publish stays unpublished,
-   * whatever is edited on it.
+   * whatever is edited on it — and so does one whose listing was closed,
+   * since putting that back on a public jobs board is a new publication, not
+   * an edit.
    */
   async repush(institutionId: string, vacancyId: string, actor: Actor): Promise<VacancyPublishOutcome> {
     await connectToDatabase();

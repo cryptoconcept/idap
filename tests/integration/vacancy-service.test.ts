@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Types } from "mongoose";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { Vacancy, Activity } from "@/models";
@@ -154,18 +155,49 @@ describe("Vacancy model: listing block", () => {
     const v = await Vacancy.create({
       institutionId: "INS0001", title: "Maths Teacher", subject: "Mathematics",
       description: "Teach maths", status: "OPEN",
-      listing: { jobId: "job-1", contract: "AGGREGATED", lastPushedAt: new Date(), claimState: "unclaimed" },
+      listing: {
+        jobId: "job-1", externalJobId: String(new Types.ObjectId()),
+        contract: "AGGREGATED", lastPushedAt: new Date(), claimState: "unclaimed",
+      },
     });
     const found = await Vacancy.findById(v._id).lean();
     expect(found?.listing?.jobId).toBe("job-1");
     expect(found?.listing?.contract).toBe("AGGREGATED");
+    // eduFleet's own vocabulary, and the default that matters: a listing is
+    // live until a close says otherwise.
+    expect(found?.listing?.remoteStatus).toBe("active");
+  });
+
+  it("MUTATION-DISTINGUISHING: rejects a listing with no externalJobId", async () => {
+    // The id eduFleet dedupes on is stored, never derived: it is the vacancy
+    // id only until the first republish. A listing that omits it would send a
+    // later reader back to deriving it, and the derived value would address
+    // the previous, closed advert.
+    await expect(
+      Vacancy.create({
+        institutionId: "INS0001", title: "T", subject: "Mathematics", description: "d",
+        listing: { jobId: "j", contract: "AGGREGATED", lastPushedAt: new Date() },
+      }),
+    ).rejects.toThrow(/externalJobId/);
+  });
+
+  it("rejects a remote status outside eduFleet's own enum", async () => {
+    await expect(
+      Vacancy.create({
+        institutionId: "INS0001", title: "T", subject: "Mathematics", description: "d",
+        listing: {
+          jobId: "j", externalJobId: "x", contract: "AGGREGATED",
+          lastPushedAt: new Date(), remoteStatus: "paused",
+        },
+      }),
+    ).rejects.toThrow(/remoteStatus/);
   });
 
   it("MUTATION-DISTINGUISHING: rejects a listing contract outside the enum", async () => {
     await expect(
       Vacancy.create({
         institutionId: "INS0001", title: "T", subject: "Mathematics", description: "d",
-        listing: { jobId: "j", contract: "NOT_A_CONTRACT", lastPushedAt: new Date() },
+        listing: { jobId: "j", externalJobId: "x", contract: "NOT_A_CONTRACT", lastPushedAt: new Date() },
       }),
     ).rejects.toThrow(/contract/);
   });

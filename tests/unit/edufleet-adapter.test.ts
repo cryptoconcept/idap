@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ConnectorHttp } from "@/lib/connectors/http";
 import type { AdapterContext, ConnectionState, InstitutionSummary, SyncSourceData } from "@/lib/connectors/types";
-import { ConnectorAuthError } from "@/lib/connectors/types";
+import { ConnectorAuthError, ConnectorRejectedError } from "@/lib/connectors/types";
 import { edufleetAdapter } from "@/lib/connectors/edufleet";
 
 // ---------------------------------------------------------------------------
@@ -772,8 +772,49 @@ describe("edufleetAdapter", () => {
       expect(result).toEqual({
         kind: "CONFLICT",
         ownedByContract: "school",
+        // The existing job's id, kept rather than dropped: it is the only
+        // handle IDAP is ever offered on an advert it created but failed to
+        // record, and without it that advert can never be closed.
+        jobId: "job-owned-by-school",
         detail: expect.any(String),
       });
+    });
+
+    it("MUTATION-DISTINGUISHING: a 400 throws ConnectorRejectedError, not a plain Error, carrying eduFleet's own words", async () => {
+      // A 400 is deterministic and has already cost a write unit. Telling
+      // these apart from an outage is what stops a caller writing "try again
+      // shortly" over a refusal that will repeat identically — at one of the
+      // school's 100 daily units per attempt.
+      const http = vi.fn().mockResolvedValue({
+        status: 400,
+        body: {
+          error: "Validation failed",
+          reason: "validation_failed",
+          details: [{ field: "body", message: '"Astrophysics" is not in the job taxonomy' }],
+        },
+      });
+      const ctx = makeCtx(http);
+
+      const error = await edufleetAdapter
+        .createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED")
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(ConnectorRejectedError);
+      expect((error as ConnectorRejectedError).reason).toBe("validation_failed");
+      expect((error as ConnectorRejectedError).detail).toBe('"Astrophysics" is not in the job taxonomy');
+      expect(http).toHaveBeenCalledTimes(1); // never retried
+    });
+
+    it("a 500 stays a plain Error — an outage genuinely is worth retrying", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 500, body: { error: "boom" } });
+      const ctx = makeCtx(http);
+
+      const error = await edufleetAdapter
+        .createJob!(ctx, makeConnection(), AGGREGATED_BODY, "AGGREGATED")
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(ConnectorRejectedError);
     });
 
     it("throws when a 409 carries no contract field to trust", async () => {

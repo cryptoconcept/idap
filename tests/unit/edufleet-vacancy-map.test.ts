@@ -3,6 +3,7 @@ import {
   buildAggregatedJobBody,
   buildSchoolJobBody,
   preflight,
+  preflightPatch,
   type InstitutionPushInput,
   type VacancyPushInput,
 } from "@/lib/connectors/edufleet-vacancy-map";
@@ -66,6 +67,71 @@ describe("preflight", () => {
     // present, burning a write unit.
     const reasons = preflight(vac(), { institutionName: "DPS", branchId: "br-1" }, "AGGREGATED");
     expect(reasons).toContainEqual(expect.stringContaining("city"));
+  });
+});
+
+describe("preflightPatch", () => {
+  it("MUTATION-DISTINGUISHING: refuses a lone minimum that inverts against the maximum eduFleet still holds", () => {
+    // The pair is fine in IDAP — there is no maximum to conflict with. It is
+    // eduFleet that still holds 30000 and merges the patch over it
+    // (`assertValidNumbers(job.salaryMin, job.salaryMax, …)`), so comparing
+    // only what is being sent sees nothing and the 400 costs a write unit.
+    const reasons = preflightPatch(vac({ salaryMin: 40000 }), { salaryMax: 30000 });
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("30000");
+    expect(reasons[0]).toContain("40000");
+    // The wording must be actionable to someone whose own form shows no
+    // maximum at all, so it names eduFleet's stored value rather than saying
+    // "the minimum cannot exceed the maximum".
+    expect(reasons[0]).toContain("close this listing and publish it again");
+  });
+
+  it("refuses the mirror case — a lone maximum below the minimum eduFleet holds", () => {
+    const reasons = preflightPatch(vac({ salaryMax: 10000 }), { salaryMin: 40000 });
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain("40000");
+  });
+
+  it("uses the plain wording when both bounds are being sent, since the school can see the pair", () => {
+    expect(preflightPatch(vac({ salaryMin: 50000, salaryMax: 10000 }), { salaryMax: 90000 })).toEqual([
+      "The salary minimum cannot exceed the maximum",
+    ]);
+  });
+
+  it("passes when the bound being sent clears the one eduFleet holds", () => {
+    expect(preflightPatch(vac({ salaryMin: 20000 }), { salaryMax: 30000 })).toEqual([]);
+  });
+
+  it("passes when eduFleet holds nothing to merge against", () => {
+    expect(preflightPatch(vac({ salaryMin: 40000 }), {})).toEqual([]);
+    expect(preflightPatch(vac({ salaryMin: 40000 }))).toEqual([]);
+  });
+
+  it("MUTATION-DISTINGUISHING: ignores subject, institutionName and city — no PATCH route reads them", () => {
+    // The create-time preflight refuses all three. Refusing them again on an
+    // update would block a title fix on a live public advert over fields the
+    // request does not contain, preventing no rejection and saving no unit.
+    expect(preflightPatch(vac({ subject: "Astrology" }), {})).toEqual([]);
+    expect(preflight(vac({ subject: "Astrology" }), inst(), "AGGREGATED")).not.toEqual([]);
+  });
+
+  it("still refuses an empty title or description, which is what both routes DO check", () => {
+    // Title: `if (!patch.title.trim()) throw` on both. Description: neither
+    // route checks it, and eduFleet's schema requires it — so an empty one
+    // escapes as an uncataloged 500 after taking the write unit.
+    expect(preflightPatch(vac({ title: "   " }), {})).toEqual([
+      "A vacancy needs a title before it can be published to eduFleet",
+    ]);
+    expect(preflightPatch(vac({ description: "" }), {})).toEqual([
+      "A vacancy needs a description before it can be published to eduFleet",
+    ]);
+  });
+
+  it("refuses a negative experience, which both routes validate", () => {
+    expect(preflightPatch(vac({ experienceRequired: -1 }), {})).toEqual([
+      "Experience required cannot be negative",
+    ]);
   });
 });
 

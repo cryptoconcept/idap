@@ -2,6 +2,7 @@ import { type InferSchemaType, type Model, Schema, type Types, model, models } f
 import {
   VACANCY_CLAIM_STATES,
   VACANCY_LISTING_CONTRACTS,
+  VACANCY_LISTING_REMOTE_STATUSES,
   VACANCY_STATUSES,
   VACANCY_SUBJECTS,
 } from "@/lib/constants";
@@ -20,9 +21,34 @@ const VacancySchema = new Schema(
     listing: {
       type: {
         jobId: { type: String, required: true, trim: true },
+        // The id eduFleet dedupes on, stored rather than derived. It STARTS
+        // life as the vacancy id and stops being it the first time a closed
+        // listing is republished: a closed job keeps its `externalJobId`
+        // permanently (no status filter on either the dedupe pre-check or the
+        // unique index), so the replacement listing must carry a fresh one.
+        // Required, and never defaulted back to the vacancy id, so no code
+        // path can silently re-derive the id of a job that is no longer the
+        // one this listing points at.
+        externalJobId: { type: String, required: true, trim: true },
         contract: { type: String, required: true, enum: VACANCY_LISTING_CONTRACTS },
         lastPushedAt: { type: Date, required: true },
         claimState: { type: String, enum: VACANCY_CLAIM_STATES, default: "unclaimed" },
+        // Whether the advert is still visible to teachers on eduFleet, in
+        // eduFleet's own vocabulary. `closed` is what tells a later publish to
+        // mint a new listing instead of PATCHing fields onto a dead advert and
+        // reporting success.
+        remoteStatus: {
+          type: String,
+          enum: VACANCY_LISTING_REMOTE_STATUSES,
+          default: "active",
+        },
+        // The salary pair eduFleet holds after the last successful push.
+        // eduFleet re-validates the MERGED record on a PATCH, and a partner
+        // update has no way to clear a bound it already stored, so IDAP has to
+        // remember what is over there to predict whether the next patch would
+        // be rejected. Absent means eduFleet holds no bound.
+        remoteSalaryMin: { type: Number, min: 0 },
+        remoteSalaryMax: { type: Number, min: 0 },
         // Why a push is currently refused, when eduFleet answers 403. Free
         // text because two of the four triggers are reversible and IDAP
         // re-checks rather than latching — see the Global Constraints.

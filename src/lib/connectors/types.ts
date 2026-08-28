@@ -86,18 +86,27 @@ export type AdapterContext = { baseUrl: string; platformKey: string; http: Conne
  *   — `externalJobId` uniqueness is shared across both contracts, so a
  *   same-id collision raised by the *other* contract must be told apart from
  *   one raised by this one (a retry against the wrong contract's PATCH
- *   endpoint 404s).
+ *   endpoint 404s). `jobId` is the EXISTING job's id, which eduFleet also
+ *   puts on the 409 (`PartnerJobError` carries `existing.id`/`clash.id`/
+ *   `raced.id`, and both create routes spread it into the body). Keeping it
+ *   is what makes an orphan recoverable: if a create succeeded remotely but
+ *   the local record never landed, this 409 is the only place the live
+ *   advert's id is ever offered again, and a caller that discards it is left
+ *   with a public listing it can no longer address or close. Optional
+ *   because a hostile or future body might omit it.
  *
- * Every other non-2xx (400, 404, 429, 500, or a 401 that isn't `revoked`)
- * throws instead — there is no route back to a usable result from those, and
- * `spendWrite` running before validation means a `400`/`409` already cost a
- * write unit, which is exactly why the adapter methods that produce this
- * type never retry on their own.
+ * Every other non-2xx (404, 429, 500, or a 401 that isn't `revoked`) throws
+ * instead — there is no route back to a usable result from those. A `400`
+ * throws too, but as a `ConnectorRejectedError` rather than a plain `Error`,
+ * because it is a deterministic refusal rather than an outage and must not
+ * be reported to a human as something to retry. `spendWrite` running before
+ * validation means a `400`/`409` already cost a write unit, which is exactly
+ * why the adapter methods that produce this type never retry on their own.
  */
 export type JobPushResult =
   | { kind: "OK"; jobId: string; claimState?: string }
   | { kind: "BLOCKED"; reason: string; detail: string }
-  | { kind: "CONFLICT"; ownedByContract: string; detail: string };
+  | { kind: "CONFLICT"; ownedByContract: string; jobId?: string; detail: string };
 
 export interface PlatformAdapter {
   platform: Platform;
@@ -163,6 +172,31 @@ export type SyncSourceData = {
  * reached the (public) listing. Both default to `[]` so existing call sites
  * that construct this with just a message keep working unchanged.
  */
+/**
+ * Thrown by a platform adapter when the remote platform refuses a request on
+ * its merits (HTTP 400) rather than failing to serve it. The distinction is
+ * not pedantry: a transport failure or a 5xx is worth retrying and is
+ * honestly described to a human as "try again shortly", whereas a 400 is
+ * 100% reproducible — the identical request will be refused identically, and
+ * on eduFleet's job routes each attempt burns another of the school's daily
+ * write units before validation even runs. Copy that invites a retry is
+ * therefore actively expensive, and the caller needs to be able to tell the
+ * two apart to avoid writing it.
+ *
+ * `reason` and `detail` carry the remote's own machine reason and first field
+ * message where it supplied them, so a caller can surface what the platform
+ * actually objected to instead of a generic refusal.
+ */
+export class ConnectorRejectedError extends Error {
+  constructor(
+    message: string,
+    public readonly reason?: string,
+    public readonly detail?: string,
+  ) {
+    super(message);
+  }
+}
+
 export class ConnectorAuthError extends Error {
   constructor(
     message: string,

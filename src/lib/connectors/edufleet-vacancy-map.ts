@@ -100,6 +100,20 @@ function sanitizeFacilities(input: string[] | undefined): string[] | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Reasons shared by both preflights
+//
+// `preflight` (a create) and `preflightPatch` (an update) refuse different
+// sets of things, because eduFleet's two route shapes validate different
+// things — but where they refuse the SAME thing they must say it the same
+// way, so the strings live here once rather than being typed twice.
+// ---------------------------------------------------------------------------
+
+const TITLE_REQUIRED = "A vacancy needs a title before it can be published to eduFleet";
+const DESCRIPTION_REQUIRED = "A vacancy needs a description before it can be published to eduFleet";
+const EXPERIENCE_NEGATIVE = "Experience required cannot be negative";
+const SALARY_ORDER = "The salary minimum cannot exceed the maximum";
+
+// ---------------------------------------------------------------------------
 // preflight
 // ---------------------------------------------------------------------------
 
@@ -134,19 +148,19 @@ export function preflight(
   const reasons: string[] = [];
 
   if (v.title.trim().length === 0) {
-    reasons.push("A vacancy needs a title before it can be published to eduFleet");
+    reasons.push(TITLE_REQUIRED);
   }
   if (v.description.trim().length === 0) {
-    reasons.push("A vacancy needs a description before it can be published to eduFleet");
+    reasons.push(DESCRIPTION_REQUIRED);
   }
   if (!KNOWN_SUBJECTS.has(v.subject)) {
     reasons.push(`"${v.subject}" is not one of eduFleet's job subjects — pick one from the subject list`);
   }
   if (v.salaryMin !== undefined && v.salaryMax !== undefined && v.salaryMin > v.salaryMax) {
-    reasons.push("The salary minimum cannot exceed the maximum");
+    reasons.push(SALARY_ORDER);
   }
   if (v.experienceRequired !== undefined && v.experienceRequired < 0) {
-    reasons.push("Experience required cannot be negative");
+    reasons.push(EXPERIENCE_NEGATIVE);
   }
 
   if (contract === "AGGREGATED" && i.institutionName.trim().length === 0) {
@@ -169,6 +183,88 @@ export function preflight(
   const hasLocation = contract === "AGGREGATED" ? hasCity : hasCity || hasBranchId;
   if (!hasLocation) {
     reasons.push("eduFleet needs a city on the institution profile before a job can be published");
+  }
+
+  return reasons;
+}
+
+// ---------------------------------------------------------------------------
+// preflightPatch
+// ---------------------------------------------------------------------------
+
+/** The salary pair eduFleet already holds for a listing, as far as IDAP
+ *  knows — i.e. what it will merge an update against. */
+export type RemoteJobSalary = { salaryMin?: number; salaryMax?: number };
+
+/**
+ * Explains the one refusal a school cannot work out from its own form: the
+ * pair IS valid in IDAP, and would still be rejected, because eduFleet keeps
+ * a bound this update does not mention and cannot clear.
+ */
+function mergedSalaryReason(v: VacancyPushInput, remote: RemoteJobSalary): string {
+  return v.salaryMax === undefined
+    ? `eduFleet still has a salary maximum of ${remote.salaryMax} on this listing and an update cannot clear it, so a minimum of ${v.salaryMin} would be rejected. Set a maximum of at least ${v.salaryMin}, or close this listing and publish it again.`
+    : `eduFleet still has a salary minimum of ${remote.salaryMin} on this listing and an update cannot clear it, so a maximum of ${v.salaryMax} would be rejected. Set a minimum of at most ${v.salaryMax}, or close this listing and publish it again.`;
+}
+
+/**
+ * `preflight` for an UPDATE rather than a create. Two things make it a
+ * different function rather than a flag on the first one.
+ *
+ * **It checks fewer fields, because a PATCH carries fewer.** Neither update
+ * route reads `subject`, `institutionName` or `city`
+ * (`PartnerJobPatch`/`SchoolJobPatch` declare none of them, and
+ * `updatePartnerJob`/`updateSchoolJob` never look), so refusing an update
+ * over any of those would refuse a legitimate title or salary edit for a
+ * field the request does not contain — a refusal that saves no write unit
+ * because there was no rejection to prevent. What both routes DO check is
+ * the title (`if (!patch.title.trim()) throw`) and the numbers; the
+ * description is checked here too because neither route validates it and an
+ * empty one would fail eduFleet's own `required` schema path
+ * (`models/Job.ts:35`) as an uncataloged 500 — after taking the write unit.
+ *
+ * **It checks the salary against the MERGED record, not the sent one.**
+ * eduFleet applies the patch and then validates what it holds
+ * (`assertValidNumbers(job.salaryMin, job.salaryMax, ...)`,
+ * `partner-jobs.ts:241` and `partner-school-jobs.ts:163`), so a lone
+ * `salaryMin: 40000` sent against a stored maximum of 30000 is a 400 that
+ * comparing only the sent values cannot see. `remote` is what eduFleet holds;
+ * a bound absent from `v` is one this update will not mention, so eduFleet
+ * keeps its own.
+ *
+ * A note that belongs with the mechanism rather than in a report: **there is
+ * no way to clear a bound once it is published.** Both patch types declare
+ * `salaryMin?: number` — never `null` — and both routes gate on
+ * `!== undefined`, so an omitted bound means "unchanged" and there is no
+ * value that means "remove". (A literal `null` would slip through today
+ * only because the routes cast `await req.json()` with no runtime validation;
+ * it is undeclared, untested on their side, and would break the moment they
+ * add one, at the cost of a write unit each time. IDAP does not send it.)
+ * A salary cleared in IDAP therefore stays on eduFleet's copy permanently,
+ * and the two disagree until the listing is closed and republished.
+ */
+export function preflightPatch(v: VacancyPushInput, remote: RemoteJobSalary = {}): string[] {
+  const reasons: string[] = [];
+
+  if (v.title.trim().length === 0) {
+    reasons.push(TITLE_REQUIRED);
+  }
+  if (v.description.trim().length === 0) {
+    reasons.push(DESCRIPTION_REQUIRED);
+  }
+  if (v.experienceRequired !== undefined && v.experienceRequired < 0) {
+    reasons.push(EXPERIENCE_NEGATIVE);
+  }
+
+  const effectiveMin = v.salaryMin ?? remote.salaryMin;
+  const effectiveMax = v.salaryMax ?? remote.salaryMax;
+  if (effectiveMin !== undefined && effectiveMax !== undefined && effectiveMin > effectiveMax) {
+    // When both bounds are being sent, the pair the school can see is the
+    // one at fault and the plain wording is right. Otherwise the inversion
+    // exists only after the merge, and saying "minimum cannot exceed the
+    // maximum" to someone whose form shows no maximum is unactionable.
+    const bothSent = v.salaryMin !== undefined && v.salaryMax !== undefined;
+    reasons.push(bothSent ? SALARY_ORDER : mergedSalaryReason(v, remote));
   }
 
   return reasons;

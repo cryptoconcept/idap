@@ -22,7 +22,7 @@
  * `./http`'s docblock. It throws only on a network failure or a timeout.
  */
 
-import { ConnectorAuthError } from "./types";
+import { ConnectorAuthError, ConnectorRejectedError } from "./types";
 import type {
   AdapterContext,
   ConnectionState,
@@ -557,7 +557,24 @@ function classifyJobPush(resp: { status: number; body: unknown }): JobPushResult
         `eduFleet: duplicate externalJobId, but the response carried no contract field to trust (${describeFailure(resp)})`,
       );
     }
-    return { kind: "CONFLICT", ownedByContract, detail: describeFailure(resp) };
+    // The existing job's id, forwarded rather than dropped. It is the only
+    // handle IDAP is ever offered on a job it pushed but failed to record —
+    // without it a create that succeeded remotely and lost its local write
+    // leaves a live, public, permanently unaddressable advert.
+    return { kind: "CONFLICT", ownedByContract, jobId: str(body.jobId), detail: describeFailure(resp) };
+  }
+
+  // A 400 is deterministic: the same body will be refused the same way, and
+  // `spendWrite` has already taken a unit for the privilege. It throws its own
+  // error type so a caller cannot mistake it for the transient failure below
+  // and tell a school to try again — which would cost a unit per attempt.
+  if (resp.status === 400) {
+    const body = rec(resp.body);
+    throw new ConnectorRejectedError(
+      `eduFleet: job push rejected (${describeFailure(resp)})`,
+      str(body?.reason),
+      str(rec((arr(body?.details) ?? [])[0])?.message),
+    );
   }
 
   throw new Error(`eduFleet: job push failed (${describeFailure(resp)})`);
