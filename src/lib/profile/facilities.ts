@@ -101,3 +101,41 @@ export const LEGACY_FACILITY_CODE_MAP: Record<string, string> = {
  * would invent claims. Both are reported for an admin to re-pick.
  */
 export const UNMAPPABLE_LEGACY_CODES: string[] = ["HOSTEL", "SPORTS"];
+
+/**
+ * `LEGACY_FACILITY_CODE_MAP` keyed the other way round — new code to the
+ * legacy code that means the same thing — derived from that map rather than
+ * duplicated by hand, so the two can never drift out of sync. `HOSTEL` and
+ * `SPORTS` never appear here: they are absent from `LEGACY_FACILITY_CODE_MAP`
+ * by design (see `UNMAPPABLE_LEGACY_CODES`), so nothing in this reverse map
+ * can ever point at them either.
+ */
+const NEW_TO_LEGACY_FACILITY_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(LEGACY_FACILITY_CODE_MAP).map(([legacy, current]) => [current, legacy]),
+);
+
+/**
+ * Whether `code` (always a new-vocabulary code — every caller passes a
+ * `FACILITY_GROUPS` chip or a freshly `toFacilityCode`-derived one) is
+ * already represented among `selectedCodes`, treating an un-migrated legacy
+ * row as equivalent to the new code it will become.
+ *
+ * This matters at every institution, not just stale ones: `migrate:
+ * facility-codes --apply` has never been run, so EVERY institution is
+ * carrying old-vocabulary codes like `LIBRARY` for the entire window between
+ * deploy and migration. Without this equivalence, the `library` chip reads
+ * as unpressed against a stored `LIBRARY` row, and one click appends a
+ * second, redundant `library` entry alongside the untouched `LIBRARY` one —
+ * reproduced in the browser during Task 13's verification.
+ *
+ * Display and duplicate-prevention ONLY: this never rewrites `selectedCodes`
+ * and never touches the stored row. Converting `LIBRARY` to `library` is the
+ * migration script's job — doing it silently from here, on render or on a
+ * click the admin didn't intend as an edit, would be an unrequested write.
+ * Removing the legacy row (by deselecting it) is a different, admin-driven
+ * action and is unaffected by this function.
+ */
+export function isFacilitySelected(selectedCodes: string[], code: string): boolean {
+  const legacyEquivalent = NEW_TO_LEGACY_FACILITY_CODE[code];
+  return selectedCodes.some((selected) => selected === code || selected === legacyEquivalent);
+}

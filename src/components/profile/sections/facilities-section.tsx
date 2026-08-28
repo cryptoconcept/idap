@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, TriangleAlert, X } from "lucide-react";
 import type { z } from "zod";
 import { updateProfileSchema } from "@/lib/validation/institution";
-import { FACILITY_GROUPS, UNMAPPABLE_LEGACY_CODES } from "@/lib/profile/facilities";
+import { FACILITY_GROUPS, isFacilitySelected, UNMAPPABLE_LEGACY_CODES } from "@/lib/profile/facilities";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,7 +87,12 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
         name="facilities"
         render={({ field }) => {
           const selected: Facility[] = field.value ?? [];
-          const has = (code: string) => selected.some((entry) => entry.code === code);
+          const selectedCodes = selected.map((entry) => entry.code);
+          // A stored legacy code (e.g. `LIBRARY`) reads as equivalent to the
+          // new code it maps to (`library`) for both the chip's pressed state
+          // and this duplicate guard — see `isFacilitySelected`'s doc comment
+          // for why plain equality alone is wrong here.
+          const has = (code: string) => isFacilitySelected(selectedCodes, code);
 
           function addFacility(code: string, label: string) {
             if (!code || !label) return;

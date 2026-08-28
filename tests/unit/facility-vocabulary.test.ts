@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   FACILITY_GROUPS,
   FACILITY_CODES,
+  isFacilitySelected,
   LEGACY_FACILITY_CODE_MAP,
   UNMAPPABLE_LEGACY_CODES,
 } from "@/lib/profile/facilities";
@@ -93,5 +94,64 @@ describe("facility vocabulary", () => {
     expect(UNMAPPABLE_LEGACY_CODES).toEqual(["HOSTEL", "SPORTS"]);
     expect(LEGACY_FACILITY_CODE_MAP).not.toHaveProperty("HOSTEL");
     expect(LEGACY_FACILITY_CODE_MAP).not.toHaveProperty("SPORTS");
+  });
+});
+
+describe("isFacilitySelected", () => {
+  // Every institution is un-migrated at deploy time (`migrate:facility-codes
+  // --apply` has never been run), so an admin's stored `facilities` array is
+  // full of these old-vocabulary codes for the entire window between deploy
+  // and migration — this is not an edge case for stale data, it is the
+  // starting state for every school. Found via Task 13's browser
+  // verification: without this equivalence, the `library` chip read as
+  // unpressed against a stored `LIBRARY` row, and one click appended a
+  // second `library` row alongside the untouched `LIBRARY` one.
+
+  // MUTATION-DISTINGUISHING: with the legacy-equivalence lookup removed
+  // (i.e. `isFacilitySelected` falling back to plain `===` membership), this
+  // is the one that fails — `LIBRARY` a legacy code and `library` a new one,
+  // so only the reverse-lookup path can equate them.
+  it("treats a stored LIBRARY row as the library chip already being selected", () => {
+    expect(isFacilitySelected(["LIBRARY"], "library")).toBe(true);
+  });
+
+  it("treats a stored library row as the library chip already being selected", () => {
+    expect(isFacilitySelected(["library"], "library")).toBe(true);
+  });
+
+  it("does not match a stored HOSTEL row to any chip in the vocabulary", () => {
+    // HOSTEL is deliberately absent from LEGACY_FACILITY_CODE_MAP (it must
+    // keep its "needs re-picking" marker, not silently pair off with
+    // boys_hostel or girls_hostel), so no code in the whole vocabulary — not
+    // just the two boarding codes — may read as selected because of it.
+    for (const code of FACILITY_CODES) {
+      expect(isFacilitySelected(["HOSTEL"], code)).toBe(false);
+    }
+  });
+
+  it("does not match a stored SPORTS row to any chip in the vocabulary", () => {
+    for (const code of FACILITY_CODES) {
+      expect(isFacilitySelected(["SPORTS"], code)).toBe(false);
+    }
+  });
+
+  it("does not match a stored custom code to any chip in the vocabulary", () => {
+    // ROBOTICS_LAB is an admin-invented code, not a legacy PassPercent one —
+    // it must not fuzzy- or substring-match "robotics" or anything else.
+    for (const code of FACILITY_CODES) {
+      expect(isFacilitySelected(["ROBOTICS_LAB"], code)).toBe(false);
+    }
+  });
+
+  // This is the guard `FacilitiesSection`'s `has()` — and therefore
+  // `addFacility` — actually calls. If a legacy row is already present,
+  // pressing the equivalent chip must read as "already selected" rather than
+  // appending a second, redundant row for the same real-world facility.
+  it("reports the library chip as already selected when a legacy LIBRARY row is present, so adding it again is a no-op", () => {
+    const selectedCodes = ["LIBRARY"];
+    expect(isFacilitySelected(selectedCodes, "library")).toBe(true);
+    // The component only pushes a new row when `has(code)` is false — this
+    // is exactly that check, on the exact codes a real un-migrated
+    // institution would have stored.
   });
 });
