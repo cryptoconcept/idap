@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Award,
@@ -14,6 +14,7 @@ import {
   Pencil,
   Plus,
   Trash2,
+  TriangleAlert,
   Upload,
   Users,
   X,
@@ -444,15 +445,15 @@ function AssetGroup({
         <p className="text-xs text-muted-foreground italic">No {noun} yet.</p>
       ) : isPhoto ? (
         <ul className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-          {keys.map((key) => (
+          {keys.map((key, index) => (
             <li key={key} className="relative aspect-square overflow-hidden rounded-md border border-border bg-muted/40">
-              <Image src={key} alt="Achievement photo" fill unoptimized sizes="100px" className="object-cover" />
+              <Image src={key} alt={`Achievement photo ${index + 1}`} fill unoptimized sizes="100px" className="object-cover" />
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-xs"
                 disabled={removingKey === key}
-                aria-label="Remove photo"
+                aria-label={`Remove photo ${index + 1}`}
                 onClick={() => onRemove(key)}
                 className="absolute top-1 right-1 bg-background/90 hover:bg-background"
               >
@@ -780,21 +781,47 @@ function AchievementCard({
 }
 
 export function AchievementsSection() {
+  // `achievements` is `null` for both "still loading" and "the load failed" —
+  // `loadFailed` is what tells those two apart. A failed fetch must NOT fall
+  // back to `[]`: that reads identically to a genuine empty list, and an
+  // admin who glances away sees "no achievements yet" for what is actually a
+  // network hiccup — reasonable grounds to conclude their data is gone, or to
+  // start re-entering records that still exist server-side.
   const [achievements, setAchievements] = useState<AchievementDTO[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [statusBusyId, setStatusBusyId] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<AchievementDTO | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [dialogState, setDialogState] = useState<DialogState | null>(null);
 
-  useEffect(() => {
+  /**
+   * Shared by the initial mount and the "Try again" retry control below.
+   * Every `setState` here happens inside the `.then()` — after a real
+   * `await`, never synchronously in the body — because a synchronous
+   * `setState` called directly from an effect (this function is invoked as
+   * `useEffect(() => loadAchievements(), ...)` below) trips the React
+   * Compiler's "calling setState synchronously within an effect can trigger
+   * cascading renders" check. `loadFailed` is only ever set to its next real
+   * value (`true` on failure, `false` alongside the fresh data on success),
+   * never pre-emptively reset before the request even starts.
+   */
+  const loadAchievements = useCallback(() => {
     let cancelled = false;
     void fetchAchievements().then((rows) => {
-      if (!cancelled) setAchievements(rows ?? []);
+      if (cancelled) return;
+      if (rows === null) {
+        setLoadFailed(true);
+      } else {
+        setAchievements(rows);
+        setLoadFailed(false);
+      }
     });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => loadAchievements(), [loadAchievements]);
 
   async function toggleStatus(achievement: AchievementDTO) {
     const nextStatus = achievement.status === "HIDDEN" ? "ACTIVE" : "HIDDEN";
@@ -856,7 +883,18 @@ export function AchievementsSection() {
         </Button>
       </div>
 
-      {achievements === null ? (
+      {achievements === null && loadFailed ? (
+        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border px-6 py-10 text-center">
+          <TriangleAlert className="size-4 text-muted-foreground" aria-hidden />
+          <p className="text-sm text-foreground">Could not load achievements.</p>
+          <p className="text-xs text-muted-foreground">
+            This is a failed request, not an empty list — your existing achievements are safe.
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={() => loadAchievements()}>
+            Try again
+          </Button>
+        </div>
+      ) : achievements === null ? (
         <div className="space-y-2">
           <Skeleton className="h-20 w-full" />
           <Skeleton className="h-20 w-full" />
