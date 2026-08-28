@@ -74,14 +74,44 @@ describe("edufleetAdapter", () => {
       const http = vi.fn().mockResolvedValue({ status: 409, body: { error: "duplicate_open_request" } });
       const ctx = makeCtx(http);
 
-      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow();
+      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow(
+        /submitting the connection request failed \(status 409\)/,
+      );
     });
 
     it("throws on any other non-2xx status", async () => {
       const http = vi.fn().mockResolvedValue({ status: 500, body: { error: "internal" } });
       const ctx = makeCtx(http);
 
-      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow();
+      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow(/status 500/);
+    });
+
+    it("surfaces eduFleet's reason and first detail so a 400 is diagnosable", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 400,
+        body: {
+          error: "Validation failed",
+          reason: "validation_failed",
+          details: [{ field: "body", message: "scopes must include at least one capability" }],
+        },
+      });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow(
+        /status 400 — validation_failed — scopes must include at least one capability/,
+      );
+    });
+
+    it("MUTATION-DISTINGUISHING: a remote body cannot smuggle unbounded text into lastError", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 400,
+        body: { reason: "x".repeat(500), details: [{ message: "y".repeat(500) }] },
+      });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.initiate!(ctx, makeInstitution())).rejects.toThrow(
+        /^eduFleet: submitting the connection request failed \(.{1,200}\)$/,
+      );
     });
 
     it("sends externalRef, payload.institutionName and a non-empty scopes array, and never the platform key in the body", async () => {
@@ -122,7 +152,9 @@ describe("edufleetAdapter", () => {
       const http = vi.fn();
       const ctx = makeCtx(http);
 
-      await expect(edufleetAdapter.refresh!(ctx, makeConnection({ remoteRequestId: undefined }))).rejects.toThrow();
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection({ remoteRequestId: undefined }))).rejects.toThrow(
+        /refresh requires a remoteRequestId/,
+      );
       expect(http).not.toHaveBeenCalled();
     });
 

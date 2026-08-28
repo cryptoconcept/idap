@@ -53,6 +53,28 @@ function stringArray(v: unknown): string[] {
 }
 
 /**
+ * The operator-facing tail of an adapter error. eduFleet's error bodies carry
+ * a machine `reason` and a `details[]` of `{field, message}` (api-map §5); a
+ * bare status code cost the live verification an hour of guessing why a 400
+ * was a 400, and it reaches the user as `lastError` on the connection card.
+ *
+ * Reads only those two named fields and never stringifies the whole body.
+ * That is deliberate, not stylistic: this string is persisted and displayed,
+ * and a response body is remote-controlled — naming the fields bounds what can
+ * escape into it. The length cap bounds the rest (an HTML error page has no
+ * `reason`, but a hostile JSON one could carry a very long string).
+ */
+function describeFailure(resp: { status: number; body: unknown }): string {
+  const body = rec(resp.body);
+  const parts = [`status ${resp.status}`];
+  const reason = str(body?.reason);
+  if (reason) parts.push(reason);
+  const firstDetail = str(rec((arr(body?.details) ?? [])[0])?.message);
+  if (firstDetail) parts.push(firstDetail);
+  return parts.join(" — ").slice(0, 200);
+}
+
+/**
  * Shared "the state moved under us" detail (api-map §5: 409
  * `already_redeemed`, 409 `not_approved`, and reaching `"completed"` via
  * polling are all the same class). eduFleet's grant is returned exactly
@@ -118,7 +140,7 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
     }
   }
 
-  throw new Error(`eduFleet: submitting the connection request failed (status ${resp.status})`);
+  throw new Error(`eduFleet: submitting the connection request failed (${describeFailure(resp)})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +155,7 @@ async function pollConnectionRequest(ctx: AdapterContext, remoteRequestId: strin
     token: ctx.platformKey,
   });
   if (resp.status !== 200) {
-    throw new Error(`eduFleet: polling the connection request failed (status ${resp.status})`);
+    throw new Error(`eduFleet: polling the connection request failed (${describeFailure(resp)})`);
   }
   return rec(resp.body) ?? {};
 }
@@ -215,7 +237,7 @@ async function redeem(ctx: AdapterContext, remoteRequestId: string): Promise<Ref
     return { kind: "REJECTED", remoteStatus: "rejected", detail: REDEEM_STATE_MOVED_DETAIL };
   }
 
-  throw new Error(`eduFleet: redeeming the connection request failed (status ${resp.status})`);
+  throw new Error(`eduFleet: redeeming the connection request failed (${describeFailure(resp)})`);
 }
 
 async function refresh(ctx: AdapterContext, connection: ConnectionState): Promise<RefreshResult> {
