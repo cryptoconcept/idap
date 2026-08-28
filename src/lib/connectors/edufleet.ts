@@ -255,6 +255,23 @@ async function refresh(ctx: AdapterContext, connection: ConnectionState): Promis
   const body = await pollConnectionRequest(ctx, connection.remoteRequestId);
   const remoteStatus = str(body.status) ?? "";
 
+  // A 409 `duplicate_open_request` can hand back the id of a request opened
+  // under a *different* `externalRef` — eduFleet's auto-remap clash branch
+  // returns whichever open request already targets the same school, not
+  // necessarily this institution's own. `initiate` cannot tell the two 409
+  // shapes apart (the body carries no `externalRef`), so the check lands here,
+  // at the first poll that can see one. Acting on someone else's request would
+  // redeem a grant for a school that never consented to *this* institution —
+  // the exact boundary the four-step chain exists to hold. Absent field: skip,
+  // rather than break a working connection over a field eduFleet stopped
+  // sending.
+  const polledRef = str(body.externalRef);
+  if (polledRef !== undefined && polledRef !== connection.externalRef) {
+    throw new Error(
+      `eduFleet: connection request ${connection.remoteRequestId} belongs to externalRef "${polledRef}", not "${connection.externalRef}" — refusing to act on it`,
+    );
+  }
+
   switch (remoteStatus) {
     case "pending":
       return { kind: "PENDING", remoteStatus };

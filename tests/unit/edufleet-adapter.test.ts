@@ -180,6 +180,43 @@ describe("edufleetAdapter", () => {
       expect(http).not.toHaveBeenCalled();
     });
 
+    it("MUTATION-DISTINGUISHING: refuses to act on a request belonging to another externalRef", async () => {
+      // "approved" is deliberate: without the guard this proceeds to redeem,
+      // so the assertion on the call count fails as loudly as the throw.
+      const http = vi.fn().mockResolvedValue({
+        status: 200,
+        body: { requestId: "req-abc", externalRef: "inst-99", status: "approved" },
+      });
+      const ctx = makeCtx(http);
+
+      await expect(edufleetAdapter.refresh!(ctx, makeConnection())).rejects.toThrow(
+        /belongs to externalRef "inst-99", not "inst-1"/,
+      );
+      // The poll, and nothing after it — no redeem was attempted.
+      expect(http).toHaveBeenCalledTimes(1);
+    });
+
+    it("proceeds normally when the polled externalRef matches", async () => {
+      const http = vi.fn().mockResolvedValue({
+        status: 200,
+        body: { requestId: "req-abc", externalRef: "inst-1", status: "pending" },
+      });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result).toMatchObject({ kind: "PENDING", remoteStatus: "pending" });
+    });
+
+    it("does not break when eduFleet omits externalRef from the poll response", async () => {
+      const http = vi.fn().mockResolvedValue({ status: 200, body: { status: "pending" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.refresh!(ctx, makeConnection());
+
+      expect(result).toMatchObject({ kind: "PENDING" });
+    });
+
     it("throws when polling the connection request fails", async () => {
       const http = vi.fn().mockResolvedValue({ status: 500, body: { error: "internal" } });
       const ctx = makeCtx(http);
