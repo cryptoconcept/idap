@@ -36,6 +36,7 @@ import { SocialSection } from "@/components/profile/sections/social-section";
 import { MediaSection } from "@/components/profile/sections/media-section";
 import { AchievementsSection } from "@/components/profile/sections/achievements-section";
 import { AlumniSection } from "@/components/profile/sections/alumni-section";
+import { VacanciesSection } from "@/components/profile/sections/vacancies-section";
 
 /**
  * `groups` names the completion groups a section owns, so the tick beside it is
@@ -53,6 +54,7 @@ const SECTIONS = [
   { key: "media", label: "Media", groups: [] },
   { key: "achievements", label: "Achievements", groups: [] },
   { key: "alumni", label: "Notable alumni", groups: [] },
+  { key: "vacancies", label: "Vacancies", groups: [] },
 ] as const;
 
 type SectionKey = (typeof SECTIONS)[number]["key"];
@@ -269,6 +271,7 @@ export function ProfileEditor({
           ) : null}
           {active === "achievements" ? <AchievementsSection /> : null}
           {active === "alumni" ? <AlumniSection /> : null}
+          {active === "vacancies" ? <VacanciesSection /> : null}
         </div>
       </div>
 
