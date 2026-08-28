@@ -195,3 +195,46 @@ Walk the whole chain and record each step's request and response:
 **Type consistency:** `EDUFLEET` is added to `PLATFORMS` in Task 1 and consumed by the registry in the same task. `RefreshResult`, `SyncOutcome` and `ConnectorAuthError` are existing exports of `src/lib/connectors/types.ts`, not new types — the error class was checked at source after an earlier draft of this plan invented the name "GrantRevokedError" from its docblock's prose.
 
 **Verified at source while writing this plan:** `PlatformAdapter`'s shape and that `sync` is **required**, not optional (`types.ts:58-63`); that `SyncSourceData` is Result-centric and has no vacancy field; that the registry self-registers by side-effect import (`connectors/index.ts`); that `PLATFORM_LABELS` is `Record<Platform, string>` so the enum addition forces the label; that `connections-panel.tsx` reads `PLATFORM_LABELS[entry.platform]` and so needs no per-platform code; and eduFleet's four-step chain, its five request states, its exact redeem response shape and its `duplicate_open_request` 409, all from api-map §1.
+
+---
+
+## Task 4 (amendment) — make the adapter work against the live API
+
+Tasks 1-2 built the adapter from `docs/integrations/edufleet-api-map.md` and
+tested it against a stubbed HTTP client, so it passed everything the map said
+it should. Task 3 drove the *live* eduFleet and found the map had gone stale
+the same day it was written: `POST /api/partner/connection-requests` had
+acquired a required `scopes` array, and without it every request comes back
+`400 validation_failed` — **the adapter could not open a connection at all.**
+Four further defects surfaced alongside it. Task 4 is the fix wave, and the
+api-map itself is part of the deliverable: it is the document Plan B2 will be
+built from, and this task is the proof that a stale map yields a broken
+adapter.
+
+1. **BLOCKING — send `scopes` on the connection request.** `REQUESTED_SCOPES
+   = ["jobs:write"]`, copied fresh per call, in `buildConnectionRequestBody`.
+2. **Make a failed request diagnosable.** `describeFailure` folds eduFleet's
+   `reason` and first `details[].message` into the thrown error (capped at 200
+   chars — the body is remote-controlled and the string is persisted as
+   `lastError` and displayed), at all three throw sites.
+3. **A poll that finds `completed` must not destroy a working connection.**
+   eduFleet keeps the request row queryable forever after redeem, so every
+   refresh of a live connection landed on that branch and overwrote
+   `CONNECTED` with `REJECTED`. The grant IDAP already holds separates the two
+   cases.
+4. **A re-connect must not report "Requested" when eduFleet is already waiting
+   on the school.** eduFleet's auto-remap returns `201
+   {"status":"awaiting_school"}`; `InitiateResult` grows an optional `kind` the
+   service honours, defaulting to `PENDING` for adapters that omit it.
+5. **`refresh` must recognise a revoked grant instead of throwing a generic
+   502.** `ConnectionService.refresh`'s catch gains a `ConnectorAuthError`
+   branch that flips the row to `DISCONNECTED` and unsets the dead ciphertext.
+   Deliberately *not* the `redeem` restructure Task 3's report recommended:
+   every other failure between redeem and persist is already swallowed by
+   `fetchRemoteInstitution`, so only the `401 revoked` path throws — and there
+   the grant is already dead. The handling was broken, not the ordering.
+6. **The documents, and one line of copy.** The admin Platforms page now names
+   eduFleet Exchange; the api-map is re-verified in place (scopes, auto-remap,
+   the 20-reason catalog, contract 1.1.0, the `openapi.json` gap that hid the
+   `scopes` requirement, and the MongoDB replica-set prerequisite for partner
+   onboarding).

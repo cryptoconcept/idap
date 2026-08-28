@@ -10,6 +10,18 @@ a full two-layer credential lifecycle, and a matching spec suite. This
 document replaces the old recon wholesale; nothing in the 27 Aug version
 should be relied on going forward.
 
+**Re-verified against the live API on 2026-08-28** (Task 3 of the eduFleet
+connection plan drove the real service end to end). The map had gone stale the
+same day it was written, and the connector built from it could not open a
+connection at all. What changed, all reflected below: `POST
+/api/partner/connection-requests` now **requires a non-empty `scopes` array**
+(§1.2 step 1); eduFleet added **auto-remap**, so a re-connect can come back
+`awaiting_school` at 201 rather than `pending` (§1.2); the error catalog grew
+from 18 reasons to **20** (§5); the live contract version is **1.1.0**, not 1.0
+(§2.6, §7); `openapi.json` describes the connection-request body as a bare
+`{"type":"object"}`, which is how the `scopes` requirement came to be missed
+(§7); and partner onboarding has a **MongoDB replica-set prerequisite** (§1.1a).
+
 Source of truth for everything below: `/Users/automicai/edufleet-exchange`
 (read-only for this recon — nothing in that repo was modified). All paths are
 relative to that repo's `web/src/` unless stated otherwise.
@@ -79,6 +91,18 @@ lookup, so a grant token physically cannot be accepted on a platform-key route
 or vice versa — the wrong-prefix check happens before the hash lookup even
 runs.
 
+### 1.1a Deployment prerequisite — eduFleet needs a MongoDB replica set
+
+Admin key issuance wraps revoke-then-create in `session.withTransaction`
+(`partner-registry.ts:84-96`) to keep the one-live-key-per-partner invariant
+atomic. Transactions require a **replica set**: against a standalone `mongod`,
+issuing a partner key fails with *"This MongoDB deployment does not support
+retryable writes"*, and setting `retryWrites=false` on the connection string
+does **not** help — the transaction itself is what is unsupported. **Partner
+onboarding is impossible on a standalone deployment.** Whoever provisions the
+eduFleet environment IDAP points at must stand up a replica set (a
+single-node one is enough) before any platform key can be issued.
+
 ### 1.2 The grant lifecycle — four steps, one state machine
 
 State field: `PartnerConnectionRequest.status`, enum `["pending",
@@ -89,15 +113,37 @@ school itself consents, and only then can the partner redeem a grant — so a
 credential is never issued for a school that did not agree to it."*
 
 **Step 1 — Partner opens a request.** `POST /api/partner/connection-requests`
-(platform key). `openConnectionRequest()` (`partner-connections.ts:77-118`).
-Required: `externalRef` (the partner's own institution id) and
-`payload.institutionName`. At most one **open** request per
+(platform key). `openConnectionRequest()`
+(`web/src/lib/services/partner-connections.ts:99-107` — note the file moved
+from the `partner-connections.ts` path the rest of this document cites).
+Required (contract 1.1.0): `externalRef` (the partner's own institution id),
+`payload.institutionName`, **and a non-empty `scopes` array**. Live
+`GET /api/partner/schema` states it verbatim: `connectionRequest:
+["externalRef", "payload.institutionName", "scopes"]`. Omit it, or send `[]`,
+and eduFleet answers `400 validation_failed` with
+`details: [{field: "body", message: "scopes must include at least one
+capability"}]`. **`scopes` is enforced twice:** the array must be non-empty,
+*and* every entry must appear in the partner's own `allowedScopes`, which an
+eduFleet admin sets at partner registration (default `["jobs:write"]`). A
+partner registered without a scope is refused even with a perfectly
+well-formed body — so a 400 here can mean either a bad body or a
+misprovisioned partner. At most one **open** request per
 `(partnerId, externalRef)` — enforced first by a pre-check, then for real by a
 partial unique index `{partnerId, externalRef}` where `open: true`; a raced
 duplicate insert is caught (Mongo error code 11000) and turned into the same
 409 the sequential check would give, never a bare 500. Response: `{
 requestId, status }` at 201; on collision, 409 `duplicate_open_request` with
 the existing `requestId` in the body.
+
+**Auto-remap — a request can be born past `pending`.** A request whose
+`externalRef` eduFleet has matched to a school before is created **already
+matched**, stamped `decidedBy: "system:auto-remap"`, and returned as
+`201 {"status":"awaiting_school"}` — Step 2 is skipped entirely. A new request
+therefore no longer always starts at `pending`, and a connector that assumes
+it does will report "Requested" while eduFleet is already waiting on the
+school to act. Read `status` off the 201 body rather than assuming it (the
+same applies to the 409 `duplicate_open_request` body, which carries the
+existing request's real status).
 
 **Step 2 — An eduFleet admin matches it to a real school.**
 `adminMatchRequest()` (`partner-connections.ts:154-195`) — **not** exposed on
@@ -357,7 +403,11 @@ does not.
   either credential, since a grant-only integrator still needs the field
   contract.
 - **contract** returns `{ version, errors: errorCatalog() }` — **platform key
-  only**, unlike schema/whoami which accept either. A grant-only holder has no
+  only**, unlike schema/whoami which accept either. `version` is **1.1.0**
+  live (this document's earlier text implied 1.0); that revision is the one
+  that made `scopes` mandatory on a connection request and grew the error
+  catalog to 20 (§5). It is worth reading at the start of any integration
+  session — it is the cheapest way to notice the contract has moved. A grant-only holder has no
   route to fetch the error catalog directly (it could still be read from the
   unauthenticated `/openapi.json`'s error descriptions, but those are generic
   per-status blurbs, not the reason-code table in §6).
@@ -447,7 +497,10 @@ Two further wrinkles, both verified by spec:
 ## 5. Error catalog, verbatim
 
 From `errorCatalog()` (`partner-contract.ts:59-80`), also reachable live at
-`GET /api/partner/contract` (platform key):
+`GET /api/partner/contract` (platform key). This document originally listed
+**18** reasons; the live contract at version **1.1.0** returns **20** — the two
+additions are at the bottom of the table and both belong to the
+vehicle-listing API, not to the connection chain:
 
 | Status | Reason | Meaning |
 |---|---|---|
@@ -469,6 +522,8 @@ From `errorCatalog()` (`partner-contract.ts:59-80`), also reachable live at
 | 500 | `corrupt_state` | A connection request's linked school reference is missing or invalid — contact support with the request id. |
 | 429 | `rate_limited` | Too many requests in the current minute (also used for a lost write-budget race — see §1.4). |
 | 429 | `write_cap_exceeded` | The daily write cap for this credential is spent. |
+| 409 | `duplicate_external_listing` | **Added in contract 1.1.0.** That listing's external ref already exists. Belongs to the **vehicle-listing** API — unreachable from the connection chain and from the job endpoints IDAP calls (§0: listings have no partner routes at all today). |
+| 409 | `listing_not_approved` | **Added in contract 1.1.0.** The listing has not cleared moderation. Also **vehicle-listing** only, for the same reason. |
 
 Two reasons exist in the code but are **not** in this catalog and are **not
 reachable from any partner route** — surfaced only by school-session/admin
@@ -538,7 +593,7 @@ values, and Contract Two's PATCH accepts only `"closed"` (§2.4).
 ## 7. The self-describing surfaces, and where they under-describe reality
 
 `GET /api/partner/schema` (`partnerSchema()`, `partner-contract.ts:13-57`)
-publishes `version`, `credentials` (prefixes + header format), `enums`
+publishes `version` (**1.1.0** live), `credentials` (prefixes + header format), `enums`
 (subjects, facilities, districts, jobStatus, scopes), `rules` (required-field
 lists, dedupe prose, moderation prose, quota prose, location prose, salary
 prose, consent prose), and `jobShape` (a plain-English field-by-field
@@ -560,6 +615,15 @@ required-list gap already covered in §2.3:
   `partnerSchema()` or the OpenAPI doc's generic `{type: object}` responses;
   it's only knowable by reading `redeem/route.ts` directly, which is what this
   document did.
+- **The gap that actually cost something.** `openapi.json`'s
+  `POST /api/partner/connection-requests` types both its request body and its
+  responses as a bare `{"type": "object"}` — no properties, no `required`
+  list. The mandatory `scopes` array (§1.2 step 1) is therefore **invisible**
+  to anyone generating a client from the OpenAPI document, which is exactly
+  how IDAP's adapter came to be written without it and could not open a
+  single connection. `GET /api/partner/schema` *does* carry it, in
+  `rules.requiredFields.connectionRequest`. **Read `schema`, not
+  `openapi.json`, for anything you intend to send.**
 
 ---
 
@@ -707,6 +771,12 @@ eduFleet is not registered yet.
     — the `"completed"`-without-IDAP-having-redeemed defensive branch
     PassPercent already has (someone/something else redeemed first) is the
     same shape as eduFleet's `already_redeemed`/`not_approved` 409s.
+    **One eduFleet-specific caveat, learned the hard way:** eduFleet leaves a
+    redeemed request row queryable forever, so an ordinary poll of a *healthy*
+    connection also lands on `"completed"`. That branch must therefore check
+    whether IDAP already holds a grant before concluding someone else
+    redeemed first — otherwise every refresh of a live connection reports it
+    rejected. See `src/lib/connectors/edufleet.ts`'s `refresh`.
 - **`RefreshResult.kind: "CONNECTED"`**'s `grantToken`/`scopes` fields map
   directly onto eduFleet's redeem response `token`/`scopes`.
 - **`PlatformCredential`** (one row per platform, globally unique) matches

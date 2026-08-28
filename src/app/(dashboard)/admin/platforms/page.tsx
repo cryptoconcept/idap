@@ -19,7 +19,7 @@ export default async function AdminPlatformsPage() {
     <>
       <PageHeader
         title="Platforms"
-        description="API keys IDAP uses to push institution data to PassPercent and FeesBasket."
+        description="API keys IDAP uses to push institution data to PassPercent, FeesBasket and eduFleet Exchange."
       />
       <PlatformCredentialsPanel vaultReady={vaultReady} credentials={credentials} />
     </>
