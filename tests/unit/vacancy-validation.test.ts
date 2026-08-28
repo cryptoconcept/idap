@@ -87,6 +87,71 @@ describe("vacancyCreateSchema", () => {
   it("accepts a zero salaryMin as a real value", () => {
     expect(vacancyCreateSchema.parse({ ...valid, salaryMin: 0 }).salaryMin).toBe(0);
   });
+
+  // Follows the same `.refine(v => new Set(v).size === v.length, ...)` idiom
+  // as `academic-structure.ts`'s `updateSegmentsSchema` and
+  // `fee-structure.ts`'s `distinctObjectIds` — `.max()` alone counts entries,
+  // not distinct values, so `["Gratuity","Gratuity"]` would otherwise pass
+  // and the dashboard would render two badges sharing one React key.
+  it("rejects duplicate facilities", () => {
+    expect(() =>
+      vacancyCreateSchema.parse({ ...valid, facilities: ["Gratuity", "Gratuity"] }),
+    ).toThrow(/facility/i);
+  });
+
+  it("accepts each facility once", () => {
+    const result = vacancyCreateSchema.parse({
+      ...valid,
+      facilities: ["Gratuity", "Paid leave"],
+    });
+    expect(result.facilities).toEqual(["Gratuity", "Paid leave"]);
+  });
+});
+
+/**
+ * Pins the custom messages on `salary` and `experience`
+ * (`src/lib/validation/vacancy.ts`) so a school administrator sees copy
+ * written for them rather than Zod's default "Invalid input: expected int,
+ * received number" — found reading badly beside the form's own hand-written
+ * salary-order toast. A revert to the default message fails these.
+ */
+describe("vacancyCreateSchema numeric messages", () => {
+  const valid = { title: "Maths Teacher", subject: "Mathematics", description: "Teach CBSE Grade 8-10." };
+
+  function firstMessage(result: ReturnType<typeof vacancyCreateSchema.safeParse>): string {
+    if (result.success) throw new Error("expected parse to fail");
+    return result.error.issues[0].message;
+  }
+
+  it("gives a readable message for a non-integer salary", () => {
+    const result = vacancyCreateSchema.safeParse({ ...valid, salaryMin: 45000.5 });
+    expect(firstMessage(result)).toBe("Salary must be a whole number, without decimals.");
+  });
+
+  it("gives a readable message for a negative salary", () => {
+    const result = vacancyCreateSchema.safeParse({ ...valid, salaryMin: -500 });
+    expect(firstMessage(result)).toBe("Salary cannot be negative.");
+  });
+
+  it("gives a readable message for a salary over the cap", () => {
+    const result = vacancyCreateSchema.safeParse({ ...valid, salaryMax: 10_000_001 });
+    expect(firstMessage(result)).toBe("Salary cannot exceed ₹1,00,00,000 a month.");
+  });
+
+  it("gives a readable message for a non-integer experienceRequired", () => {
+    const result = vacancyCreateSchema.safeParse({ ...valid, experienceRequired: 2.5 });
+    expect(firstMessage(result)).toBe("Experience must be a whole number of years.");
+  });
+
+  it("gives a readable message for a negative experienceRequired", () => {
+    const result = vacancyCreateSchema.safeParse({ ...valid, experienceRequired: -1 });
+    expect(firstMessage(result)).toBe("Experience cannot be negative.");
+  });
+
+  it("gives a readable message for experienceRequired over the cap", () => {
+    const result = vacancyCreateSchema.safeParse({ ...valid, experienceRequired: 61 });
+    expect(firstMessage(result)).toBe("Experience cannot exceed 60 years.");
+  });
 });
 
 describe("vacancyPatchSchema", () => {
@@ -107,5 +172,14 @@ describe("vacancyPatchSchema", () => {
   it("distinguishes an explicit null from an absent key on experienceRequired", () => {
     expect(vacancyPatchSchema.parse({ experienceRequired: null }).experienceRequired).toBeNull();
     expect(vacancyPatchSchema.parse({}).experienceRequired).toBeUndefined();
+  });
+
+  // The concrete hazard the finding names: an API client PATCHing a
+  // duplicated facility past `.max()` alone, which counts entries rather
+  // than distinct values.
+  it("rejects duplicate facilities on a patch", () => {
+    expect(() => vacancyPatchSchema.parse({ facilities: ["Gratuity", "Gratuity"] })).toThrow(
+      /facility/i,
+    );
   });
 });

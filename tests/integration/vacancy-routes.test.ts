@@ -348,6 +348,96 @@ describe("PATCH /api/settings/vacancies/[vacancyId]", () => {
     expect(raw?.salaryMin).toBe(25000);
   });
 
+  // Same three-state pair as salaryMin above, copied for salaryMax: the
+  // route is field-agnostic today (it forwards `patch` wholesale), but a
+  // future field-specific normalisation could regress just this one field
+  // uncaught if only salaryMin were pinned here.
+  it("MUTATION-DISTINGUISHING: clears the stored salaryMax when the patch sends an explicit null, not merely omitting the key", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { salaryMax: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.salaryMax).toBeUndefined();
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("salaryMax");
+  });
+
+  it("leaves the stored salaryMax untouched when the patch omits it", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { title: "Renamed only" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.salaryMax).toBe(40000);
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.salaryMax).toBe(40000);
+  });
+
+  // Same pair again for experienceRequired — the third and last field this
+  // three-state contract covers.
+  it("MUTATION-DISTINGUISHING: clears the stored experienceRequired when the patch sends an explicit null, not merely omitting the key", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { experienceRequired: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.experienceRequired).toBeUndefined();
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("experienceRequired");
+  });
+
+  it("leaves the stored experienceRequired untouched when the patch omits it", async () => {
+    const created = await makeVacancy("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchVacancy(
+      jsonRequest({
+        url: `http://localhost/api/settings/vacancies/${created.id}`,
+        body: { title: "Renamed only" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ vacancyId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.experienceRequired).toBe(2);
+
+    const raw = await Vacancy.findById(created.id).lean();
+    expect(raw?.experienceRequired).toBe(2);
+  });
+
   it("MUTATION-DISTINGUISHING: rejects a cross-origin PATCH and leaves the record unchanged", async () => {
     const created = await makeVacancy("INS0001");
     const before = await Vacancy.findById(created.id).lean();

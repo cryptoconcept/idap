@@ -89,11 +89,23 @@ function parseNumberField(value: string): number | null {
 /**
  * The edit-time helper: `salaryMin`/`salaryMax`/`experienceRequired` are the
  * three fields `vacancyPatchSchema` marks `.nullable()`, precisely so an
- * admin can clear one after having once given it a value. Sending `""`
- * instead would coerce to `0` (`Number("")` is `0`, not `NaN`) and silently
- * store a zero salary rather than clearing it — exactly the bug this task
- * exists to avoid. Explicit `null` is the only way to actually clear any of
- * the three on a PATCH, which is why every edit-save below sends this.
+ * admin can clear one after having once given it a value. Explicit `null` is
+ * the only way to actually clear any of the three on a PATCH, which is why
+ * every edit-save below sends this.
+ *
+ * `vacancyPatchSchema`'s numeric fields (`src/lib/validation/vacancy.ts`)
+ * are plain `z.number()`, never `z.coerce.number()` — unlike this repo's
+ * `src/lib/validation/application.ts` (`previousPercentage`) or
+ * `src/lib/validation/offer.ts` (its date fields), which do coerce. So a
+ * `""` reaching the route 400s loudly; it is never coerced to `0`. The
+ * actual `Number("") === 0` hazard lives one level up, in `parseNumberField`
+ * above — a naive `Number(value) || null` would collapse an emptied field
+ * and a genuine zero into the same result, which is why that helper
+ * length-checks the trimmed string *before* calling `Number()` at all.
+ *
+ * `toClearableNumber` is otherwise a pure alias for `parseNumberField`; kept
+ * as its own name so the call sites below read as "clearable PATCH value"
+ * versus `toOptionalNumber`'s "omit-if-blank create value" a few lines down.
  */
 function toClearableNumber(value: string): number | null {
   return parseNumberField(value);
@@ -254,9 +266,11 @@ function BenefitsEditor({
  * `AchievementDialog`: plain controlled state rather than `react-hook-form`,
  * because the three-state clearing rule for `salaryMin`/`salaryMax`/
  * `experienceRequired` needs an explicit `null` built by hand at submit time
- * (`toClearableNumber` above) — a `zodResolver` bound straight to
- * `vacancyPatchSchema` would run the raw `""` from a cleared number field
- * through `Number()` before this component ever saw it, coercing it to `0`.
+ * (`toClearableNumber` above) — a cleared `<input type="number">` reports
+ * `""`, and only an explicit `null` clears a bound on `vacancyPatchSchema`;
+ * `""` itself is rejected with a 400 (that schema's numeric fields are plain
+ * `z.number()`, never `z.coerce.number()` — see `toClearableNumber` above
+ * for why that matters), not silently coerced to `0`.
  *
  * `status` is deliberately absent from this form: `vacancyCreateSchema` has
  * no `status` field (a fresh vacancy is always `DRAFT`), and changing an
