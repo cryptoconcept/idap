@@ -4,6 +4,7 @@ import { AlumniService } from "@/services/alumni.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 import { validationError } from "@/lib/api/errors";
+import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,15 +17,19 @@ export const dynamic = "force-dynamic";
  * record going away through `DELETE /api/settings/alumni/[alumnusId]`, which
  * `AlumniService.remove` already handles.
  *
- * Every real check on the upload itself — magic-byte sniffing, the
- * non-empty check, and the 5 MB cap — is `setPhoto`'s alone to make, via
- * `validateImage`. This route does not duplicate any of them: unlike the
- * achievements sibling, an alumnus has no certificate/PDF path, so there is
- * no branch here where a route-level pre-check would catch something
- * `validateImage` doesn't already catch identically — it would be dead code,
- * and a test written for it would be confounded by construction. The one
- * thing this route checks before spending an `arrayBuffer()` read is that a
- * file was actually chosen.
+ * Deciding whether the bytes are a real image is `setPhoto`'s alone to make,
+ * via `validateImage` — this route never sniffs content.
+ *
+ * The `file.size` bound below is not a duplicate of that decision even though
+ * it shares `validateImage`'s number. `request.formData()` has already
+ * materialised the body by this point, and `arrayBuffer()` copies it a second
+ * time; `validateImage` only runs once that second copy exists, so it can
+ * refuse an oversize upload but it cannot stop the memory from being spent.
+ * Only a check placed here, before `arrayBuffer()`, bounds what this handler
+ * allocates — a 300 MB post would otherwise hold ~600 MB and OOM the function
+ * rather than 400. Same ordering both pre-existing upload routes use
+ * (`institution/media/route.ts`, the toppers photo route), and the reason the
+ * constant is imported rather than re-declared: one number, two jobs.
  */
 export async function POST(
   request: NextRequest,
@@ -38,6 +43,8 @@ export async function POST(
     const form = await request.formData();
     const file = form.get("file");
     if (!(file instanceof File)) throw validationError("file: choose a file to upload");
+    // Before `arrayBuffer()`, deliberately — see this route's header comment.
+    if (file.size > MAX_IMAGE_BYTES) throw validationError("file: files must be 5 MB or smaller");
 
     const alumnus = await AlumniService.setPhoto(
       institution.institutionId,

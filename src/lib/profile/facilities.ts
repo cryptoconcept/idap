@@ -139,3 +139,23 @@ export function isFacilitySelected(selectedCodes: string[], code: string): boole
   const legacyEquivalent = NEW_TO_LEGACY_FACILITY_CODE[code];
   return selectedCodes.some((selected) => selected === code || selected === legacyEquivalent);
 }
+
+/**
+ * `entries` with the row a suggestion chip stands for removed — the removal
+ * counterpart of `isFacilitySelected`, and deliberately expressed in terms of
+ * it so the two can never disagree about what "the library chip's row" means.
+ *
+ * Plain `entry.code !== code` is wrong here for the same reason plain equality
+ * is wrong in `isFacilitySelected`: on an un-migrated institution the stored
+ * row is `LIBRARY`, so a filter keyed on `library` matches nothing, the array
+ * comes back identical, and the chip that renders pressed cannot be
+ * un-pressed. A chip whose pressed state says "selected" must always be
+ * clickable back to "not selected".
+ *
+ * Removing the legacy row is the one admin-driven action that may take a
+ * legacy code out of storage — unlike the pressed state, which only ever
+ * displays. Converting the rows that stay is still the migration's job.
+ */
+export function withoutFacility<T extends { code: string }>(entries: T[], code: string): T[] {
+  return entries.filter((entry) => !isFacilitySelected([entry.code], code));
+}

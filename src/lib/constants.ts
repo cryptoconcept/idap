@@ -530,6 +530,26 @@ export const ACHIEVEMENT_MAX_CERTIFICATES = 5;
 export const ACHIEVEMENT_MAX_STUDENTS = 50;
 
 /**
+ * How many records one institution may keep, the counterpart to the three
+ * per-record caps above — those bound what one achievement holds, these bound
+ * how many there are. Same reason `MEDIA_MAX_ITEMS` exists: every list here
+ * is fetched whole, and both of these are fetched by
+ * `InstitutionService.getPublicProfile` into a single unauthenticated,
+ * CORS-open response.
+ *
+ * 200 each is deliberately far above real use — an achievement a fortnight
+ * for eight years, or 200 curated notable alumni on a page whose whole point
+ * is that they are notable — while still bounding the public payload
+ * (~2 MB of achievements at their absolute worst case of 2000-character
+ * descriptions plus 50 students each; ~200 KB of alumni) and keeping
+ * `listPublic`'s unindexed sort a top-K sort over a few hundred documents
+ * rather than a blocking sort that can pass MongoDB's memory limit and 500
+ * the entire public profile.
+ */
+export const ACHIEVEMENT_MAX_RECORDS = 200;
+export const ALUMNI_MAX_RECORDS = 200;
+
+/**
  * There is deliberately no `SHOWCASE_MAX_IMAGE_BYTES` beside this. Showcase
  * images are uploaded through `validateImage` (`src/lib/media/image.ts`), which
  * enforces `MAX_IMAGE_BYTES` — so a showcase-named image constant would

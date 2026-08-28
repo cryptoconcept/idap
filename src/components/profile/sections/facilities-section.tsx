@@ -6,7 +6,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, TriangleAlert, X } from "lucide-react";
 import type { z } from "zod";
 import { updateProfileSchema } from "@/lib/validation/institution";
-import { FACILITY_GROUPS, isFacilitySelected, UNMAPPABLE_LEGACY_CODES } from "@/lib/profile/facilities";
+import {
+  FACILITY_GROUPS,
+  isFacilitySelected,
+  UNMAPPABLE_LEGACY_CODES,
+  withoutFacility,
+} from "@/lib/profile/facilities";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -134,9 +139,11 @@ export function FacilitiesSection({ profile, onSave, onDirtyChange }: SectionPro
                                 disabled={!on && selected.length >= MAX_FACILITIES}
                                 onClick={() =>
                                   on
-                                    ? field.onChange(
-                                        selected.filter((entry) => entry.code !== suggestion.code),
-                                      )
+                                    ? // Legacy-aware, exactly as `has()` above
+                                      // is: a chip pressed against a stored
+                                      // `LIBRARY` row must drop that row, which
+                                      // a plain `!==` on `library` never does.
+                                      field.onChange(withoutFacility(selected, suggestion.code))
                                     : addFacility(suggestion.code, suggestion.label)
                                 }
                                 className={cn(

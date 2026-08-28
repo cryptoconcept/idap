@@ -2,7 +2,8 @@ import "server-only";
 import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Alumnus, type AlumnusDoc } from "@/models";
-import { notFound } from "@/lib/api/errors";
+import { notFound, validationError } from "@/lib/api/errors";
+import { ALUMNI_MAX_RECORDS } from "@/lib/constants";
 import { validateImage } from "@/lib/media/image";
 import { storage } from "@/lib/storage";
 import type { AlumnusCreateInput, AlumnusPatchInput } from "@/lib/validation/showcase";
@@ -118,6 +119,14 @@ export const AlumniService = {
     await connectToDatabase();
     const rows = await Alumnus.find({ institutionId })
       .sort({ batch: -1, name: 1 })
+      // `create` already refuses the 201st record, so this limit is never the
+      // thing that truncates a list an admin built through the UI. It is here
+      // for the institution that somehow holds more anyway — a direct write, a
+      // future import, a cap lowered later — because without it the sort is a
+      // blocking in-memory sort over the whole collection slice (neither sort
+      // key is indexed) and an unbounded response. With it, MongoDB does a
+      // top-K sort bounded by this number instead.
+      .limit(ALUMNI_MAX_RECORDS)
       .lean<AlumnusDoc[]>();
     return rows.map(serialize);
   },
@@ -143,6 +152,10 @@ export const AlumniService = {
     await connectToDatabase();
     const rows = await Alumnus.find({ institutionId, status: "ACTIVE" })
       .sort({ batch: -1, name: 1 })
+      // Same defence as `list`'s, and it matters more here: this one feeds an
+      // unauthenticated, CORS-open response, so an over-cap institution would
+      // otherwise 500 the WHOLE public profile rather than just this block.
+      .limit(ALUMNI_MAX_RECORDS)
       .lean<AlumnusDoc[]>();
     return rows.map(serialize);
   },
@@ -153,6 +166,20 @@ export const AlumniService = {
     actor: { id: string; name: string },
   ): Promise<AlumnusDTO> {
     await connectToDatabase();
+
+    // A cap on records per institution. Alumni have no per-record cap to sit
+    // beside (one photo, no arrays), so this is the only bound on how much of
+    // this collection the public payload can carry. Same `countDocuments` +
+    // 400 shape as `OfferService.create` and `ScholarshipService.create`, and
+    // the same accepted looseness: two simultaneous creates at the boundary
+    // can both pass and land on 201 records, which is fine for a cap whose
+    // job is to bound an order of magnitude.
+    const count = await Alumnus.countDocuments({ institutionId });
+    if (count >= ALUMNI_MAX_RECORDS) {
+      throw validationError(
+        `You can keep up to ${ALUMNI_MAX_RECORDS} alumni. Delete one to add another.`,
+      );
+    }
 
     // `category` is not re-validated here: the model's own enum constraint
     // (ALUMNI_CATEGORIES) rejects an unrecognised value during

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Types } from "mongoose";
@@ -15,10 +15,11 @@ import {
 import { POST as uploadAlumnusPhoto } from "@/app/api/settings/alumni/[alumnusId]/photo/route";
 import { AlumniService } from "@/services/alumni.service";
 import { Alumnus } from "@/models";
-// The image cap has exactly one name (see the photo route's own comment on
-// why it does not keep a route-local copy) — showcase images are uploaded
-// through `validateImage`, so this is the limit an oversized upload must
-// exceed to be refused.
+import { storage } from "@/lib/storage";
+// The image cap has exactly one name, imported by both the route and these
+// tests rather than re-declared — this is the limit an oversized upload must
+// exceed to be refused, at the route before `arrayBuffer()` and again inside
+// `validateImage`.
 import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 // `storage.get()` reads the adapter's PRIVATE store, never where `putPublic`
@@ -394,6 +395,96 @@ describe("PATCH /api/settings/alumni/[alumnusId]", () => {
     expect(raw).not.toHaveProperty("org");
   });
 
+  // `currentRole` and `note` complete the set: all four of the alumnus's
+  // clearable fields are now pinned at the route as well as at the service.
+  // The route is where a "spread and rebuild the patch" refactor would drop a
+  // `null` on the floor, and covering only two of four left the other two
+  // resting on the assumption that whatever holds for `batch` and `org` holds
+  // for them — which is exactly the assumption a refactor breaks.
+  it("leaves the stored currentRole untouched when the patch omits it", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchAlumnus(
+      jsonRequest({
+        url: `http://localhost/api/settings/alumni/${created.id}`,
+        body: { name: "Renamed only" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.alumnus.currentRole).toBe("Software Engineer");
+
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw?.currentRole).toBe("Software Engineer");
+  });
+
+  it("MUTATION-DISTINGUISHING: clears the stored currentRole when the patch sends an explicit null, not merely omitting the key", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchAlumnus(
+      jsonRequest({
+        url: `http://localhost/api/settings/alumni/${created.id}`,
+        body: { currentRole: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.alumnus.currentRole).toBeUndefined();
+
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("currentRole");
+  });
+
+  it("leaves the stored note untouched when the patch omits it", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchAlumnus(
+      jsonRequest({
+        url: `http://localhost/api/settings/alumni/${created.id}`,
+        body: { name: "Renamed only" },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.alumnus.note).toBe("Class topper");
+
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw?.note).toBe("Class topper");
+  });
+
+  it("MUTATION-DISTINGUISHING: clears the stored note when the patch sends an explicit null, not merely omitting the key", async () => {
+    const created = await makeAlumnus("INS0001");
+    await signInWithCookie("INS0001");
+
+    const response = await patchAlumnus(
+      jsonRequest({
+        url: `http://localhost/api/settings/alumni/${created.id}`,
+        body: { note: null },
+        origin: "http://localhost",
+      }),
+      { params: Promise.resolve({ alumnusId: created.id }) } as never,
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.alumnus.note).toBeUndefined();
+
+    const raw = await Alumnus.findById(created.id).lean();
+    expect(raw).not.toHaveProperty("note");
+  });
+
   it("MUTATION-DISTINGUISHING: rejects a cross-origin PATCH and leaves the record unchanged", async () => {
     const created = await makeAlumnus("INS0001");
     const before = await Alumnus.findById(created.id).lean();
@@ -747,28 +838,46 @@ describe("POST /api/settings/alumni/[alumnusId]/photo", () => {
     expect(raw).not.toHaveProperty("photo");
   });
 
-  // Same ruling, the size half: an oversized file is still refused, solely
-  // by `validateImage`'s own 5 MB cap.
-  it("rejects an oversized photo, and stores nothing", async () => {
+  // The route-level size check is not about the status code — `validateImage`
+  // 400s an oversized image on its own, so a test that asserted only the
+  // status would pass with the check deleted. What the check buys is WHERE
+  // the refusal happens: `formData()` has already materialised the body,
+  // `arrayBuffer()` copies it a second time, and `validateImage` only runs
+  // once that second copy exists. Spying on the file's own `arrayBuffer` is
+  // therefore the assertion that distinguishes the two — it is the exact
+  // allocation the check exists to prevent.
+  it("MUTATION-DISTINGUISHING: refuses an oversized photo before `arrayBuffer()` copies the body", async () => {
     const created = await makeAlumnus("INS0001");
     await signInWithCookie("INS0001");
 
     const oversized = Buffer.concat([PNG, Buffer.alloc(MAX_IMAGE_BYTES)]);
+    const file = new File([new Uint8Array(oversized)], "big.png", { type: "image/png" });
+    const arrayBuffer = vi.spyOn(file, "arrayBuffer");
+    const putPublic = vi.spyOn(storage, "putPublic");
     const form = new FormData();
-    form.set("file", new File([new Uint8Array(oversized)], "big.png", { type: "image/png" }));
+    form.set("file", file);
 
-    const response = await uploadAlumnusPhoto(
-      formRequest(
-        `http://localhost/api/settings/alumni/${created.id}/photo`,
-        form,
-        { origin: "http://localhost" },
-      ),
-      { params: Promise.resolve({ alumnusId: created.id }) } as never,
-    );
-    const payload = await response.json();
+    try {
+      const response = await uploadAlumnusPhoto(
+        formRequest(
+          `http://localhost/api/settings/alumni/${created.id}/photo`,
+          form,
+          { origin: "http://localhost" },
+        ),
+        { params: Promise.resolve({ alumnusId: created.id }) } as never,
+      );
+      const payload = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(payload.error.code).toBe("VALIDATION_ERROR");
+      expect(response.status).toBe(400);
+      expect(payload.error.code).toBe("VALIDATION_ERROR");
+      expect(payload.error.message).toMatch(/5 MB or smaller/);
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(putPublic).not.toHaveBeenCalled();
+    } finally {
+      arrayBuffer.mockRestore();
+      putPublic.mockRestore();
+    }
+
     const raw = await Alumnus.findById(created.id).lean();
     expect(raw).not.toHaveProperty("photo");
   });

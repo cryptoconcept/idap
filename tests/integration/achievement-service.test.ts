@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { Achievement, Activity } from "@/models";
+import { ACHIEVEMENT_MAX_RECORDS } from "@/lib/constants";
 import { AchievementService } from "@/services/achievement.service";
 import type { AchievementCreateInput, AchievementPatchInput } from "@/lib/validation/showcase";
 
@@ -395,5 +396,98 @@ describe("AchievementService tenant isolation (mutation-checked)", () => {
 
     const after = await Achievement.findById(foreign._id).lean();
     expect(after).toEqual(before);
+  });
+});
+
+describe("AchievementService per-institution record cap", () => {
+  /**
+   * Seeds `count` achievements straight through the model, bypassing
+   * `create`. That is deliberate for the read tests below — the whole point
+   * of the `.limit()` is to protect a collection that is already over the
+   * cap, which `create` by definition refuses to produce.
+   */
+  async function seed(institutionId: string, count: number, status = "ACTIVE") {
+    await Achievement.insertMany(
+      Array.from({ length: count }, (_, i) => ({
+        institutionId,
+        category: "ACADEMIC",
+        title: `Achievement ${String(i).padStart(4, "0")}`,
+        level: "SCHOOL",
+        status,
+      })),
+    );
+  }
+
+  it("refuses the record past the cap and stores nothing", async () => {
+    await seed("INS0001", ACHIEVEMENT_MAX_RECORDS);
+
+    await expect(
+      AchievementService.create(
+        "INS0001",
+        { category: "ACADEMIC", title: "One too many", eventDate: undefined, level: "SCHOOL" },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(await Achievement.countDocuments({ institutionId: "INS0001" })).toBe(
+      ACHIEVEMENT_MAX_RECORDS,
+    );
+  });
+
+  it("still accepts the record that lands exactly on the cap", async () => {
+    await seed("INS0001", ACHIEVEMENT_MAX_RECORDS - 1);
+
+    const created = await AchievementService.create(
+      "INS0001",
+      { category: "ACADEMIC", title: "The last one", eventDate: undefined, level: "SCHOOL" },
+      actor,
+    );
+
+    expect(created.id).toBeDefined();
+    expect(await Achievement.countDocuments({ institutionId: "INS0001" })).toBe(
+      ACHIEVEMENT_MAX_RECORDS,
+    );
+  });
+
+  // MUTATION-DISTINGUISHING: drop `institutionId` from the count and this is
+  // the one that fails — a full school next door must not consume this
+  // school's allowance.
+  it("counts only the caller's own records", async () => {
+    await seed("INS0002", ACHIEVEMENT_MAX_RECORDS);
+
+    const created = await AchievementService.create(
+      "INS0001",
+      { category: "ACADEMIC", title: "First of its own", eventDate: undefined, level: "SCHOOL" },
+      actor,
+    );
+
+    expect(created.title).toBe("First of its own");
+    expect(await Achievement.countDocuments({ institutionId: "INS0002" })).toBe(
+      ACHIEVEMENT_MAX_RECORDS,
+    );
+  });
+
+  // MUTATION-DISTINGUISHING: remove `.limit()` from `list` and this fails —
+  // a collection that is already over the cap must not come back whole.
+  it("caps what `list` returns even when the collection is already over the cap", async () => {
+    await seed("INS0001", ACHIEVEMENT_MAX_RECORDS + 5);
+
+    const rows = await AchievementService.list("INS0001");
+
+    expect(rows).toHaveLength(ACHIEVEMENT_MAX_RECORDS);
+  });
+
+  // MUTATION-DISTINGUISHING: remove `.limit()` from `listPublic` and this
+  // fails. This is the path that feeds the unauthenticated public profile.
+  it("caps what `listPublic` returns even when the collection is already over the cap", async () => {
+    await seed("INS0001", ACHIEVEMENT_MAX_RECORDS + 5);
+    // HIDDEN rows are filtered at the database, so they must not eat into the
+    // limit — the public list should still be full of ACTIVE ones.
+    await seed("INS0001", 5, "HIDDEN");
+
+    const rows = await AchievementService.listPublic("INS0001");
+
+    expect(rows).toHaveLength(ACHIEVEMENT_MAX_RECORDS);
+    expect(rows.every((row) => row.status === "ACTIVE")).toBe(true);
   });
 });

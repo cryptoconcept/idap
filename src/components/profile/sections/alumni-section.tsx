@@ -92,6 +92,27 @@ function toOptional(value: string): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+/**
+ * `AlumniService.list`'s `{ batch: -1, name: 1 }`, reproduced client-side so
+ * a locally-inserted or locally-edited row sits where the next page load will
+ * put it.
+ *
+ * Two details are copied from what MongoDB actually does rather than from
+ * what looks natural in JavaScript. A missing `batch` sorts before every
+ * value ascending, so it lands LAST descending — hence the `?? ""` floor
+ * (`optionalText` never stores a literal `""`, so nothing real collides with
+ * it). And the comparisons are plain `<`/`>` rather than `localeCompare`,
+ * because the server sort is MongoDB's default binary collation, not a
+ * locale-aware one; `localeCompare` would disagree with it on case.
+ */
+function byServerOrder(a: AlumnusDTO, b: AlumnusDTO): number {
+  const left = a.batch ?? "";
+  const right = b.batch ?? "";
+  if (left !== right) return left < right ? 1 : -1;
+  if (a.name === b.name) return 0;
+  return a.name < b.name ? -1 : 1;
+}
+
 async function fetchAlumni(): Promise<AlumnusDTO[] | null> {
   try {
     const response = await fetch("/api/settings/alumni");
@@ -607,12 +628,26 @@ export function AlumniSection() {
     );
   }
 
-  /** After Save/Create succeeds: update the list (insert or replace by id) and close the dialog. */
+  /**
+   * After Save/Create succeeds: update the list (insert or replace by id),
+   * re-sorted, and close the dialog.
+   *
+   * The re-sort is what stops a saved alumnus from moving on the next page
+   * load. `AlumniService.list` orders by `{ batch: -1, name: 1 }`, not by
+   * creation time, so — unlike the achievements section, whose server sort
+   * genuinely is newest-first — prepending would put a 2005 alumnus at the
+   * top of the list and then drop them to the bottom on reload. Editing a
+   * batch has the same problem in the replace branch, which is why both
+   * branches go through the same sort rather than only the insert one.
+   */
   function handleSaved(next: AlumnusDTO) {
     setAlumni((prev) => {
       if (!prev) return [next];
       const exists = prev.some((row) => row.id === next.id);
-      return exists ? prev.map((row) => (row.id === next.id ? next : row)) : [next, ...prev];
+      const merged = exists
+        ? prev.map((row) => (row.id === next.id ? next : row))
+        : [...prev, next];
+      return [...merged].sort(byServerOrder);
     });
     setDialogState(null);
   }

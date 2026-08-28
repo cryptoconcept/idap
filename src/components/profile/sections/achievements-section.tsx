@@ -530,7 +530,12 @@ function AchievementDialog({
   );
   const [title, setTitle] = useState(editing?.title ?? "");
   const [description, setDescription] = useState(editing?.description ?? "");
-  const [eventDate, setEventDate] = useState(editing?.eventDate?.slice(0, 10) ?? "");
+  // `<input type="date">` can only hold a calendar day, so the stored ISO
+  // timestamp is truncated to seed it. That truncation must not become a
+  // write: `initialEventDate` is kept so `handleSubmit` can tell an untouched
+  // field from an edited one and leave a stored time component alone.
+  const initialEventDate = editing?.eventDate?.slice(0, 10) ?? "";
+  const [eventDate, setEventDate] = useState(initialEventDate);
   const [level, setLevel] = useState<AchievementLevel>((editing?.level as AchievementLevel) ?? "SCHOOL");
   const [students, setStudents] = useState<StudentDraft[]>(
     editing?.students?.map((student) => ({ name: student.name, grade: student.grade ?? "" })) ?? [],
@@ -556,7 +561,16 @@ function AchievementDialog({
           level,
           // Explicit `null` when cleared, never `""` — see `toClearable` above.
           description: toClearable(description),
-          eventDate: toClearable(eventDate),
+          // Sent only when the admin actually changed the date. Sending it
+          // unconditionally would round-trip the day-only value this form can
+          // hold, so an achievement stored as 2026-02-01T18:30:00Z would be
+          // rewritten to midnight by a save that only touched, say, the
+          // title — an unrequested edit to data the admin never looked at.
+          // Omitting the key leaves the stored value untouched, which is
+          // exactly the "no opinion" arm of the three-state contract; an
+          // explicit clear still sends `null`, because clearing the field
+          // makes `eventDate` differ from `initialEventDate`.
+          ...(eventDate !== initialEventDate ? { eventDate: toClearable(eventDate) } : {}),
           students: studentsPayload,
         })
       : await createAchievement({

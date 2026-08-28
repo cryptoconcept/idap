@@ -5,6 +5,7 @@ import {
   isFacilitySelected,
   LEGACY_FACILITY_CODE_MAP,
   UNMAPPABLE_LEGACY_CODES,
+  withoutFacility,
 } from "@/lib/profile/facilities";
 import { toFacilityCode } from "@/components/profile/section-form";
 
@@ -153,5 +154,70 @@ describe("isFacilitySelected", () => {
     // The component only pushes a new row when `has(code)` is false — this
     // is exactly that check, on the exact codes a real un-migrated
     // institution would have stored.
+  });
+});
+
+describe("withoutFacility", () => {
+  // `FacilitiesSection`'s chip is a toggle: `isFacilitySelected` decides
+  // whether it renders pressed, and this decides what a click on a pressed
+  // chip removes. Until both agree, a chip can be pressed and un-pressable —
+  // which is the state EVERY institution is in before `migrate:facility-codes
+  // --apply` runs, because every stored row is still a legacy code.
+
+  // MUTATION-DISTINGUISHING: revert `withoutFacility` to a plain
+  // `entry.code !== code` filter and this is the one that fails — the stored
+  // row is the legacy `LIBRARY` and the chip's code is the new `library`, so
+  // only the legacy-aware comparison can pair them.
+  it("removes a stored legacy LIBRARY row when the library chip is de-selected", () => {
+    const selected = [{ code: "LIBRARY", label: "Library", available: true, note: "" }];
+    expect(withoutFacility(selected, "library")).toEqual([]);
+  });
+
+  it("removes an already-migrated library row when the library chip is de-selected", () => {
+    const selected = [{ code: "library", label: "Library", available: true, note: "" }];
+    expect(withoutFacility(selected, "library")).toEqual([]);
+  });
+
+  // A mixed array is the real state of an institution that added a facility
+  // after the deploy but before the migration: one legacy row, one new one.
+  // De-selecting a chip must take out its own row and nothing else.
+  it("removes only the de-selected chip's row, legacy or not, leaving the rest alone", () => {
+    const selected = [
+      { code: "LIBRARY", label: "Library", available: true, note: "" },
+      { code: "playground", label: "Playground", available: true, note: "" },
+      { code: "ROBOTICS_LAB", label: "Robotics Lab", available: true, note: "" },
+    ];
+
+    expect(withoutFacility(selected, "library").map((entry) => entry.code)).toEqual([
+      "playground",
+      "ROBOTICS_LAB",
+    ]);
+    expect(withoutFacility(selected, "playground").map((entry) => entry.code)).toEqual([
+      "LIBRARY",
+      "ROBOTICS_LAB",
+    ]);
+  });
+
+  // Every mapped code, not just `library`: the pressed state is legacy-aware
+  // for all nine, so the removal must be too, or eight of them stay broken.
+  it("removes the legacy row for every one of the nine convertible codes", () => {
+    for (const [legacy, current] of Object.entries(LEGACY_FACILITY_CODE_MAP)) {
+      const selected = [{ code: legacy, label: legacy, available: true, note: "" }];
+      expect(isFacilitySelected([legacy], current)).toBe(true);
+      expect(withoutFacility(selected, current)).toEqual([]);
+    }
+  });
+
+  // The mirror of `isFacilitySelected`'s HOSTEL/SPORTS tests: a row no chip
+  // reads as selected must be a row no chip can delete. Losing an unmappable
+  // legacy row to an unrelated click would destroy the very facility the
+  // "Needs re-picking" badge exists to have an admin re-state.
+  it("never removes an unmappable legacy row, whichever chip is clicked", () => {
+    for (const legacy of UNMAPPABLE_LEGACY_CODES) {
+      const selected = [{ code: legacy, label: legacy, available: true, note: "" }];
+      for (const code of FACILITY_CODES) {
+        expect(withoutFacility(selected, code)).toEqual(selected);
+      }
+    }
   });
 });

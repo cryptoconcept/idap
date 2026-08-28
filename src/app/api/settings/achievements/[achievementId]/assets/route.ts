@@ -5,6 +5,8 @@ import { AchievementService } from "@/services/achievement.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 import { validationError } from "@/lib/api/errors";
+import { SHOWCASE_MAX_PDF_BYTES } from "@/lib/constants";
+import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,18 +36,21 @@ const removeAssetSchema = z.object({
 
 /**
  * Multipart upload of one photo or certificate onto one of the caller's own
- * achievements, selected by the form's `kind` field. Every real check —
- * magic-byte sniffing and the size cap, for both kinds — is
- * `AchievementService`'s alone to make (`validateImage` for PHOTO,
- * `addCertificate`'s own PDF header + `SHOWCASE_MAX_PDF_BYTES` check for
- * CERTIFICATE). This route does not re-check either cap: a route-level
- * `MAX_IMAGE_BYTES` pre-check used to live here, duplicating a limit
- * `validateImage` already enforces through a second, route-local copy of the
- * same `5 * 1024 * 1024` constant — the same mistake, from the other
- * direction, that this plan already deleted `SHOWCASE_MAX_IMAGE_BYTES` for
- * (see its comment in `lib/constants.ts`). All this route checks before
- * spending an `arrayBuffer()` read on the file is that one was actually
- * chosen and that it isn't empty.
+ * achievements, selected by the form's `kind` field. Deciding whether the
+ * bytes are what they claim to be is `AchievementService`'s alone to make
+ * (`validateImage` for PHOTO, `addCertificate`'s `%PDF-` header check for
+ * CERTIFICATE) — this route never sniffs content.
+ *
+ * The `file.size` bound below shares its numbers with those two, and is still
+ * not a duplicate of them. `request.formData()` has already materialised the
+ * body by this point and `arrayBuffer()` copies it a second time, so a check
+ * that runs inside the service — after the bytes exist — can refuse an
+ * oversize upload but cannot stop the memory from being spent. Only a check
+ * placed here, before `arrayBuffer()`, bounds what this handler allocates: a
+ * 300 MB post would otherwise hold ~600 MB and OOM the function rather than
+ * 400. Same ordering both pre-existing upload routes use
+ * (`institution/media/route.ts`, the toppers photo route), and the reason the
+ * constants are imported rather than re-declared: one number, two jobs.
  */
 export async function POST(
   request: NextRequest,
@@ -69,6 +74,14 @@ export async function POST(
     // path that reports the accurate cause; do not delete it as dead code
     // just because the PHOTO branch never needs it.
     if (file.size <= 0) throw validationError("file: the file is empty");
+    // Before `arrayBuffer()`, deliberately — see this route's header comment.
+    // Per kind, because the two kinds' caps are genuinely different numbers.
+    const maxBytes = kind === "PHOTO" ? MAX_IMAGE_BYTES : SHOWCASE_MAX_PDF_BYTES;
+    if (file.size > maxBytes) {
+      throw validationError(
+        `file: files must be ${Math.floor(maxBytes / (1024 * 1024))} MB or smaller`,
+      );
+    }
 
     const actor = { id: user.id, name: user.name };
     const asset = { contentType: file.type, bytes: Buffer.from(await file.arrayBuffer()) };

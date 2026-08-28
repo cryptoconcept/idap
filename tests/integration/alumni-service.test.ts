@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { Alumnus, Activity } from "@/models";
+import { ALUMNI_MAX_RECORDS } from "@/lib/constants";
 import { AlumniService } from "@/services/alumni.service";
 import type { AlumnusCreateInput, AlumnusPatchInput } from "@/lib/validation/showcase";
 
@@ -487,5 +488,87 @@ describe("AlumniService tenant isolation (mutation-checked)", () => {
 
     const after = await Alumnus.findById(foreign._id).lean();
     expect(after).toEqual(before);
+  });
+});
+
+describe("AlumniService per-institution record cap", () => {
+  /**
+   * Seeds `count` alumni straight through the model, bypassing `create`.
+   * Deliberate for the read tests below — the whole point of the `.limit()`
+   * is to protect a collection that is already over the cap, which `create`
+   * by definition refuses to produce.
+   */
+  async function seed(institutionId: string, count: number, status = "ACTIVE") {
+    await Alumnus.insertMany(
+      Array.from({ length: count }, (_, i) => ({
+        institutionId,
+        name: `Alumnus ${String(i).padStart(4, "0")}`,
+        category: "OTHER",
+        status,
+      })),
+    );
+  }
+
+  it("refuses the record past the cap and stores nothing", async () => {
+    await seed("INS0001", ALUMNI_MAX_RECORDS);
+
+    await expect(
+      AlumniService.create("INS0001", { name: "One too many", category: "OTHER" }, actor),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+    expect(await Alumnus.countDocuments({ institutionId: "INS0001" })).toBe(ALUMNI_MAX_RECORDS);
+  });
+
+  it("still accepts the record that lands exactly on the cap", async () => {
+    await seed("INS0001", ALUMNI_MAX_RECORDS - 1);
+
+    const created = await AlumniService.create(
+      "INS0001",
+      { name: "The last one", category: "OTHER" },
+      actor,
+    );
+
+    expect(created.id).toBeDefined();
+    expect(await Alumnus.countDocuments({ institutionId: "INS0001" })).toBe(ALUMNI_MAX_RECORDS);
+  });
+
+  // MUTATION-DISTINGUISHING: drop `institutionId` from the count and this is
+  // the one that fails — a full school next door must not consume this
+  // school's allowance.
+  it("counts only the caller's own records", async () => {
+    await seed("INS0002", ALUMNI_MAX_RECORDS);
+
+    const created = await AlumniService.create(
+      "INS0001",
+      { name: "First of its own", category: "OTHER" },
+      actor,
+    );
+
+    expect(created.name).toBe("First of its own");
+    expect(await Alumnus.countDocuments({ institutionId: "INS0002" })).toBe(ALUMNI_MAX_RECORDS);
+  });
+
+  // MUTATION-DISTINGUISHING: remove `.limit()` from `list` and this fails —
+  // a collection that is already over the cap must not come back whole.
+  it("caps what `list` returns even when the collection is already over the cap", async () => {
+    await seed("INS0001", ALUMNI_MAX_RECORDS + 5);
+
+    const rows = await AlumniService.list("INS0001");
+
+    expect(rows).toHaveLength(ALUMNI_MAX_RECORDS);
+  });
+
+  // MUTATION-DISTINGUISHING: remove `.limit()` from `listPublic` and this
+  // fails. This is the path that feeds the unauthenticated public profile.
+  it("caps what `listPublic` returns even when the collection is already over the cap", async () => {
+    await seed("INS0001", ALUMNI_MAX_RECORDS + 5);
+    // HIDDEN rows are filtered at the database, so they must not eat into the
+    // limit — the public list should still be full of ACTIVE ones.
+    await seed("INS0001", 5, "HIDDEN");
+
+    const rows = await AlumniService.listPublic("INS0001");
+
+    expect(rows).toHaveLength(ALUMNI_MAX_RECORDS);
+    expect(rows.every((row) => row.status === "ACTIVE")).toBe(true);
   });
 });

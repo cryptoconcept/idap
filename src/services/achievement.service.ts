@@ -6,6 +6,7 @@ import { AppError, notFound, validationError } from "@/lib/api/errors";
 import {
   ACHIEVEMENT_MAX_CERTIFICATES,
   ACHIEVEMENT_MAX_PHOTOS,
+  ACHIEVEMENT_MAX_RECORDS,
   SHOWCASE_MAX_PDF_BYTES,
 } from "@/lib/constants";
 import { validateImage } from "@/lib/media/image";
@@ -255,6 +256,14 @@ export const AchievementService = {
     await connectToDatabase();
     const rows = await Achievement.find({ institutionId })
       .sort({ createdAt: -1 })
+      // `create` already refuses the 201st record, so this limit is never the
+      // thing that truncates a list an admin built through the UI. It is here
+      // for the institution that somehow holds more anyway — a direct write, a
+      // future import, a cap lowered later — because without it the sort is a
+      // blocking in-memory sort over the whole collection slice (neither sort
+      // key is indexed) and an unbounded response. With it, MongoDB does a
+      // top-K sort bounded by this number instead.
+      .limit(ACHIEVEMENT_MAX_RECORDS)
       .lean<AchievementDoc[]>();
     return rows.map(serialize);
   },
@@ -282,6 +291,10 @@ export const AchievementService = {
     await connectToDatabase();
     const rows = await Achievement.find({ institutionId, status: "ACTIVE" })
       .sort({ eventDate: -1, createdAt: -1 })
+      // Same defence as `list`'s, and it matters more here: this one feeds an
+      // unauthenticated, CORS-open response, so an over-cap institution would
+      // otherwise 500 the WHOLE public profile rather than just this block.
+      .limit(ACHIEVEMENT_MAX_RECORDS)
       .lean<AchievementDoc[]>();
     return rows.map(serialize);
   },
@@ -292,6 +305,25 @@ export const AchievementService = {
     actor: { id: string; name: string },
   ): Promise<AchievementDTO> {
     await connectToDatabase();
+
+    // A cap on records per institution, not per record — `ACHIEVEMENT_MAX_PHOTOS`
+    // and friends bound one achievement, this bounds how many exist.
+    // `countDocuments` + a 400 rather than the `$expr` + 409 the per-record
+    // caps use: those caps live on an array inside the document being
+    // updated, so the check can ride along inside the write filter and be
+    // atomic. A whole-collection count has no such filter to ride, so this
+    // follows the pattern the codebase already uses for exactly this shape —
+    // `OfferService.create` and `ScholarshipService.create`, both a scoped
+    // `countDocuments` against a `*_MAX_PER_INSTITUTION` constant. Two
+    // simultaneous creates at the boundary can therefore both pass and land
+    // on 201 records; the cap exists to bound the public payload's order of
+    // magnitude, and one over is not a failure of that.
+    const count = await Achievement.countDocuments({ institutionId });
+    if (count >= ACHIEVEMENT_MAX_RECORDS) {
+      throw validationError(
+        `You can keep up to ${ACHIEVEMENT_MAX_RECORDS} achievements. Delete one to add another.`,
+      );
+    }
 
     // `category` is not re-validated here: the model's own enum constraint
     // (ACHIEVEMENT_CATEGORIES) rejects an unrecognised value during

@@ -30,6 +30,23 @@
  * continue`) needs no special-casing of its own: both paths already agree —
  * `unmapped` reports the read, `skipped`/`converted` report the write.
  *
+ * DEPLOY THIS BRANCH FIRST, THEN RUN THE MIGRATION. Not a preference — the
+ * reverse order silently undoes itself. The pre-branch `Institution` schema
+ * declares `uppercase: true` on `facilities[].code`, and Mongoose implements
+ * that as a setter it also applies to update casts. So against a production
+ * still serving the old code, `--apply` converts `LIBRARY` to `library`,
+ * reports every conversion as done, and then the next time any admin saves
+ * their Facilities section that setter writes the whole array back as
+ * `LIBRARY`, `SCIENCE_LAB`, and so on. Nothing fails, nothing warns, and the
+ * report from the first run still says the work is complete. A re-run after
+ * the deploy does fix it — the selector keys on the legacy codes, which are
+ * exactly what is back in the database — but only if someone knows to re-run
+ * it, and nothing here or in the report would tell them.
+ *
+ * Once this branch is deployed the setter is gone (`src/models/Institution.ts`
+ * no longer declares `uppercase` on that path) and a converted code stays
+ * converted through any number of profile saves.
+ *
  *   npm run migrate:facility-codes                 # report only
  *   npm run migrate:facility-codes -- --apply      # write
  */

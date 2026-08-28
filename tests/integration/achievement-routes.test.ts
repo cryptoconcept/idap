@@ -18,11 +18,11 @@ import {
 import { AchievementService } from "@/services/achievement.service";
 import { Achievement } from "@/models";
 import { storage, type StoredObject } from "@/lib/storage";
-import { ACHIEVEMENT_MAX_PHOTOS } from "@/lib/constants";
-// The image cap has exactly one name (see the assets route's own comment on
-// why it does not keep a route-local copy) — showcase images are uploaded
-// through `validateImage`, so this is the limit an oversized upload must
-// exceed to be refused.
+import { ACHIEVEMENT_MAX_PHOTOS, SHOWCASE_MAX_PDF_BYTES } from "@/lib/constants";
+// The image cap has exactly one name, imported by both the route and these
+// tests rather than re-declared — this is the limit an oversized image upload
+// must exceed to be refused, at the route before `arrayBuffer()` and again
+// inside `validateImage`.
 import { MAX_IMAGE_BYTES } from "@/lib/media/image";
 
 // `storage.get()` reads the adapter's PRIVATE store, never where `putPublic`
@@ -638,14 +638,106 @@ describe("POST /api/settings/achievements/[achievementId]/assets", () => {
   // Proves the route's `MAX_IMAGE_BYTES` pre-check was genuinely redundant,
   // not load-bearing: with it removed, an oversized photo is still refused —
   // now solely by `AchievementService.addPhoto`'s own `validateImage` call.
-  it("still rejects an oversized photo now that the route has no size pre-check of its own", async () => {
+  // The route-level size check is not about the status code — `validateImage`
+  // and `addCertificate` both 400 an oversized file on their own, so a test
+  // that asserted only the status would pass with the check deleted. What the
+  // check buys is WHERE the refusal happens: `formData()` has already
+  // materialised the body, `arrayBuffer()` copies it a second time, and every
+  // service-level check runs after that copy exists. Spying on the file's own
+  // `arrayBuffer` is therefore the assertion that distinguishes the two — it
+  // is the exact allocation the check exists to prevent.
+  it("MUTATION-DISTINGUISHING: refuses an oversized photo before `arrayBuffer()` copies the body", async () => {
     const created = await makeAchievement("INS0001");
     await signInWithCookie("INS0001");
 
     const oversized = Buffer.concat([PNG, Buffer.alloc(MAX_IMAGE_BYTES)]);
+    const file = new File([new Uint8Array(oversized)], "big.png", { type: "image/png" });
+    const arrayBuffer = vi.spyOn(file, "arrayBuffer");
+    const putPublic = vi.spyOn(storage, "putPublic");
     const form = new FormData();
     form.set("kind", "PHOTO");
-    form.set("file", new File([new Uint8Array(oversized)], "big.png", { type: "image/png" }));
+    form.set("file", file);
+
+    try {
+      const response = await addAsset(
+        formRequest(
+          `http://localhost/api/settings/achievements/${created.id}/assets`,
+          form,
+          { origin: "http://localhost" },
+        ),
+        { params: Promise.resolve({ achievementId: created.id }) } as never,
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(payload.error.code).toBe("VALIDATION_ERROR");
+      expect(payload.error.message).toMatch(/5 MB or smaller/);
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(putPublic).not.toHaveBeenCalled();
+    } finally {
+      arrayBuffer.mockRestore();
+      putPublic.mockRestore();
+    }
+
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.photos ?? []).toHaveLength(0);
+  });
+
+  // The certificate half of the same guard, and the reason the route's bound
+  // is per kind rather than one shared number: a 12 MB PDF is a legitimate
+  // certificate and must still upload, so bounding CERTIFICATE at
+  // `MAX_IMAGE_BYTES` would be a regression, and bounding PHOTO at
+  // `SHOWCASE_MAX_PDF_BYTES` would let a 19 MB image through the copy.
+  it("MUTATION-DISTINGUISHING: refuses an oversized certificate before `arrayBuffer()` copies the body, at the PDF cap not the image one", async () => {
+    const created = await makeAchievement("INS0001");
+    await signInWithCookie("INS0001");
+
+    const oversized = Buffer.concat([PDF, Buffer.alloc(SHOWCASE_MAX_PDF_BYTES)]);
+    const file = new File([new Uint8Array(oversized)], "big.pdf", { type: "application/pdf" });
+    const arrayBuffer = vi.spyOn(file, "arrayBuffer");
+    const putPublic = vi.spyOn(storage, "putPublic");
+    const form = new FormData();
+    form.set("kind", "CERTIFICATE");
+    form.set("file", file);
+
+    try {
+      const response = await addAsset(
+        formRequest(
+          `http://localhost/api/settings/achievements/${created.id}/assets`,
+          form,
+          { origin: "http://localhost" },
+        ),
+        { params: Promise.resolve({ achievementId: created.id }) } as never,
+      );
+      const payload = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(payload.error.message).toMatch(/20 MB or smaller/);
+      expect(arrayBuffer).not.toHaveBeenCalled();
+      expect(putPublic).not.toHaveBeenCalled();
+    } finally {
+      arrayBuffer.mockRestore();
+      putPublic.mockRestore();
+    }
+
+    const raw = await Achievement.findById(created.id).lean();
+    expect(raw?.certificates ?? []).toHaveLength(0);
+  });
+
+  // The other side of the per-kind bound: a PDF between the image cap and the
+  // PDF cap must still be accepted. Fails if the route ever collapses the two
+  // kinds onto `MAX_IMAGE_BYTES`.
+  it("MUTATION-DISTINGUISHING: accepts a certificate larger than the image cap", async () => {
+    const created = await makeAchievement("INS0001");
+    await signInWithCookie("INS0001");
+
+    const big = Buffer.concat([PDF, Buffer.alloc(MAX_IMAGE_BYTES)]);
+    expect(big.byteLength).toBeGreaterThan(MAX_IMAGE_BYTES);
+    expect(big.byteLength).toBeLessThan(SHOWCASE_MAX_PDF_BYTES);
+
+    const form = new FormData();
+    form.set("kind", "CERTIFICATE");
+    form.set("file", new File([new Uint8Array(big)], "cert.pdf", { type: "application/pdf" }));
 
     const response = await addAsset(
       formRequest(
@@ -655,12 +747,10 @@ describe("POST /api/settings/achievements/[achievementId]/assets", () => {
       ),
       { params: Promise.resolve({ achievementId: created.id }) } as never,
     );
-    const payload = await response.json();
 
-    expect(response.status).toBe(400);
-    expect(payload.error.code).toBe("VALIDATION_ERROR");
+    expect(response.status).toBe(200);
     const raw = await Achievement.findById(created.id).lean();
-    expect(raw?.photos ?? []).toHaveLength(0);
+    expect(raw?.certificates ?? []).toHaveLength(1);
   });
 
   // The route's only guard on `kind` that has no test of its own: delete
