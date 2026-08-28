@@ -19,9 +19,20 @@
  * `externalJobId`, `title`, `subject`, `description`, `institutionName`,
  * `city` (api-map §2.1). Contract Two (`POST /api/partner/school/jobs`,
  * school grant) requires only `externalJobId`, `title`, `subject`,
- * `description` and explicitly does NOT accept `institutionName`, `city`,
- * `district`, `state` or `sourceUrl` — the grant already identifies exactly
- * one school, so sending them is wrong, not merely redundant (api-map §2.3).
+ * `description`, and separately — this is FIX ROUND 1, corrected against
+ * `SchoolJobInput` (`partner-school-jobs.ts:12-23`) read directly rather
+ * than trusted from the plan — accepts optional `city` and `branchId` too:
+ * `postSchoolJob` passes `location: input.city` into the same `createJob`
+ * the school's own dashboard uses, and `createJob` defaults `location` to
+ * `""` with NO fallback to the school's own record before throwing "Job
+ * needs a location or branch" (`jobs.ts:38,59`). A Contract Two body with
+ * neither `city` nor `branchId` fails every time, and because `spendWrite`
+ * runs before validation it burns a write unit doing so — exactly the class
+ * of loss `preflight` exists to prevent, so its location check now applies
+ * to both contracts, not just `AGGREGATED` (see `preflight` below). Contract
+ * Two still explicitly does NOT accept `institutionName`, `district`,
+ * `state` or `sourceUrl` — the grant already identifies exactly one school,
+ * so sending those is wrong, not merely redundant (api-map §2.3).
  * `state` defaults to `"Karnataka"` on eduFleet's own side for Contract One
  * only, so it is never injected here — only forwarded when IDAP has one.
  */
@@ -47,6 +58,11 @@ export type InstitutionPushInput = {
   city?: string;
   district?: string;
   state?: string;
+  // eduFleet accepts either `city` or `branchId` for Contract Two
+  // (`SchoolJobInput`) — IDAP has no source for a branch id today, so this is
+  // `undefined` in practice, but the type should not lie about what eduFleet
+  // will take. Never invented from anything else on this type.
+  branchId?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -95,9 +111,13 @@ function sanitizeFacilities(input: string[] | undefined): string[] | undefined {
  *
  * Checks, in order: `title` non-empty, `description` non-empty, `subject` in
  * eduFleet's taxonomy (`VACANCY_SUBJECTS`), salary ordering when both bounds
- * are present, `experienceRequired` non-negative, and — for `AGGREGATED`
- * only — `institutionName` and `city` present, since Contract One requires
- * both and Contract Two needs neither (api-map §2.1 vs §2.3).
+ * are present, `experienceRequired` non-negative, `institutionName` present
+ * for `AGGREGATED` only (Contract Two never carries one), and — for BOTH
+ * contracts — a location: `city` or `branchId`. FIX ROUND 1: the location
+ * check used to be gated to `AGGREGATED`, on the mistaken belief Contract Two
+ * needed neither. It does — see the module docblock's FIX ROUND 1 note for
+ * why a locationless Contract Two body 400s every time and burns a write unit
+ * doing it.
  *
  * Deliberately collects every applicable reason rather than stopping at the
  * first: a caller surfacing this to an admin wants the whole punch list in
@@ -126,13 +146,19 @@ export function preflight(
     reasons.push("Experience required cannot be negative");
   }
 
-  if (contract === "AGGREGATED") {
-    if (i.institutionName.trim().length === 0) {
-      reasons.push("eduFleet needs an institution name before a job can be published");
-    }
-    if (!i.city || i.city.trim().length === 0) {
-      reasons.push("eduFleet needs a city on the institution profile before a job can be published");
-    }
+  if (contract === "AGGREGATED" && i.institutionName.trim().length === 0) {
+    reasons.push("eduFleet needs an institution name before a job can be published");
+  }
+
+  // Location is required for BOTH contracts (FIX ROUND 1 — see module
+  // docblock): Contract One needs `city` directly; Contract Two needs
+  // `city` OR `branchId`, and its own `createJob` throws with no fallback to
+  // the school's own record when it gets neither. The message deliberately
+  // never names a contract a school admin has never heard of.
+  const hasCity = !!i.city && i.city.trim().length > 0;
+  const hasBranchId = !!i.branchId && i.branchId.trim().length > 0;
+  if (!hasCity && !hasBranchId) {
+    reasons.push("eduFleet needs a city on the institution profile before a job can be published");
   }
 
   return reasons;
@@ -173,19 +199,27 @@ export function buildAggregatedJobBody(v: VacancyPushInput, i: InstitutionPushIn
 
 /**
  * Contract Two's body: `externalJobId`, `title`, `subject`, `description`,
- * plus optional `salaryMin`/`salaryMax`/`experienceRequired`/`facilities`.
- * Deliberately never includes `institutionName`, `city`, `district`,
- * `state` or `sourceUrl` — the grant already identifies exactly one school,
- * so eduFleet does not accept any of them on this route (api-map §2.3); this
- * function has no institution parameter at all, so there is nothing to smuggle
- * them in from.
+ * `city`/`branchId` when present, plus optional
+ * `salaryMin`/`salaryMax`/`experienceRequired`/`facilities`.
+ *
+ * FIX ROUND 1: `city` (via `SchoolJobInput.city` -> `location`) was wrongly
+ * excluded here on the earlier belief that Contract Two accepted no location
+ * at all — verified false against `SchoolJobInput`
+ * (`partner-school-jobs.ts:12-23`), which declares `city?: string` and
+ * `branchId?: string`. Both are now sent when present. Still deliberately
+ * never includes `institutionName`, `district`, `state` or `sourceUrl` — the
+ * grant already identifies exactly one school, so eduFleet does not accept
+ * any of those four on this route (api-map §2.3, and confirmed directly
+ * against `SchoolJobInput`, which declares none of them).
  */
-export function buildSchoolJobBody(v: VacancyPushInput): Rec {
+export function buildSchoolJobBody(v: VacancyPushInput, i: InstitutionPushInput): Rec {
   return omitUndefined({
     externalJobId: v.vacancyId,
     title: v.title,
     subject: v.subject,
     description: v.description,
+    city: i.city,
+    branchId: i.branchId,
     salaryMin: v.salaryMin,
     salaryMax: v.salaryMax,
     experienceRequired: v.experienceRequired,

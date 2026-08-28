@@ -48,23 +48,44 @@ describe("preflight", () => {
   it("passes a complete vacancy", () => {
     expect(preflight(vac(), inst(), "AGGREGATED")).toEqual([]);
   });
+
+  it("MUTATION-DISTINGUISHING: preflight refuses a Contract Two push with no city or branchId", () => {
+    const reasons = preflight(vac(), { institutionName: "DPS" }, "SCHOOL_POSTED");
+    expect(reasons).toContainEqual(expect.stringContaining("city"));
+  });
+
+  it("preflight accepts a Contract Two push carrying branchId instead of city", () => {
+    expect(preflight(vac(), { institutionName: "DPS", branchId: "br-1" }, "SCHOOL_POSTED")).toEqual([]);
+  });
 });
 
 describe("buildSchoolJobBody", () => {
-  it("MUTATION-DISTINGUISHING: never sends institutionName, city, district, state or sourceUrl", () => {
-    const body = buildSchoolJobBody(vac());
-    for (const forbidden of ["institutionName", "city", "district", "state", "sourceUrl"]) {
+  it("MUTATION-DISTINGUISHING: never sends institutionName, district, state or sourceUrl", () => {
+    // FIX ROUND 1: `city` was wrongly on this forbidden list — SchoolJobInput
+    // (partner-school-jobs.ts:12-23) declares `city?: string`, and Contract
+    // Two 400s on every push without a city or branchId. Narrowed to the
+    // four fields Contract Two genuinely never accepts.
+    const body = buildSchoolJobBody(vac(), inst());
+    for (const forbidden of ["institutionName", "district", "state", "sourceUrl"]) {
       expect(body).not.toHaveProperty(forbidden);
     }
   });
 
+  it("MUTATION-DISTINGUISHING: sends city on a Contract Two body — eduFleet 400s without it", async () => {
+    // jobs.ts:38 defaults location to "" with no fallback to the school's
+    // own record, then jobs.ts:59 throws "Job needs a location or branch".
+    // Omitting city here fails 100% of pushes and burns a write unit each time.
+    const body = buildSchoolJobBody(vac(), inst({ city: "Mysuru" }));
+    expect(body).toMatchObject({ city: "Mysuru" });
+  });
+
   it("uses the vacancy id as externalJobId", () => {
-    expect(buildSchoolJobBody(vac({ vacancyId: "vac-42" }))).toMatchObject({ externalJobId: "vac-42" });
+    expect(buildSchoolJobBody(vac({ vacancyId: "vac-42" }), inst())).toMatchObject({ externalJobId: "vac-42" });
   });
 });
 
 describe("buildAggregatedJobBody", () => {
-  it("sends institutionName and city, which Contract Two must not carry", () => {
+  it("sends institutionName and city — institutionName is what Contract Two must not carry", () => {
     expect(buildAggregatedJobBody(vac(), inst())).toMatchObject({ institutionName: "DPS", city: "Bengaluru" });
   });
 
