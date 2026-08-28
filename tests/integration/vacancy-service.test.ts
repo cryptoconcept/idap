@@ -1163,3 +1163,92 @@ describe("VacancyService.remove closes the eduFleet listing before deleting (Tas
     expect(survivor?.listing?.jobId).toBe("ef-job-fresh");
   });
 });
+
+/**
+ * Fix round 1 — a claimed listing is the one exception to Task 5's
+ * close-first rule.
+ *
+ * Task 5 refuses a delete it cannot close first, because destroying IDAP's row
+ * destroys the only id that could ever take the advert down. A claim removes
+ * both halves of that reasoning at once: the advert has moved onto the
+ * school's own eduFleet account, where they can close it themselves, and
+ * `claimed` is terminal — every `pushClose` IDAP will ever make against it is
+ * a `403`. Refusing therefore protects nothing and traps the row forever.
+ */
+describe("VacancyService.remove and a claimed eduFleet listing (fix round 1)", () => {
+  /**
+   * MUTATION CHECK: remove the `if (!claimedByTheSchool)` guard around
+   * `closeListingBeforeDelete` in `vacancy.service.ts` and this fails on the
+   * first two assertions — the close is attempted, `stubFetch()` has no queued
+   * answer, the connector reports a failure, and the delete is refused with
+   * the vacancy still there. Asserting only "it deleted" would be weaker: the
+   * point is that no close was even attempted, because none can ever succeed.
+   */
+  it("MUTATION-DISTINGUISHING: deletes a claimed listing's vacancy without attempting a close", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001", { claimState: "claimed" });
+    const fetchMock = stubFetch();
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+  });
+
+  /**
+   * The delete is allowed, but it is not silent: the advert outlives the row,
+   * and the audit trail has to say so. The school is told the same thing
+   * before they press Delete, in the confirmation dialog.
+   */
+  it("records that the claimed advert was left live under the school's own account", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001", { claimState: "claimed" });
+    stubFetch();
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    const entry = await Activity.findOne({
+      institutionId: "INS0001",
+      entityId: vacancy._id,
+      action: "Vacancy deleted",
+    }).lean();
+    expect(entry?.description).toMatch(/left live under the school's own eduFleet Exchange account/i);
+  });
+
+  /**
+   * The exception is deliberately narrower than "a push was refused".
+   * `claim_pending` reverts to `unclaimed` the moment an administrator rejects
+   * the claim, so a listing in that state is still IDAP's to close and still
+   * has to be closed before the row goes — otherwise a rejected claim leaves a
+   * live advert with nothing left to address it.
+   */
+  it("still closes the listing first when the claim is only pending", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001", { claimState: "claim_pending" });
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: "ef-job-pending", status: "closed" }));
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+  });
+
+  /**
+   * A claimed listing eduFleet has already closed still skips the close — the
+   * `403` is answered on the claim, not on the status, so attempting one would
+   * burn a write unit to be refused for a listing that is already down.
+   */
+  it("skips the close for a claimed listing that is already closed on eduFleet", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001", {
+      claimState: "claimed",
+      remoteStatus: "closed",
+    });
+    const fetchMock = stubFetch();
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+  });
+});

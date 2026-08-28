@@ -83,10 +83,13 @@ export type VacancyListingDTO = {
    * warn a school that clearing a salary here will NOT clear it there: an
    * update can change a bound but has no value that means "remove" it, so the
    * figure below is what the public advert keeps showing until the listing is
-   * closed and republished.
+   * closed and republished. `experienceRequired` is here for exactly the same
+   * reason and no other — it is the third field a partner update can change
+   * but never remove, and unlike the bounds nothing validates against it.
    */
   remoteSalaryMin?: number;
   remoteSalaryMax?: number;
+  remoteExperienceRequired?: number;
 };
 
 /**
@@ -441,7 +444,14 @@ function assertPreflightPatch(vacancy: VacancyPushInput, remote: RemoteJobSalary
  * leaves eduFleet's copy as it was, since the mapping module omits absent
  * keys and eduFleet reads `undefined` as "not mentioned".
  */
-const PATCHABLE_KEYS = [
+/**
+ * Exported so `vacancy.service.ts` can decide whether an edit is worth pushing
+ * at all WITHOUT keeping a second copy of this list. A duplicate that drifted
+ * would fail in one of two silent ways: a key added here but not there means
+ * an edit eduFleet would have accepted never gets sent, and a key added there
+ * but not here means a write unit spent on a body that changes nothing.
+ */
+export const EDUFLEET_PATCHABLE_KEYS = [
   "title",
   "description",
   "salaryMin",
@@ -452,7 +462,7 @@ const PATCHABLE_KEYS = [
 
 function toPatchBody(body: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
-  for (const key of PATCHABLE_KEYS) {
+  for (const key of EDUFLEET_PATCHABLE_KEYS) {
     if (body[key] !== undefined) out[key] = body[key];
   }
   return out;
@@ -552,6 +562,7 @@ export function toListingDTO(listing: NonNullable<VacancyDoc["listing"]>): Vacan
     publicUrl: listing.publicUrl ?? undefined,
     remoteSalaryMin: listing.remoteSalaryMin ?? undefined,
     remoteSalaryMax: listing.remoteSalaryMax ?? undefined,
+    remoteExperienceRequired: listing.remoteExperienceRequired ?? undefined,
   };
 }
 
@@ -663,6 +674,34 @@ async function recordBlockedReason(
 }
 
 /**
+ * Records why an edit's push never landed, in the same field a `403` uses and
+ * for the same reason: it is "why this listing is currently out of step with
+ * IDAP", and the next successful push clears it (`recordSuccess` `$unset`s it
+ * unconditionally). Without this, a school edits a title, IDAP saves it, the
+ * PATCH is refused — and nothing anywhere says so.
+ *
+ * Two guards, both load-bearing:
+ *
+ * - `listing: { $exists: true }` — `updateOne` runs no validators, so a bare
+ *   `$set` on `listing.blockedReason` against a vacancy with no listing would
+ *   CREATE a listing sub-document holding nothing but a reason: no `jobId`, no
+ *   `externalJobId`, and therefore a vacancy that reads as "published" in the
+ *   DTO and on the card while pointing at nothing. Same rule as
+ *   `recordBlockedReason`, which refuses to invent a block for the same reason.
+ * - `institutionId` — TENANT-SENSITIVE, exactly like every other write here.
+ */
+async function recordPushFailure(
+  institutionId: string,
+  vacancyId: string,
+  message: string,
+): Promise<void> {
+  await Vacancy.updateOne(
+    { _id: toObjectId(vacancyId), institutionId, listing: { $exists: true } },
+    { $set: { "listing.blockedReason": clip(message) } },
+  );
+}
+
+/**
  * Everything one successful push needs to leave behind. Assembled by the
  * caller that made the push, because only it knows which shape it sent.
  */
@@ -673,9 +712,19 @@ type PushShape = {
   externalJobId: string;
   /** True when this replaced (or first created) the listing block. */
   create: boolean;
-  /** What eduFleet holds afterwards. Absent on a close, which changes neither
-   *  bound and must not overwrite what is recorded. */
-  remoteSalary?: RemoteJobSalary;
+  /**
+   * The three "changeable but not clearable" fields as eduFleet holds them
+   * AFTER this push. Absent on a close, which changes none of them and must
+   * not overwrite what is recorded.
+   *
+   * Wider than `RemoteJobSalary` on purpose: `preflightPatch` needs only the
+   * bounds (they are the pair eduFleet cross-validates), but the school's
+   * dashboard needs the experience figure too, to name the number their public
+   * advert will keep showing when they clear it here. Structurally assignable
+   * to `RemoteJobSalary`, so `preflightPatch` keeps taking exactly what it
+   * needs and nothing more.
+   */
+  remote?: RemoteJobSalary & { experienceRequired?: number };
 };
 
 /** A successful push: the listing block is created (on a create) or refreshed
@@ -716,8 +765,9 @@ async function recordSuccess(
             // URL to carry over, and any there was described a different,
             // now-closed advert.
             publicUrl: result.publicUrl,
-            remoteSalaryMin: shape.remoteSalary?.salaryMin,
-            remoteSalaryMax: shape.remoteSalary?.salaryMax,
+            remoteSalaryMin: shape.remote?.salaryMin,
+            remoteSalaryMax: shape.remote?.salaryMax,
+            remoteExperienceRequired: shape.remote?.experienceRequired,
           },
         },
       }
@@ -726,23 +776,29 @@ async function recordSuccess(
           "listing.lastPushedAt": now,
           "listing.remoteStatus": remoteStatus,
           ...(claimState ? { "listing.claimState": claimState } : {}),
-          // Only the bounds eduFleet now holds; the absent ones are `$unset`
+          // Only the values eduFleet now holds; the absent ones are `$unset`
           // below rather than written as null, so "eduFleet has no maximum"
           // and "IDAP never asked" stay the same absent state.
-          ...(shape.remoteSalary?.salaryMin !== undefined
-            ? { "listing.remoteSalaryMin": shape.remoteSalary.salaryMin }
+          ...(shape.remote?.salaryMin !== undefined
+            ? { "listing.remoteSalaryMin": shape.remote.salaryMin }
             : {}),
-          ...(shape.remoteSalary?.salaryMax !== undefined
-            ? { "listing.remoteSalaryMax": shape.remoteSalary.salaryMax }
+          ...(shape.remote?.salaryMax !== undefined
+            ? { "listing.remoteSalaryMax": shape.remote.salaryMax }
+            : {}),
+          ...(shape.remote?.experienceRequired !== undefined
+            ? { "listing.remoteExperienceRequired": shape.remote.experienceRequired }
             : {}),
         },
         $unset: {
           "listing.blockedReason": "",
-          ...(shape.remoteSalary && shape.remoteSalary.salaryMin === undefined
+          ...(shape.remote && shape.remote.salaryMin === undefined
             ? { "listing.remoteSalaryMin": "" }
             : {}),
-          ...(shape.remoteSalary && shape.remoteSalary.salaryMax === undefined
+          ...(shape.remote && shape.remote.salaryMax === undefined
             ? { "listing.remoteSalaryMax": "" }
+            : {}),
+          ...(shape.remote && shape.remote.experienceRequired === undefined
+            ? { "listing.remoteExperienceRequired": "" }
             : {}),
         },
       };
@@ -945,14 +1001,19 @@ async function pushFields(
       // means "clear it" (see `preflightPatch`).
       // `toPatchBody` forwards these two straight from `body`, so reading
       // them here is reading exactly what was sent.
-      remoteSalary: live
+      remote: live
         ? {
             salaryMin: (body.salaryMin as number | undefined) ?? listing.remoteSalaryMin ?? undefined,
             salaryMax: (body.salaryMax as number | undefined) ?? listing.remoteSalaryMax ?? undefined,
+            experienceRequired:
+              (body.experienceRequired as number | undefined) ??
+              listing.remoteExperienceRequired ??
+              undefined,
           }
         : {
             salaryMin: body.salaryMin as number | undefined,
             salaryMax: body.salaryMax as number | undefined,
+            experienceRequired: body.experienceRequired as number | undefined,
           },
     },
     result,
@@ -992,7 +1053,7 @@ async function pushCloseFor(
     adapter.closeJob(ctx, connection, addressOf({ ...listing, contract }), contract),
   );
 
-  // `create: false` and no `remoteSalary`: a close changes neither bound, and
+  // `create: false` and no `remote`: a close changes none of the three, and
   // writing the pair again from a body that never carried one would erase what
   // eduFleet still holds. `kind: "CLOSED"` is what flips `remoteStatus`, which
   // is what lets a later publish know to mint a new listing.
@@ -1051,6 +1112,44 @@ export const VacancyPublishService = {
       return pushCloseFor(institutionId, vacancy, actor);
     }
     return pushFields(institutionId, vacancy, actor, false);
+  },
+
+  /**
+   * Spec §7's "**Edit** after publish issues a `PATCH`" — the hook
+   * `VacancyService.update` calls once a local edit has been written.
+   *
+   * It is `repush` with one difference, and the difference is the whole point:
+   * **it never throws.** By the time this runs the school's edit is already
+   * saved, and the two facts they need are independent — "your change was
+   * saved" and "eduFleet was/was not told". Letting a push failure propagate
+   * would collapse them into one: the PATCH route would answer 4xx, the
+   * dashboard would report the edit as failed, and the school would re-enter a
+   * change that is already stored. So every failure is recorded on the listing
+   * instead, where it reaches them as `blockedReason` on the card — the same
+   * place, and the same wording, a `403` already lands in.
+   *
+   * `BLOCKED` and `CONFLICT` need nothing here: `settle` has already written
+   * their reason to the listing. Only a THROWN refusal — a preflight the merged
+   * salary fails, a `SCHOOL_POSTED` listing whose grant is gone, eduFleet
+   * unconfigured, a 400, a 502 — arrives with nothing recorded, which is what
+   * the catch is for.
+   *
+   * Deciding WHETHER an edit is worth pushing is deliberately not done here.
+   * That needs the patch itself — which fields the school actually touched —
+   * and the patch never leaves `vacancy.service.ts`. This method assumes the
+   * caller already decided, and `repush`'s own `allowCreate: false` remains the
+   * backstop that keeps an edit from ever CREATING a listing.
+   */
+  async pushEdit(institutionId: string, vacancyId: string, actor: Actor): Promise<void> {
+    try {
+      await this.repush(institutionId, vacancyId, actor);
+    } catch (error) {
+      await recordPushFailure(
+        institutionId,
+        vacancyId,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   },
 
   /**

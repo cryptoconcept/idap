@@ -49,6 +49,16 @@ const VacancySchema = new Schema(
         // be rejected. Absent means eduFleet holds no bound.
         remoteSalaryMin: { type: Number, min: 0 },
         remoteSalaryMax: { type: Number, min: 0 },
+        // Same reason as the salary pair above, for the third field a partner
+        // update can change but never remove (`PartnerJobPatch`/`SchoolJobPatch`
+        // declare `experienceRequired?: number`, never `null`, and both routes
+        // gate on `!== undefined`). Unlike the bounds it is not needed to
+        // predict a rejection — eduFleet cross-validates nothing against it —
+        // so this exists purely so IDAP can tell a school the ACTUAL figure
+        // their public advert will keep showing when they clear this field
+        // here, rather than a vaguer sentence about a number it never
+        // recorded.
+        remoteExperienceRequired: { type: Number, min: 0 },
         // The advert's own page on eduFleet, exactly as eduFleet reported it
         // when the listing was created. Stored rather than derived because it
         // cannot be derived: the path is `/jobs/{slug}/{id}`, the slug is

@@ -85,6 +85,39 @@ async function makeEdufleetCredential() {
   });
 }
 
+/**
+ * A vacancy that is already `OPEN` and already live on eduFleet — the state
+ * the edit hook (spec §7's "Edit after publish issues a PATCH") acts on. The
+ * listing is written after creation because `vacancyCreateSchema` is
+ * `.strict()` and carries no `listing`.
+ */
+async function makeListedOpenVacancy(
+  institutionId: string,
+  listingOverrides: Record<string, unknown> = {},
+) {
+  const created = await makeVacancy(institutionId);
+  await Vacancy.updateOne(
+    { _id: created.id },
+    {
+      $set: {
+        status: "OPEN",
+        listing: {
+          jobId: `ef-job-${created.id}`,
+          externalJobId: created.id,
+          contract: "AGGREGATED",
+          lastPushedAt: new Date("2026-01-01T00:00:00.000Z"),
+          claimState: "unclaimed",
+          remoteStatus: "active",
+          remoteSalaryMin: 25000,
+          remoteSalaryMax: 40000,
+          ...listingOverrides,
+        },
+      },
+    },
+  );
+  return created;
+}
+
 /** A request carrying only a session cookie, for JSON body routes. */
 function jsonRequest(init: { url?: string; body?: unknown; origin?: string } = {}) {
   const url = new URL(init.url ?? "http://localhost/api/settings/vacancies");
@@ -852,5 +885,310 @@ describe("POST /api/settings/vacancies/[vacancyId]/publish", () => {
     expect(payload.success).toBe(true);
     expect(payload.outcome.status).toBe("BLOCKED");
     expect(payload.outcome.message).toMatch(/plan has no room for another live listing/i);
+  });
+});
+
+/**
+ * Spec §7 — "**Edit** after publish issues a `PATCH`". Exercised through the
+ * PATCH route rather than the service so the whole chain is pinned: an ordinary
+ * dashboard save has to reach eduFleet, and the three kinds of save that must
+ * NOT spend one of the school's daily write units have to stay silent.
+ */
+describe("PATCH /api/settings/vacancies/[vacancyId] — the eduFleet edit hook", () => {
+  const params = (vacancyId: string) => ({ params: Promise.resolve({ vacancyId }) }) as never;
+
+  function editRequest(vacancyId: string, body: unknown) {
+    return jsonRequest({
+      url: `http://localhost/api/settings/vacancies/${vacancyId}`,
+      body,
+      origin: "http://localhost",
+    });
+  }
+
+  it("PATCHes an edited field through to a live listing", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(200, {
+        jobId: `ef-job-${created.id}`,
+        externalJobId: created.id,
+        title: "Senior Maths Teacher",
+        status: "active",
+        claimStatus: "unclaimed",
+      }),
+    );
+
+    const response = await patchVacancy(
+      editRequest(created.id, { title: "Senior Maths Teacher" }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.title).toBe("Senior Maths Teacher");
+
+    // Contract One addresses a job by `externalJobId`, and a PATCH must never
+    // carry a `status` key — `patchJob` throws on one, because Contract Two
+    // silently discards every other field in a body that has it.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+    expect(String(url)).toBe(`${EDUFLEET_BASE_URL}/api/partner/jobs/${created.id}`);
+    expect(init.method).toBe("PATCH");
+    const sent = JSON.parse(init.body) as Record<string, unknown>;
+    expect(sent.title).toBe("Senior Maths Teacher");
+    expect("status" in sent).toBe(false);
+
+    // The response the dashboard renders must carry the push, not the
+    // pre-push copy: `lastPushedAt` moved off the fixture's date.
+    expect(payload.vacancy.listing.lastPushedAt).not.toBe("2026-01-01T00:00:00.000Z");
+  });
+
+  /**
+   * A vacancy the school never published must stay unpublished however much it
+   * is edited — publication takes an explicit action (spec §10).
+   *
+   * **Deliberately NOT marked mutation-distinguishing, and the reason is worth
+   * recording rather than hiding.** Two independent guards defend this, and
+   * either one alone is sufficient: `shouldPushEdit` refuses to call the push
+   * at all without a live listing, and `repush`'s `allowCreate: false` makes
+   * `pushFields` throw before it can reach `createJob`. Breaking either one on
+   * its own leaves the other holding, so this test keeps passing under both
+   * single mutations — it was tried, in both directions, and it passed both
+   * times. Marking it anyway would be a claim the evidence does not support.
+   * It stays as a plain regression test, which is what it honestly is; the
+   * conditions of `shouldPushEdit` that ARE singly load-bearing get their own
+   * mutation-distinguishing tests below.
+   */
+  it("an edit to an unpublished vacancy makes no HTTP call and creates no listing", async () => {
+    const created = await makeVacancy("INS0001");
+    await Vacancy.updateOne({ _id: created.id }, { $set: { status: "OPEN" } });
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(201, { jobId: "ef-should-not-exist", externalJobId: created.id, status: "active" }),
+    );
+
+    const response = await patchVacancy(
+      editRequest(created.id, { title: "Edited but never published" }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.title).toBe("Edited but never published");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await Vacancy.findById(created.id).lean())?.listing).toBeUndefined();
+  });
+
+  /**
+   * Neither of eduFleet's PATCH routes accepts a `subject` — `PartnerJobPatch`
+   * and `SchoolJobPatch` do not declare one and neither update function looks
+   * for it — so a subject change can only ever reach a public advert by
+   * closing the listing and publishing a new one. Pushing this edit would send
+   * eduFleet a body it already holds and spend one of the school's daily write
+   * units doing it, `spendWrite` running before eduFleet validates anything.
+   *
+   * This is the case that isolates `shouldPushEdit`'s field gate: the vacancy
+   * stays `OPEN`, the listing stays live, and nothing downstream would refuse
+   * the push.
+   *
+   * MUTATION CHECK: make the third condition unconditionally true (`return
+   * true || EDUFLEET_PATCHABLE_KEYS.some(...)`) and this fails — a `PATCH` is
+   * sent for a field eduFleet cannot read.
+   */
+  it("MUTATION-DISTINGUISHING: a subject-only edit pushes nothing", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: `ef-job-${created.id}`, status: "active" }));
+
+    const response = await patchVacancy(
+      editRequest(created.id, { subject: "Physics" }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.subject).toBe("Physics");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The status dropdown on the dashboard sends `{ status }` and nothing else,
+   * which is the commonest save in this section and must not touch eduFleet.
+   * Unmarked: the guard that actually stops it here is the `status !== "OPEN"`
+   * condition, which the FILLED test above already mutation-pins — this covers
+   * the real request shape the UI sends rather than a second guard.
+   */
+  it("a status-only edit pushes nothing", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: `ef-job-${created.id}`, status: "closed" }));
+
+    const response = await patchVacancy(
+      editRequest(created.id, { status: "FILLED" }),
+      params(created.id),
+    );
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).vacancy.status).toBe("FILLED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A FIELD edit — not a status change — on a vacancy that is no longer open.
+   * `repush` routes a `FILLED`/`CLOSED` vacancy to a CLOSE, so without the
+   * `status !== "OPEN"` condition, fixing a typo in the title of a filled
+   * vacancy would take its public advert down. The school never asked for
+   * that; taking an advert down is what the "Close on eduFleet Exchange"
+   * button is for.
+   *
+   * This is the one condition of `shouldPushEdit` that nothing downstream
+   * repeats: the field gate passes (the title was touched), the listing is
+   * live, and `repush` would go through with the close quite happily.
+   *
+   * MUTATION CHECK: drop `if (updated.status !== "OPEN") return false` and
+   * this fails — a `PATCH .../jobs/{id}` carrying `{"status":"closed"}` is
+   * sent and the listing's `remoteStatus` flips to `closed`.
+   */
+  it("MUTATION-DISTINGUISHING: editing a field on a FILLED vacancy does not close its advert", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    await Vacancy.updateOne({ _id: created.id }, { $set: { status: "FILLED" } });
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: `ef-job-${created.id}`, status: "closed" }));
+
+    const response = await patchVacancy(
+      editRequest(created.id, { title: "Filled, but the title had a typo" }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.title).toBe("Filled, but the title had a typo");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await Vacancy.findById(created.id).lean())?.listing?.remoteStatus).toBe("active");
+  });
+
+  /**
+   * A listing eduFleet has already closed is not a listing an edit can update:
+   * eduFleet cannot reopen an advert, so putting one back is a new publication
+   * (the "Publish again" button), not a save.
+   *
+   * The observable harm the guard prevents is not an HTTP call — `pushFields`
+   * would refuse this one too — but what that refusal LEAVES BEHIND. The
+   * listing exists, so `recordPushFailure` succeeds in writing its reason, and
+   * the card would show a school a red "This listing was closed on eduFleet
+   * Exchange" every time they edited a perfectly ordinary vacancy whose advert
+   * they had already, deliberately, taken down.
+   *
+   * MUTATION CHECK: drop `|| updated.listing.remoteStatus === "closed"` from
+   * `shouldPushEdit` and this fails on the last assertion — a `blockedReason`
+   * appears on a listing that has nothing wrong with it.
+   */
+  it("MUTATION-DISTINGUISHING: an edit to a closed listing pushes nothing and records no reason", async () => {
+    const created = await makeListedOpenVacancy("INS0001", { remoteStatus: "closed" });
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: `ef-job-${created.id}`, status: "active" }));
+
+    const response = await patchVacancy(
+      editRequest(created.id, { title: "Edited after the advert came down" }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.title).toBe("Edited after the advert came down");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payload.vacancy.listing.blockedReason).toBeUndefined();
+    expect((await Vacancy.findById(created.id).lean())?.listing?.blockedReason).toBeUndefined();
+  });
+
+  /**
+   * Clearing a bound is the one edit that provably cannot change the advert:
+   * both patch types declare `number`, never `null`, and both routes gate on
+   * `!== undefined`, so the key is omitted and eduFleet keeps what it holds.
+   * Spending a write unit to send eduFleet its own values is exactly what
+   * rule 3's quota shield exists to stop.
+   */
+  it("an edit that only clears a salary bound pushes nothing", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch(jsonResponse(200, { jobId: `ef-job-${created.id}`, status: "active" }));
+
+    const response = await patchVacancy(
+      editRequest(created.id, { salaryMin: null }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.salaryMin).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+    // eduFleet still holds the bound it was last told about, which is what the
+    // dialog's warning quotes.
+    expect(payload.vacancy.listing.remoteSalaryMin).toBe(25000);
+  });
+
+  /**
+   * The edit is already written by the time the push runs, so a refused push
+   * must not turn a saved edit into a failed request — the school would
+   * re-enter a change that is already stored. It surfaces as `blockedReason`
+   * on the listing instead, the same field and the same wording a refused
+   * publish uses.
+   */
+  it("saves the edit and records the reason when eduFleet refuses the push", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    stubFetch(jsonResponse(403, { reason: "insufficient_scope", message: "no jobs:write" }));
+
+    const response = await patchVacancy(
+      editRequest(created.id, { title: "Edited while blocked" }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.success).toBe(true);
+    expect(payload.vacancy.title).toBe("Edited while blocked");
+    expect(payload.vacancy.listing.blockedReason).toMatch(/does not allow IDAP to post jobs/i);
+    expect((await Vacancy.findById(created.id).lean())?.title).toBe("Edited while blocked");
+  });
+
+  /**
+   * The other half of the same rule, for a refusal raised BEFORE the wire.
+   * `preflightPatch` merges the sent bounds over what eduFleet holds, so a
+   * minimum raised above eduFleet's stored maximum is a 400 waiting to happen;
+   * refusing locally saves the unit, and the reason still has to reach the
+   * school rather than vanishing.
+   */
+  it("saves the edit and records the reason when the push is refused before the wire", async () => {
+    const created = await makeListedOpenVacancy("INS0001");
+    // The vacancy carries NO maximum while eduFleet still holds one (40000).
+    // That gap is the whole reason `preflightPatch` merges against the remote
+    // record: the push builds its body from the vacancy, so it sends no
+    // maximum, IDAP's own salary-order check sees no pair to compare, and only
+    // the merged view catches that a minimum of 45000 would be rejected
+    // against the 40000 eduFleet keeps.
+    await Vacancy.updateOne({ _id: created.id }, { $unset: { salaryMax: "" } });
+    await makeEdufleetCredential();
+    await signInWithCookie("INS0001");
+    const fetchMock = stubFetch();
+
+    const response = await patchVacancy(
+      editRequest(created.id, { salaryMin: 45000 }),
+      params(created.id),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.vacancy.salaryMin).toBe(45000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payload.vacancy.listing.blockedReason).toMatch(/still has a salary maximum of 40000/i);
   });
 });

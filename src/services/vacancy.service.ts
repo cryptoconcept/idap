@@ -7,6 +7,7 @@ import { PLATFORM_LABELS, VACANCY_MAX_RECORDS } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
 import {
+  EDUFLEET_PATCHABLE_KEYS,
   VacancyPublishService,
   toListingDTO,
   type VacancyListingDTO,
@@ -135,6 +136,53 @@ const EDUFLEET_LABEL = PLATFORM_LABELS.EDUFLEET;
 function asSentence(text: string): string {
   const trimmed = text.trim();
   return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/**
+ * Whether this edit is worth a `PATCH` to eduFleet — spec §7's "**Edit** after
+ * publish issues a `PATCH`", with the "after publish" doing real work.
+ *
+ * Three conditions, and each one exists to stop a specific wrong push:
+ *
+ * 1. **A live listing.** Nothing published means nothing to update, and an
+ *    edit must never be what first puts a vacancy on a public jobs board
+ *    (spec §10 — that takes an explicit school action). A CLOSED listing is
+ *    excluded for the same reason: eduFleet cannot reopen an advert, so
+ *    putting one back is a new publication, not an edit.
+ * 2. **`OPEN`.** `repush` routes a `FILLED`/`CLOSED` vacancy to a CLOSE, so
+ *    without this a school editing the title of a filled vacancy would take
+ *    their advert down as a side effect of saving a typo fix. Whether a
+ *    no-longer-open vacancy should come down is a real question, and the
+ *    answer is the explicit "Close on eduFleet Exchange" button — not a
+ *    surprise buried in a save.
+ * 3. **The patch touches something eduFleet's PATCH would actually carry.**
+ *    `spendWrite` runs before eduFleet validates, so every push costs one of
+ *    the school's daily write units whatever it contains. A status-only patch
+ *    (which is exactly what the dashboard's status dropdown sends) and a
+ *    subject-only patch (neither PATCH route accepts a subject) would both
+ *    spend a unit to send eduFleet nothing it does not already have.
+ *
+ * The third condition reads the NEW VALUE, not just the key, and that is the
+ * one subtlety worth stating. `salaryMin`/`salaryMax`/`experienceRequired` are
+ * the three fields a patch may set to `null` to clear them — and a cleared
+ * field is precisely the one thing a partner update cannot express: both patch
+ * types declare `number`, never `null`, and both routes gate on
+ * `!== undefined`, so IDAP's mapping module omits the key and eduFleet keeps
+ * what it has. A patch whose ONLY eduFleet-carried change is such a clear
+ * therefore cannot alter the advert by a single character, and pushing it
+ * would spend a write unit to send eduFleet the values it already holds. The
+ * school is told this at the moment they clear the field, in the edit dialog.
+ */
+function shouldPushEdit(patch: VacancyPatchInput, updated: VacancyDoc): boolean {
+  if (!updated.listing || updated.listing.remoteStatus === "closed") return false;
+  if (updated.status !== "OPEN") return false;
+  return EDUFLEET_PATCHABLE_KEYS.some((key) => {
+    const value = patch[key];
+    // `undefined` is "not mentioned"; `null` is "clear it", which no partner
+    // update can express. Everything else — including a genuine `0` — is a
+    // change eduFleet will apply, so this must never be a truthiness check.
+    return value !== undefined && value !== null;
+  });
 }
 
 /**
@@ -346,6 +394,26 @@ export const VacancyService = {
       performedByName: actor.name,
     });
 
+    // Spec §7: an edit to a published vacancy issues a `PATCH`. Without this
+    // the two sides drift silently and permanently — a school fixes a typo in
+    // a title, sees the fix in IDAP, and their public advert keeps the old
+    // one with nothing anywhere reporting the disagreement.
+    //
+    // Awaited, not fired and forgotten: the response this call returns is what
+    // the dashboard renders, and the school has to see whether the push landed
+    // (the fresh `lastPushedAt`) or did not (a `blockedReason` on the card).
+    // `pushEdit` cannot throw, so a failed push never turns a saved edit into
+    // a failed request — but it does write to the listing, which is why the
+    // record is re-read below rather than the pre-push copy being returned.
+    if (shouldPushEdit(patch, updated)) {
+      await VacancyPublishService.pushEdit(institutionId, vacancyId, actor);
+      const repushed = await Vacancy.findOne({ _id: objectId, institutionId }).lean<VacancyDoc>();
+      // A vacancy deleted underneath this push is not this call's problem to
+      // report: the edit really was applied, and the pre-push copy is an
+      // accurate account of it.
+      if (repushed) return serialize(repushed);
+    }
+
     return serialize(updated);
   },
 
@@ -381,8 +449,35 @@ export const VacancyService = {
     // than this function merely hoping it still does.
     const deleteFilter: Record<string, unknown> = { _id: objectId, institutionId };
 
+    // Fix round 1: a CLAIMED listing is deleted without closing it, and this
+    // is the one exception to Task 5's close-first rule.
+    //
+    // The rule exists because deleting IDAP's row destroys the only id that
+    // could ever close the advert — an orphan nobody can take down. A claim
+    // inverts that. Claiming moves the advert onto the school's OWN eduFleet
+    // account: they can see it, edit it and close it from their own dashboard,
+    // and IDAP cannot touch it at all — `pushClose` answers `403` and will
+    // answer `403` forever, because `claimed` is one of the two terminal
+    // triggers. Refusing the delete therefore protects nothing (the advert is
+    // already outside IDAP's reach and inside theirs) and costs everything: the
+    // IDAP row becomes permanently undeletable, a trap with no exit, which is
+    // exactly what Task 5 set out not to build.
+    //
+    // This is genuinely narrower than the disconnected-`SCHOOL_POSTED` case,
+    // which still refuses. There, IDAP's inability is TEMPORARY — reconnecting
+    // restores the grant and the close — so refusing has an exit and taking it
+    // costs the school one reconnect. Here there is no reconnect that helps.
+    //
+    // What must not happen is a silent delete that reads as "nothing left
+    // behind". The advert stays live until the school closes it on eduFleet,
+    // so the confirmation dialog says so before they press Delete, and the
+    // activity entry below records it after.
+    const claimedByTheSchool = existing.listing?.claimState === "claimed";
+
     if (existing.listing) {
-      await closeListingBeforeDelete(institutionId, vacancyId, existing.listing.contract, actor);
+      if (!claimedByTheSchool) {
+        await closeListingBeforeDelete(institutionId, vacancyId, existing.listing.contract, actor);
+      }
       // Conditioned on the SAME listing this call just closed still being
       // present — not "any listing" — because a fresh publish landing in
       // this exact window replaces the whole `listing` sub-document
@@ -420,7 +515,11 @@ export const VacancyService = {
       entityId: removed._id,
       entityRef: institutionId,
       action: "Vacancy deleted",
-      description: `${removed.title} deleted`,
+      // The claimed case leaves something behind, so the audit trail says what
+      // and where. A bare "deleted" would read as "and the advert went too".
+      description: claimedByTheSchool
+        ? `${removed.title} deleted — its claimed ${EDUFLEET_LABEL} advert was left live under the school's own ${EDUFLEET_LABEL} account`
+        : `${removed.title} deleted`,
       performedBy: actor.id,
       performedByName: actor.name,
     });

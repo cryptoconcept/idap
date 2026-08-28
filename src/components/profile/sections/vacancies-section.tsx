@@ -477,11 +477,11 @@ function BenefitsEditor({
  * returns the warning lines to show **beside the fields being cleared**, at
  * the moment they are cleared, rather than after the fact.
  *
- * `remoteSalaryMin`/`remoteSalaryMax` are what eduFleet actually holds after
- * the last successful push, not what this vacancy currently stores, so the
- * figures quoted are the ones a candidate is really looking at. Experience has
- * no such recorded counterpart, so its line states the mechanism without
- * quoting a number it cannot vouch for.
+ * Every figure quoted is `remoteSalaryMin`/`remoteSalaryMax`/
+ * `remoteExperienceRequired` — what eduFleet actually holds after the last
+ * successful push, not what this vacancy currently stores. Those are the
+ * numbers a candidate is really looking at, and after a refused push the two
+ * genuinely differ.
  *
  * Only a LIVE listing is warned about: a closed one is republished as a brand
  * new advert (eduFleet has no reopen), and a new advert carries exactly the
@@ -489,7 +489,6 @@ function BenefitsEditor({
  */
 function unclearableWarnings(
   listing: VacancyListingDTO | undefined,
-  stored: { experienceRequired?: number },
   fields: { salaryMin: string; salaryMax: string; experienceRequired: string },
 ): string[] {
   if (!listing || !isLive(listing)) return [];
@@ -510,14 +509,16 @@ function unclearableWarnings(
       `${EDUFLEET} will keep showing a salary maximum of ${rupees(listing.remoteSalaryMax)} on the live advert.`,
     );
   }
-  // No `remoteExperienceRequired` is recorded, so this leans on the stored
-  // value as the proxy for "something is published" and — unlike the two
-  // salary lines — deliberately quotes no figure. The mechanism is certain
-  // (eduFleet has no way to clear it); the exact number on the advert is not
-  // IDAP's to assert without having recorded it.
-  if (stored.experienceRequired != null && parseNumberField(fields.experienceRequired) == null) {
+  // Fix round 1: this used to lean on the vacancy's own stored value and
+  // quote no figure, because none was recorded. `remoteExperienceRequired` is
+  // recorded now, so this line reads exactly like the two above it — the same
+  // hazard, stated the same way, naming the same kind of number. A school
+  // reading a precise "₹35,000" beside a vague "the figure it already has"
+  // has fair grounds to wonder whether IDAP actually knows.
+  if (parseNumberField(fields.experienceRequired) == null && listing.remoteExperienceRequired != null) {
+    const years = listing.remoteExperienceRequired;
     lines.push(
-      `${EDUFLEET} cannot clear an experience requirement once it is published — the live advert will keep the figure it already has.`,
+      `${EDUFLEET} will keep showing an experience requirement of ${years} ${years === 1 ? "year" : "years"} on the live advert.`,
     );
   }
 
@@ -571,11 +572,11 @@ function VacancyDialog({
   // Recomputed on every keystroke rather than memoised: it reads three strings
   // and one small object, and it has to appear the instant a box is emptied —
   // that timing is the entire point (see `unclearableWarnings`).
-  const clearingWarnings = unclearableWarnings(
-    editing?.listing,
-    { experienceRequired: editing?.experienceRequired },
-    { salaryMin, salaryMax, experienceRequired },
-  );
+  const clearingWarnings = unclearableWarnings(editing?.listing, {
+    salaryMin,
+    salaryMax,
+    experienceRequired,
+  });
 
   async function handleSubmit() {
     const trimmedTitle = title.trim();
@@ -1142,6 +1143,26 @@ export function VacanciesSection() {
               undone.
             </DialogDescription>
           </DialogHeader>
+          {/*
+            A claimed advert is the one case where deleting here leaves
+            something behind. The server no longer refuses the delete — it
+            cannot close a claimed listing and never will, so refusing would
+            trap the row forever — but the school must not press Delete
+            believing the public advert goes with it. It does not: the advert
+            is on their own eduFleet account now, and only they can take it
+            down. Said BEFORE the button, not in a toast afterwards.
+          */}
+          {isClaimed(pendingDelete?.listing) && isLive(pendingDelete?.listing) ? (
+            <p className="flex items-start gap-1.5 rounded-md border border-border bg-muted/40 p-2.5 text-[11px] text-muted-foreground">
+              <Lock className="mt-px size-3 shrink-0" aria-hidden />
+              <span>
+                Your school has claimed this vacancy&apos;s advert on {EDUFLEET}, so it belongs to
+                your {EDUFLEET} account and IDAP cannot take it down. Deleting here removes only
+                this record — <strong className="font-medium text-foreground">the advert stays
+                live on {EDUFLEET}</strong> until you close it there.
+              </span>
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="ghost"
