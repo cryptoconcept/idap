@@ -1330,7 +1330,7 @@ describe("VacancyService.remove and a claimed eduFleet listing (fix round 1)", (
    * the fix wave IDAP's enum had no value for it at all, so it was recorded
    * as nothing and the row would have been trapped.
    */
-  it("deletes a withdrawn listing's vacancy without attempting a close", async () => {
+  it("deletes a withdrawn listing's vacancy without attempting a close, and does NOT claim an advert was left live", async () => {
     await makeCredential();
     const vacancy = await makeListedVacancy("INS0001", { claimState: "withdrawn" });
     const fetchMock = stubFetch();
@@ -1339,6 +1339,18 @@ describe("VacancyService.remove and a claimed eduFleet listing (fix round 1)", (
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+
+    // The two terminal states leave different things behind. A withdrawn
+    // advert is already off eduFleet by an admin takedown, so borrowing the
+    // claimed wording would send someone looking for a live advert that is
+    // not there.
+    const entry = await Activity.findOne({
+      institutionId: "INS0001",
+      entityId: vacancy._id,
+      action: "Vacancy deleted",
+    }).lean();
+    expect(entry?.description).toMatch(/already been taken down/i);
+    expect(entry?.description).not.toMatch(/under the school's own/i);
   });
 
   /**

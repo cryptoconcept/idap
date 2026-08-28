@@ -515,17 +515,17 @@ export const VacancyService = {
     // behind". The advert stays live until the school closes it on eduFleet,
     // so the confirmation dialog says so before they press Delete, and the
     // activity entry below records it after.
-    let claimedByTheSchool = isTerminalClaim(existing.listing?.claimState);
+    let terminalClaim = isTerminalClaim(existing.listing?.claimState);
 
     if (existing.listing) {
-      if (!claimedByTheSchool) {
+      if (!terminalClaim) {
         // The close may itself be what DISCOVERS the claim: until a push
         // 403s, IDAP has no way to learn a school claimed its advert, so the
         // very first delete after a claim always arrives here with
         // `claimState` still reading `unclaimed`. `closeListingBeforeDelete`
         // reports back when that happened, so this attempt succeeds instead
         // of refusing and telling the school to try the same thing again.
-        claimedByTheSchool = await closeListingBeforeDelete(
+        terminalClaim = await closeListingBeforeDelete(
           institutionId,
           vacancyId,
           existing.listing.contract,
@@ -569,10 +569,18 @@ export const VacancyService = {
       entityId: removed._id,
       entityRef: institutionId,
       action: "Vacancy deleted",
-      // The claimed case leaves something behind, so the audit trail says what
-      // and where. A bare "deleted" would read as "and the advert went too".
-      description: claimedByTheSchool
-        ? `${removed.title} deleted — its claimed ${EDUFLEET_LABEL} advert was left live under the school's own ${EDUFLEET_LABEL} account`
+      // A terminal claim leaves something behind, so the audit trail says
+      // what and where — a bare "deleted" would read as "and the advert went
+      // too". The two terminal states leave DIFFERENT things behind, so they
+      // do not share a sentence: a claimed advert is live on the school's own
+      // eduFleet account and only they can take it down, while a withdrawn
+      // one is already off the public site by an admin takedown and there is
+      // nothing for anyone to do. Saying "left live" about a withdrawn
+      // listing would send someone looking for an advert that is not there.
+      description: terminalClaim
+        ? existing.listing?.claimState === "withdrawn"
+          ? `${removed.title} deleted — its ${EDUFLEET_LABEL} advert had already been taken down there, so nothing was left behind`
+          : `${removed.title} deleted — its claimed ${EDUFLEET_LABEL} advert was left live under the school's own ${EDUFLEET_LABEL} account`
         : `${removed.title} deleted`,
       performedBy: actor.id,
       performedByName: actor.name,
