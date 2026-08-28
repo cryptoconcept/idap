@@ -114,6 +114,11 @@ function buildConnectionRequestBody(institution: InstitutionSummary): Rec {
   };
 }
 
+/** eduFleet's opening states, mapped to IDAP's. Anything else defaults to PENDING. */
+function initiateKind(remoteStatus: string): "PENDING" | "AWAITING_APPROVAL" {
+  return remoteStatus === "awaiting_school" ? "AWAITING_APPROVAL" : "PENDING";
+}
+
 async function initiate(ctx: AdapterContext, institution: InstitutionSummary): Promise<InitiateResult> {
   const resp = await ctx.http("/api/partner/connection-requests", {
     method: "POST",
@@ -123,7 +128,8 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
 
   if (resp.status === 201) {
     const body = rec(resp.body) ?? {};
-    return { remoteRequestId: String(body.requestId), remoteStatus: str(body.status) ?? "pending" };
+    const remoteStatus = str(body.status) ?? "pending";
+    return { remoteRequestId: String(body.requestId), remoteStatus, kind: initiateKind(remoteStatus) };
   }
 
   if (resp.status === 409) {
@@ -136,7 +142,8 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
     // 409 with no `requestId` must throw rather than let `undefined` become a
     // connection pointing at nothing.
     if (body.requestId !== undefined && body.requestId !== null) {
-      return { remoteRequestId: String(body.requestId), remoteStatus: str(body.status) ?? "pending" };
+      const remoteStatus = str(body.status) ?? "pending";
+      return { remoteRequestId: String(body.requestId), remoteStatus, kind: initiateKind(remoteStatus) };
     }
   }
 

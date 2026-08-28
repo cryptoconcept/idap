@@ -12,7 +12,18 @@ export type SyncOutcome = {
   error?: string;
 };
 
-export type InitiateResult = { remoteRequestId: string; remoteStatus: string };
+/**
+ * `kind` is optional and defaults to `PENDING` at the call site. It exists for
+ * platforms whose freshly-opened request can already be past `pending` —
+ * eduFleet's auto-remap returns `awaiting_school` on a re-connect for a school
+ * it has matched before. An adapter that never has that case (PassPercent)
+ * simply omits it.
+ */
+export type InitiateResult = {
+  remoteRequestId: string;
+  remoteStatus: string;
+  kind?: "PENDING" | "AWAITING_APPROVAL";
+};
 
 export type RefreshResult =
   | { kind: "PENDING" | "AWAITING_APPROVAL" | "REJECTED"; remoteStatus: string; detail?: string }

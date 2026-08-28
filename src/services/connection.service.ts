@@ -355,7 +355,10 @@ export const ConnectionService = {
       { institutionId, platform },
       {
         $set: {
-          status: "PENDING",
+          // Adapters may report that a freshly-opened request is already past
+          // `pending` (eduFleet's auto-remap on a re-connect). Absent, the
+          // original meaning holds.
+          status: result.kind ?? "PENDING",
           remoteStatus: result.remoteStatus,
           remoteRequestId: result.remoteRequestId,
           externalRef: institutionId,

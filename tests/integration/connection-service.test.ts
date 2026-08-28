@@ -189,6 +189,44 @@ describe("initiate", () => {
     expect(conn?.status).toBe("PENDING");
   });
 
+  it("an adapter reporting a kind past PENDING is stored as that kind, not as PENDING", async () => {
+    // eduFleet's auto-remap: a re-connect for a school it matched before comes
+    // back already `awaiting_school`, so the card must not read "Requested".
+    registerAdapter(
+      makeFakeAdapter({
+        initiate: async () => ({
+          remoteRequestId: "req-1",
+          remoteStatus: "awaiting_school",
+          kind: "AWAITING_APPROVAL",
+        }),
+      }),
+    );
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+
+    const entry = await ConnectionService.initiate("INS0001", "PASSPERCENT", actor);
+
+    expect(entry.status).toBe("AWAITING_APPROVAL");
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(conn?.status).toBe("AWAITING_APPROVAL");
+  });
+
+  it("an adapter that omits kind still yields PENDING", async () => {
+    registerAdapter(
+      makeFakeAdapter({
+        initiate: async () => ({ remoteRequestId: "req-1", remoteStatus: "pending" }),
+      }),
+    );
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+
+    const entry = await ConnectionService.initiate("INS0001", "PASSPERCENT", actor);
+
+    expect(entry.status).toBe("PENDING");
+    const conn = await PlatformConnection.findOne({ institutionId: "INS0001", platform: "PASSPERCENT" }).lean();
+    expect(conn?.status).toBe("PENDING");
+  });
+
   it("refuses when the connection is already CONNECTED", async () => {
     registerAdapter(
       makeFakeAdapter({ initiate: async () => ({ remoteRequestId: "req-x", remoteStatus: "pending" }) }),

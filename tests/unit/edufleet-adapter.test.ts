@@ -50,7 +50,7 @@ describe("edufleetAdapter", () => {
 
       const result = await edufleetAdapter.initiate!(ctx, makeInstitution());
 
-      expect(result).toEqual({ remoteRequestId: "req-abc", remoteStatus: "pending" });
+      expect(result).toEqual({ remoteRequestId: "req-abc", remoteStatus: "pending", kind: "PENDING" });
       expect(http).toHaveBeenCalledTimes(1);
       const [path, init] = http.mock.calls[0];
       expect(path).toBe("/api/partner/connection-requests");
@@ -67,7 +67,29 @@ describe("edufleetAdapter", () => {
 
       const result = await edufleetAdapter.initiate!(ctx, makeInstitution());
 
-      expect(result).toEqual({ remoteRequestId: "req-existing", remoteStatus: "awaiting_school" });
+      expect(result).toEqual({
+        remoteRequestId: "req-existing",
+        remoteStatus: "awaiting_school",
+        kind: "AWAITING_APPROVAL",
+      });
+    });
+
+    it("a 201 auto-remap (`awaiting_school`) reports AWAITING_APPROVAL, not PENDING", async () => {
+      // eduFleet auto-remaps an `externalRef` it has matched to a school
+      // before: the request is created already matched and comes back past
+      // `pending`, so a re-connect must not read as "Requested".
+      const http = vi
+        .fn()
+        .mockResolvedValue({ status: 201, body: { requestId: "req-remap", status: "awaiting_school" } });
+      const ctx = makeCtx(http);
+
+      const result = await edufleetAdapter.initiate!(ctx, makeInstitution());
+
+      expect(result).toEqual({
+        remoteRequestId: "req-remap",
+        remoteStatus: "awaiting_school",
+        kind: "AWAITING_APPROVAL",
+      });
     });
 
     it("throws on a 409 that carries no requestId to adopt", async () => {
