@@ -306,6 +306,25 @@ describe("buildAggregatedJobBody and the district", () => {
     expect(body).toMatchObject({ institutionName: "DPS", city: "Bengaluru" });
   });
 
+  it("MUTATION-DISTINGUISHING: the warning promises only what eduFleet can actually deliver", () => {
+    // Both halves are claims about eduFleet's source, and both were wrong in
+    // the first version of this string.
+    //
+    // There is no district job SEARCH to lose: `listPublicJobs` filters on
+    // slug, location and categoryGroup. District is read by the matching
+    // fan-out, which is a different mechanism.
+    //
+    // And a corrected profile cannot rescue an advert already published:
+    // `district` is absent from `PartnerJobPatch` and from
+    // `EDUFLEET_PATCHABLE_KEYS`, so no edit and no sweep REPUSH can carry the
+    // new value. Saying "until the profile is corrected" sent a school to do
+    // something that silently changes nothing for the advert in front of them.
+    const { warnings } = buildAggregatedJobBody(vac(), inst({ district: "Banglore Urbon" }));
+
+    expect(warnings[0]).not.toMatch(/search/i);
+    expect(warnings[0]).toMatch(/next advert published/i);
+  });
+
   it("MUTATION-DISTINGUISHING: an unrecognised district never becomes a refusal", () => {
     // The advert is entirely publishable without a district, and it costs no
     // write unit: with no `district` key, eduFleet's

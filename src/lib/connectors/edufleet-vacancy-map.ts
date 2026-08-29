@@ -283,10 +283,21 @@ export function resolveDistrict(value: string | undefined): string | undefined {
  *
  * Written like every other string in this module — for a school admin to act
  * on, naming the value that failed and the exact consequence, never an error
- * code. The consequence is specific on purpose: "matched by city alone" is
- * what `jobLocationMatchesTeacher` actually falls back to, and naming
- * district-scoped alerts is what tells an admin why an advert that looks live
- * is reaching nobody.
+ * code. Two things it deliberately does NOT say, both checked at eduFleet's
+ * source rather than assumed:
+ *
+ * It does not mention searching by district, because no such job search
+ * exists — `listPublicJobs` filters on slug, location and categoryGroup only.
+ * District is read by the MATCHING fan-out (`jobMatchesTeacherProfile` and
+ * `jobMatchesSavedAlert`), which is a different thing from search and is the
+ * only thing an omission actually costs.
+ *
+ * And it does not promise that correcting the profile fixes THIS advert,
+ * because it cannot: `district` travels on a create only. `PartnerJobPatch`
+ * has no such field and `EDUFLEET_PATCHABLE_KEYS` does not list one, so every
+ * later edit and every sweep REPUSH PATCHes without it. Telling a school to
+ * correct the profile and expect this advert to start matching would be an
+ * instruction that silently does nothing.
  *
  * The district is user-entered text on its way to a browser toast, so it is
  * clipped on the same principle `vacancy-publish.service.ts` clips
@@ -295,7 +306,7 @@ export function resolveDistrict(value: string | undefined): string | undefined {
  * than any value the form would accept today.
  */
 function districtOmittedWarning(district: string): string {
-  return `eduFleet does not recognise "${district.trim().slice(0, 120)}" as a Karnataka district, so this advert was published without one — teachers who search or set job alerts by district will not be matched to it until the district on the institution profile is corrected.`;
+  return `eduFleet does not recognise "${district.trim().slice(0, 120)}" as a Karnataka district, so this advert was published without one — teachers whose job alerts or profiles are scoped to a district will not be matched to it. eduFleet accepts a district only when an advert is first published, so correcting it on the institution profile will apply to the next advert published, not to this one.`;
 }
 
 // ---------------------------------------------------------------------------
