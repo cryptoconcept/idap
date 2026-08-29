@@ -1324,6 +1324,57 @@ describe("VacancyService.remove and a claimed eduFleet listing (fix round 1)", (
   });
 
   /**
+   * M-1 — the cell between the two tests either side of it: a WITHDRAWN
+   * advert discovered BY the close.
+   *
+   * `remove` snapshots the vacancy before the close, and the close is exactly
+   * what discovers a terminal state IDAP had no way to know — so on this
+   * path the snapshot still reads `unclaimed` while the truth, written by
+   * `recordBlockedReason` moments earlier, is `withdrawn`. An audit ternary
+   * reading the snapshot takes the CLAIMED arm and tells the next reader an
+   * advert was "left live under the school's own account" when eduFleet had
+   * already taken it down. The IDAP row is gone by then, so this entry is the
+   * only surviving account of what happened.
+   *
+   * MUTATION CHECK: put the ternary back on `existing.listing?.claimState`
+   * and this fails on the last two assertions — the entry claims a live
+   * advert — while the two neighbouring tests (withdrawn-already-stored,
+   * claimed-discovered) both still pass, because neither has a state the
+   * close itself established.
+   */
+  it("MUTATION-DISTINGUISHING: a withdrawal discovered BY the close is audited as taken down, not as left live", async () => {
+    await makeCredential();
+    const vacancy = await makeListedVacancy("INS0001");
+    const fetchMock = stubFetch(
+      jsonResponse(403, {
+        error: "This listing has been claimed by the school and can no longer be edited by a partner key",
+        reason: "claimed",
+      }),
+      // eduFleet raises the one `403 claimed` for withdrawn too, so the free
+      // list read is the only thing that can tell the two apart — and here it
+      // says the advert was taken down by an admin.
+      jsonResponse(200, {
+        jobs: [{ externalJobId: String(vacancy._id), claimStatus: "withdrawn", status: "active" }],
+      }),
+    );
+
+    await VacancyService.remove("INS0001", String(vacancy._id), actor);
+
+    // Same shape as the claimed-discovery case: the close, the free GET, and
+    // the row gone on this attempt rather than the next one.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(await Vacancy.findById(vacancy._id).lean()).toBeNull();
+
+    const entry = await Activity.findOne({
+      institutionId: "INS0001",
+      entityId: vacancy._id,
+      action: "Vacancy deleted",
+    }).lean();
+    expect(entry?.description).toMatch(/already been taken down/i);
+    expect(entry?.description).not.toMatch(/left live under the school's own/i);
+  });
+
+  /**
    * `withdrawn` — an admin-approved takedown — is refused by
    * `updatePartnerJob` under the same one `403 claimed` reason and is equally
    * permanent, with even less to protect: the advert is already down. Before

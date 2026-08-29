@@ -577,8 +577,22 @@ export const VacancyService = {
       // one is already off the public site by an admin takedown and there is
       // nothing for anyone to do. Saying "left live" about a withdrawn
       // listing would send someone looking for an advert that is not there.
+      //
+      // M-1: `removed`, not `existing`, and the two are not interchangeable
+      // here. `existing` is a snapshot taken BEFORE the close, and the close
+      // is frequently what discovers the terminal state — that is the whole
+      // point of the discovery path above. By the time it returns,
+      // `recordBlockedReason` has already written the true `claimState`, and
+      // `findOneAndDelete` returns the document as it stood immediately
+      // before deletion, so `removed` holds it. Reading the stale snapshot
+      // described a withdrawn advert with the claimed sentence and sent the
+      // next reader after a live listing that eduFleet had taken down.
+      //
+      // `existing` remains the right source for the `terminalClaim` DECISION
+      // above: that one must not be led by the close, or a listing the close
+      // merely failed on would start deleting itself.
       description: terminalClaim
-        ? existing.listing?.claimState === "withdrawn"
+        ? removed.listing?.claimState === "withdrawn"
           ? `${removed.title} deleted — its ${EDUFLEET_LABEL} advert had already been taken down there, so nothing was left behind`
           : `${removed.title} deleted — its claimed ${EDUFLEET_LABEL} advert was left live under the school's own ${EDUFLEET_LABEL} account`
         : `${removed.title} deleted`,
