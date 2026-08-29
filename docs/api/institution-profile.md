@@ -568,6 +568,111 @@ curl https://your-domain.com/api/public/institutions/infinity-school-of-excellen
 
 Same response shape, same error behaviour, as `GET /api/public/:institutionId/profile`.
 
+### `GET /api/public/institutions` — the directory
+
+The only Website endpoint that does not require you to already know an
+institution. Everything else here needs an id or a slug; this is what hands
+them out, which is why it is also the only one where the rate limit is doing
+real work rather than defence in depth.
+
+Returns every institution whose profile is **published and active** — gated on
+exactly the same pair as the profile route, so a school listed here always has
+a profile that resolves. A school listed in a directory whose profile 404s is a
+broken link on somebody's website, so the two gates must never drift.
+
+| Query | Notes |
+|---|---|
+| `page` | 1-based, default 1 |
+| `pageSize` | default 20, **capped at 50**; a larger value is a 400, not a silent clamp |
+| `city` | exact match, case-insensitive — `Mysuru` does not match `Mysuru North` |
+| `board` | exact match, e.g. `CBSE` |
+| `type` | one of the institution types |
+| `q` | matches the **start of a word** in the name or short name |
+
+```bash
+curl "https://your-domain.com/api/public/institutions?city=Mysuru&board=CBSE&pageSize=20"
+```
+
+```json
+{
+  "success": true,
+  "institutions": [
+    {
+      "institutionId": "INS0001",
+      "slug": "infinity-school-of-excellence-mysore",
+      "institutionName": "Infinity School of Excellence",
+      "shortName": "ISE",
+      "institutionType": "SCHOOL",
+      "tagline": "Learning that lasts",
+      "logoUrl": "https://…",
+      "coverImageUrl": "https://…",
+      "city": "Mysore",
+      "district": "Mysuru",
+      "state": "Karnataka",
+      "board": "CBSE",
+      "genderType": "CO_ED"
+    }
+  ],
+  "total": 137,
+  "page": 1,
+  "pageSize": 20
+}
+```
+
+The card is **deliberately smaller than the profile**. `contact`, `geo`,
+`management`, `facilities`, `achievements`, `alumni` and `media` are absent by
+design — a directory of two hundred schools has no business carrying two
+hundred contact blocks, and this endpoint needs no institution named to call
+it. Follow `slug` to the profile route for the one school you are showing.
+
+### `GET /api/public/institutions/:slug/vacancies`
+
+Open teaching roles, for the school's own careers page. Also available by id at
+`GET /api/public/:institutionId/vacancies` — identical payload, since an
+institution has a slug only once it claims one.
+
+Only vacancies the institution has set to **`OPEN`** are returned. `DRAFT` is
+unfinished; `FILLED` and `CLOSED` are roles a careers page must not still be
+advertising, because a closed advert left up collects applications nobody will
+read.
+
+```bash
+curl https://your-domain.com/api/public/institutions/infinity-school-of-excellence-mysore/vacancies
+```
+
+```json
+{
+  "success": true,
+  "vacancies": [
+    {
+      "id": "6a887abd755db527bea51204",
+      "title": "Mathematics Teacher",
+      "subject": "Mathematics",
+      "description": "Teaching Grades 8 to 10.",
+      "salaryMin": 30000,
+      "salaryMax": 45000,
+      "experienceRequired": 3,
+      "benefits": ["Provident Fund (PF)", "Gratuity"],
+      "postedAt": "2026-08-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+`benefits` is stored as `facilities` internally — the stored name matches the
+partner platform's wire field, but the values are employee benefits, so the
+public contract calls them what they are. It is **absent entirely** when none
+are listed, never `[]`.
+
+**Nothing about where else the role is advertised is exposed here.** The
+vacancy record carries a `listing` sub-document holding partner-syndication
+state — remote job ids, contract type, claim state, integration error text. It
+is withheld by the allow-list in `lib/vacancies/public-projection.ts`, and that
+is the only thing keeping it out: publishing it would disclose which schools
+syndicate their adverts, which of those adverts have been claimed elsewhere,
+and the text of integration failures. None of that is a school's to publish by
+accident.
+
 ### `GET /api/public/:institutionId` (existing branding endpoint — unchanged)
 
 Pre-dates this phase; kept exactly as it was so no existing integration breaks. Returns a

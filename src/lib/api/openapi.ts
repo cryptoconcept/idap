@@ -4,7 +4,9 @@ import {
   ALUMNI_CATEGORIES,
   API_RATE_LIMIT,
   APPLICATION_STATUSES,
+  DIRECTORY_MAX_PAGE_SIZE,
   DOCUMENT_TYPES,
+  INSTITUTION_TYPES,
   PUBLIC_FORM_RATE_LIMIT,
   RESULT_BOARDS,
   RESULT_LEVELS,
@@ -786,6 +788,99 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
         },
       },
 
+      [`${slugPath}/vacancies`]: {
+      ...(options.slug
+        ? {}
+        : {
+            parameters: [
+              {
+                name: "slug",
+                in: "path",
+                required: true,
+                description: "The institution's public slug, from its profile URL.",
+                schema: { type: "string", example: "infinity-school-mysore" },
+              },
+            ],
+          }),
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's open teaching vacancies, by slug",
+          description:
+            "Open roles for the institution's own careers page, newest first. Only vacancies the institution has set to OPEN appear — drafts, filled and closed roles are never returned. Cached for five minutes.",
+          operationId: "listPublicVacanciesBySlug",
+          security: [],
+          responses: {
+            "200": {
+              description: "Open vacancies for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicVacanciesResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      [`${publicBase}/vacancies`]: {
+        get: {
+          tags: ["Website"],
+          summary: "List the institution's open teaching vacancies",
+          description:
+            "The id-keyed twin of the slug route above — an institution has a slug only once it claims one. Same payload, same rules.",
+          operationId: "listPublicVacancies",
+          security: [],
+          responses: {
+            "200": {
+              description: "Open vacancies for this institution",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicVacanciesResponse" },
+                },
+              },
+            },
+            ...errorResponses(["NOT_FOUND", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
+      "/api/public/institutions": {
+        get: {
+          tags: ["Website"],
+          summary: "List published institutions (directory)",
+          description:
+            "Every institution whose profile is published and active, as a compact card. This is the only Website endpoint that does not need you to already know an institution — use it to build an index or search page, then follow `slug` to the full profile. Cached for five minutes.",
+          operationId: "listPublicInstitutions",
+          security: [],
+          parameters: [
+            { name: "page", in: "query", required: false, schema: { type: "integer", minimum: 1, default: 1 } },
+            {
+              name: "pageSize",
+              in: "query",
+              required: false,
+              description: `Capped at ${DIRECTORY_MAX_PAGE_SIZE}; a larger value is rejected.`,
+              schema: { type: "integer", minimum: 1, maximum: DIRECTORY_MAX_PAGE_SIZE, default: 20 },
+            },
+            { name: "city", in: "query", required: false, description: "Exact city match, case-insensitive.", schema: { type: "string" }, example: "Mysuru" },
+            { name: "board", in: "query", required: false, schema: { type: "string" }, example: "CBSE" },
+            { name: "type", in: "query", required: false, schema: { type: "string", enum: [...INSTITUTION_TYPES] } },
+            { name: "q", in: "query", required: false, description: "Matches the start of a word in the institution's name or short name.", schema: { type: "string" } },
+          ],
+          responses: {
+            "200": {
+              description: "A page of published institutions",
+              content: {
+                "application/json": {
+                  schema: { $ref: "#/components/schemas/PublicInstitutionsResponse" },
+                },
+              },
+            },
+            ...errorResponses(["VALIDATION_ERROR", "RATE_LIMITED", "INTERNAL_ERROR"]),
+          },
+        },
+      },
+
       "/api/v1/leads": {
         post: {
           tags: ["Server to server"],
@@ -1555,6 +1650,74 @@ export function buildOpenApiDocument(options: OpenApiOptions): Record<string, un
             amount: { type: "string", example: "₹10,000" },
             classOrCourse: { type: "string", example: "Grade 10" },
             publishedAt: { type: "string", format: "date-time" },
+          },
+        },
+
+        PublicVacanciesResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            vacancies: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PublicVacancy" },
+            },
+          },
+        },
+
+        PublicVacancy: {
+          type: "object",
+          description:
+            "An open teaching role. Carries nothing about where else the institution advertises it — the platform's syndication state is deliberately not part of this contract.",
+          properties: {
+            id: { type: "string", example: "6a887abd755db527bea51204" },
+            title: { type: "string", example: "Mathematics Teacher" },
+            subject: { type: "string", example: "Mathematics" },
+            description: { type: "string", example: "Teaching Grades 8 to 10." },
+            salaryMin: { type: "integer", example: 30000, description: "Monthly, in rupees. Absent when not advertised." },
+            salaryMax: { type: "integer", example: 45000 },
+            experienceRequired: { type: "integer", example: 3, description: "Minimum years." },
+            benefits: {
+              type: "array",
+              items: { type: "string" },
+              description: "Absent entirely when none are listed — never an empty array.",
+              example: ["Provident Fund (PF)", "Gratuity"],
+            },
+            postedAt: { type: "string", format: "date-time" },
+          },
+        },
+
+        PublicInstitutionsResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            institutions: {
+              type: "array",
+              items: { $ref: "#/components/schemas/PublicInstitutionCard" },
+            },
+            total: { type: "integer", example: 137, description: "Total matching the filters, across all pages." },
+            page: { type: "integer", example: 1 },
+            pageSize: { type: "integer", example: 20 },
+          },
+        },
+
+        PublicInstitutionCard: {
+          type: "object",
+          description:
+            "A directory card — deliberately smaller than the full profile. Contact details, location coordinates, management, facilities, achievements, alumni and the media library are not here; fetch the profile for the one institution you are showing.",
+          properties: {
+            institutionId: { type: "string", example: "INS0001" },
+            slug: { type: "string", description: "Absent until the institution claims one.", example: "infinity-school-mysore" },
+            institutionName: { type: "string", example: "Infinity School of Excellence" },
+            shortName: { type: "string", example: "ISE" },
+            institutionType: { type: "string", enum: [...INSTITUTION_TYPES] },
+            tagline: { type: "string", example: "Learning that lasts" },
+            logoUrl: { type: "string", format: "uri" },
+            coverImageUrl: { type: "string", format: "uri" },
+            city: { type: "string", example: "Mysore" },
+            district: { type: "string", example: "Mysuru" },
+            state: { type: "string", example: "Karnataka" },
+            board: { type: "string", example: "CBSE" },
+            genderType: { type: "string", example: "CO_ED" },
           },
         },
 

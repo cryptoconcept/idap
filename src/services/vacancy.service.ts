@@ -1,11 +1,12 @@
 import "server-only";
 import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { Vacancy, type VacancyDoc } from "@/models";
+import { Institution, Vacancy, type VacancyDoc } from "@/models";
 import { notFound, validationError } from "@/lib/api/errors";
 import { PLATFORM_LABELS, VACANCY_MAX_RECORDS, isTerminalClaim } from "@/lib/constants";
 import type { VacancyCreateInput, VacancyPatchInput } from "@/lib/validation/vacancy";
 import { ActivityService } from "./activity.service";
+import { toPublicVacancy, type PublicVacancy } from "@/lib/vacancies/public-projection";
 import { ConnectorAuthError } from "@/lib/connectors/types";
 import {
   EDUFLEET_PATCHABLE_KEYS,
@@ -287,6 +288,51 @@ async function closeListingBeforeDelete(
 }
 
 export const VacancyService = {
+  /**
+   * The careers-page read. Credential-free, so it is written to the same rule
+   * as every other public list: a suspended institution, an unpublished one,
+   * a nonexistent one and one with no open roles are indistinguishable to the
+   * caller — `null` for "no such public institution", `[]` for "nobody is
+   * hiring". There is no 403 branch because none exists.
+   *
+   * Gated twice on purpose. The query filters `status: "OPEN"`, and
+   * `toPublicVacancy` refuses anything else again on the way out, so a future
+   * edit to this filter cannot publish a DRAFT. The projection is also what
+   * withholds the `listing` sub-document — see the note there; it is the only
+   * thing standing between a careers page and a school's eduFleet state.
+   */
+  async listPublic(query: {
+    institutionId?: string;
+    slug?: string;
+  }): Promise<PublicVacancy[] | null> {
+    await connectToDatabase();
+
+    const key = query.institutionId
+      ? { institutionId: query.institutionId.toUpperCase() }
+      : { slug: (query.slug ?? "").toLowerCase() };
+
+    const institution = await Institution.findOne({
+      ...key,
+      active: true,
+      profileStatus: "PUBLISHED",
+    })
+      .select("institutionId")
+      .lean();
+    if (!institution) return null;
+
+    const rows = await Vacancy.find({
+      institutionId: institution.institutionId,
+      status: "OPEN",
+    })
+      .sort({ createdAt: -1 })
+      .limit(VACANCY_MAX_RECORDS)
+      .lean<VacancyDoc[]>();
+
+    return rows
+      .map((row) => toPublicVacancy(row as unknown as Record<string, unknown>))
+      .filter((row): row is PublicVacancy => row !== null);
+  },
+
   async list(institutionId: string): Promise<VacancyDTO[]> {
     await connectToDatabase();
     const rows = await Vacancy.find({ institutionId })

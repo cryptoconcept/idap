@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  DIRECTORY_MAX_PAGE_SIZE,
   GENDER_TYPES,
   INSTITUTION_TYPES,
   MANAGEMENT_TYPES,
@@ -159,6 +160,28 @@ export const platformInstitutionPatchSchema = z.object({
 
 /** `target` is the upload DESTINATION. `kind` is the media TYPE. Having one
  *  word mean both in the same subsystem is what this rename avoids. */
+/**
+ * Query for the credential-free institution directory.
+ *
+ * `page`/`pageSize` are coerced because they arrive as strings from the query
+ * string. `pageSize` is capped at `DIRECTORY_MAX_PAGE_SIZE` here so a bad
+ * value is a 400 naming the limit rather than a silent clamp — but the service
+ * clamps it again, since a cap enforced only at one caller is not a cap.
+ *
+ * `city` and `board` are free text on the model, so they are matched, not
+ * enumerated: `board` has an index and is compared exactly, `city` is compared
+ * case-insensitively but anchored at both ends, so "Mysore" cannot also return
+ * every school whose city merely contains it.
+ */
+export const directoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).optional(),
+  pageSize: z.coerce.number().int().min(1).max(DIRECTORY_MAX_PAGE_SIZE).optional(),
+  city: optionalText(80),
+  board: optionalText(80),
+  type: z.enum(INSTITUTION_TYPES).optional(),
+  q: optionalText(80),
+});
+
 export const mediaUploadSchema = z.object({
   target: z.enum(["LOGO", "COVER", "MEDIA"]),
   kind: z.enum(["IMAGE", "BROCHURE", "PROSPECTUS"]).optional(),

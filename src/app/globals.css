@@ -59,7 +59,17 @@
   --ink: #000000;
   --graphite: #111111;
   --slate: #333333;
-  --mid: #666666;
+  /*
+   * 7.00:1 on --paper, exactly WCAG AAA. This carries `--muted-foreground`,
+   * which is the most-used text colour in the product (220 sites against 79
+   * for `--foreground`), and most of those sites are 12px. At the previous
+   * #666666 it was 5.74:1 — AA, but below AAA and visibly faint at that size.
+   *
+   * It also brings light mode level with dark, which was already 6.95:1
+   * (#999999 on #0a0a0a). The two palettes were tuned separately and the
+   * light one had drifted weaker; changing this token is what closes the gap.
+   */
+  --mid: #595959;
   --silver: #999999;
   --line: #e5e5e5;
   --mist: #f7f7f7;

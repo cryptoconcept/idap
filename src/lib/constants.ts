@@ -117,6 +117,16 @@ export const PUBLIC_FORM_RATE_LIMIT = { limit: 10, windowSeconds: 60 };
  * it exists to stop is cache-busting through a varying id or slug.
  */
 export const PUBLIC_READ_RATE_LIMIT = { limit: 60, windowSeconds: 60 };
+
+/**
+ * Hard ceiling on one page of the public institution directory.
+ *
+ * The endpoint is credential-free, so this is the only thing between a caller
+ * and the whole table: `pageSize` is validated against it at the route AND
+ * clamped to it again in the service, because a second caller of the service
+ * would otherwise inherit no cap at all.
+ */
+export const DIRECTORY_MAX_PAGE_SIZE = 50;
 /** Login attempts allowed per IP + email pair. */
 export const LOGIN_RATE_LIMIT = { limit: 8, windowSeconds: 300 };
 

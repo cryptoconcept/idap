@@ -9,8 +9,10 @@ import { allocateSlug } from "./slug.service";
 import { hashPassword } from "@/lib/security/password";
 import { AppError, notFound, validationError } from "@/lib/api/errors";
 import { escapeRegex, requiredIso, toIso } from "@/lib/utils/serialize";
+import { toDirectoryCard, type DirectoryCard } from "@/lib/profile/directory-projection";
 import type { InstitutionDTO, Paginated, ProfileDTO } from "@/lib/types";
 import {
+  DIRECTORY_MAX_PAGE_SIZE,
   MEDIA_MAX_ITEMS,
   MEDIA_MAX_PDF_BYTES,
   type InstitutionType,
@@ -960,6 +962,78 @@ export const InstitutionService = {
    * anything not published-and-active (missing, draft, suspended, archived, or
    * deactivated) comes back `null`, indistinguishable from a nonexistent record.
    */
+  /**
+   * The directory read: which institutions exist publicly.
+   *
+   * Gated on exactly the same pair as `getPublicProfile` — `active: true` and
+   * `profileStatus: "PUBLISHED"` — so an institution appears here if and only
+   * if its profile is fetchable. The two must never drift: a school listed in
+   * the directory whose profile 404s is a broken link on someone's website,
+   * and a school that is silently absent from the directory has no way to
+   * discover it is.
+   *
+   * Offset paging (`page`/`pageSize`) rather than a cursor, matching
+   * `LeadService.list`. A cursor would page more stably over a moving set, but
+   * this set moves when an institution publishes — rare — and matching the
+   * convention already in the codebase is worth more here than the stability.
+   *
+   * `pageSize` is capped by the caller's schema. It is capped again below,
+   * because this is a credential-free endpoint and the cap is what stops one
+   * request from reading the whole table.
+   */
+  async listPublicDirectory(query: {
+    page?: number;
+    pageSize?: number;
+    city?: string;
+    board?: string;
+    type?: string;
+    q?: string;
+  }): Promise<{
+    institutions: DirectoryCard[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
+    await connectToDatabase();
+
+    const page = Math.max(1, query.page ?? 1);
+    const pageSize = Math.min(Math.max(1, query.pageSize ?? 20), DIRECTORY_MAX_PAGE_SIZE);
+
+    const filter: Record<string, unknown> = { active: true, profileStatus: "PUBLISHED" };
+    // `city` is a flat column with its own index (`InstitutionSchema.index({ city: 1 })`).
+    // It is NOT `address.city`: the nested address object exists only in the
+    // public projection's output, never in the stored document.
+    if (query.city) filter.city = new RegExp(`^${escapeRegex(query.city)}$`, "i");
+    if (query.board) filter["academic.board"] = query.board;
+    if (query.type) filter.institutionType = query.type;
+    if (query.q) {
+      // Anchored to the start of a word, not a bare substring: "school" should
+      // not match every institution whose name contains it mid-word, and an
+      // unanchored regex over a growing collection cannot use an index at all.
+      const term = escapeRegex(query.q);
+      filter.$or = [
+        { institutionName: new RegExp(`\\b${term}`, "i") },
+        { shortName: new RegExp(`\\b${term}`, "i") },
+      ];
+    }
+
+    const [rows, total] = await Promise.all([
+      Institution.find(filter)
+        .sort({ institutionName: 1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean(),
+      Institution.countDocuments(filter),
+    ]);
+
+    return {
+      institutions: rows.map((row) => toDirectoryCard(row as unknown as Record<string, unknown>)),
+      total,
+      page,
+      pageSize,
+    };
+  },
+
   async getPublicProfile(query: {
     institutionId?: string;
     slug?: string;
