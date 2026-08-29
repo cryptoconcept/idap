@@ -430,13 +430,31 @@ export const VacancyService = {
     // the dashboard renders, and the school has to see whether the push landed
     // (the fresh `lastPushedAt`) or did not (a `blockedReason` on the card).
     //
-    // L1: the latency this buys is bounded at roughly 90 SECONDS, not the
-    // connector's 15 s request timeout — `createConnectorHttp` retries a 429
-    // once after an honoured `Retry-After` of up to 60 s, so the worst case is
-    // 15 + 60 + 15. See `http.ts` for the arithmetic and for how that compares
-    // with the platform's own function timeout. The edit itself is already
-    // committed above, so a request cut off short loses the REPORT of the
-    // push, never the edit.
+    // L1/L-2: the latency this buys is bounded at roughly 64 SECONDS against
+    // eduFleet specifically, not the connector's 15 s request timeout and not
+    // `http.ts`'s general ~90 s either. Both halves of that figure are
+    // eduFleet facts rather than connector facts, so neither belongs in
+    // `http.ts`, whose own arithmetic is correct for the shared helper:
+    //
+    // - **One call is ~32 s, not 90.** The 90 s term assumes an honoured
+    //   `Retry-After` of up to 60 s. eduFleet sets that header nowhere — its
+    //   429s (`partner-auth.ts`, the burst limiter and both write-budget
+    //   paths) are `Response.json(body, {status: 429})` with no headers — so
+    //   `createConnectorHttp` falls to its flat `RETRY_DELAY_MS` of 2 s:
+    //   15 + 2 + 15.
+    // - **The push can make TWO calls.** Since `1df1092`, a `403 claimed` on
+    //   Contract One is followed by `resolveClaimState`'s free GET, which has
+    //   its own timeout and its own retry. The first call reaching a 403 does
+    //   not itself retry, but it can be a 429 that retries INTO one, so the
+    //   worst case is a full 32 s twice over.
+    //
+    // That still exceeds the 60 s platform default no route here raises
+    // (`http.ts`; only the cron sets `maxDuration`), which is the conclusion
+    // the 90 s figure was quoted for — so it survives its own correction. It
+    // would return to ~180 s the day eduFleet starts sending `Retry-After`.
+    //
+    // The edit itself is already committed above, so a request cut off short
+    // loses the REPORT of the push, never the edit.
     // `pushEdit` cannot throw, so a failed push never turns a saved edit into
     // a failed request — but it does write to the listing, which is why the
     // record is re-read below rather than the pre-push copy being returned.

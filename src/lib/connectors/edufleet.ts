@@ -648,9 +648,10 @@ function nameOf(vacancy: SyncVacancy): string {
  * Ordering is not incidental: the grant probe first (a free read that stops a
  * dead-credential run before it spends anything), then closes and repushes in
  * the order the service handed them over. A `RUN`-scoped failure — eduFleet
- * unreachable, or the daily write cap spent, which arrives as an unclassified
- * `429` — abandons the rest of the sweep rather than rediscovering the same
- * fact once per vacancy.
+ * unreachable, or the daily write cap spent, which `classifyJobPush` raises
+ * as a `ConnectorCapExceededError` and `runVacancyAction` keeps RUN-scoped as
+ * a classified `429` — abandons the rest of the sweep rather than
+ * rediscovering the same fact once per vacancy.
  *
  * The status is the honesty rule, verbatim: anything skipped or failed makes
  * the run `PARTIAL` with a warning naming that vacancy; `SUCCESS` is reserved
