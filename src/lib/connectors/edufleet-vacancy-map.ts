@@ -43,17 +43,34 @@
  * `state` defaults to `"Karnataka"` on eduFleet's own side for Contract One
  * only, so it is never injected here — only forwarded when IDAP has one.
  *
- * **`district` is not sent on either contract** — see
- * `buildAggregatedJobBody` for the whole reason. In short: eduFleet
- * exact-match validates it against 31 Karnataka display strings and IDAP's
- * district is free text, so forwarding it turns an ordinary profile typo into
- * a 400 that spends from the platform-wide pool above.
+ * **`district` is sent on Contract One, and only after IDAP has resolved it
+ * to one of eduFleet's own 31 keys** — see `resolveDistrict` and
+ * `buildAggregatedJobBody` for the whole reason. Contract Two neither accepts
+ * it nor ever gains it.
+ *
+ * Both builders therefore return `{ body, warnings }` rather than a bare
+ * body, matching `passpercent-mapping.ts`'s `(inputs) -> { value, warnings }`
+ * shape. A warning is what the module says when it sent LESS than the caller
+ * handed it: the alternative — dropping a key quietly — is the
+ * `sanitizeFacilities` antipattern this module exists to avoid, and the
+ * function that drops the key is the only one that can be trusted to report
+ * the drop.
  */
 
-import { VACANCY_BENEFITS, VACANCY_SUBJECTS } from "@/lib/constants";
+import { EDUFLEET_KARNATAKA_DISTRICTS, VACANCY_BENEFITS, VACANCY_SUBJECTS } from "@/lib/constants";
 import type { VacancyListingContract } from "@/lib/constants";
 
 type Rec = Record<string, unknown>;
+
+/**
+ * A body, plus every place it says less than the values handed in did.
+ *
+ * Empty on the overwhelming majority of pushes. It exists because exactly one
+ * field IDAP holds — `district` — is free text on IDAP's side and a closed
+ * enum on eduFleet's, so it is the one field a correct body may have to leave
+ * out; see `resolveDistrict`.
+ */
+export type BuiltJobBody = { body: Rec; warnings: string[] };
 
 export type VacancyPushInput = {
   vacancyId: string;
@@ -70,13 +87,23 @@ export type InstitutionPushInput = {
   institutionName: string;
   city?: string;
   /**
-   * Forwarded to Contract One only, and — unlike `district`, which this type
-   * deliberately does not have a field for at all — safe to send unchecked.
-   * eduFleet never validates `state`: `createPartnerJob` reads it once, to
-   * decide whether the Karnataka district/taluk checks apply
-   * (`state.toLowerCase() === "karnataka"`), and otherwise stores it verbatim
-   * on `Job.state`. There is no enum, no list and no rejection path for it,
-   * so no value IDAP can hold here can cost a write unit on its own.
+   * The institution profile's district **exactly as the school typed it** —
+   * raw free text, never pre-cleaned by the caller. `buildAggregatedJobBody`
+   * is what resolves it against eduFleet's 31 keys and decides whether to
+   * send it, and it must see the original to be able to name it in a warning.
+   *
+   * Contract Two has no field for this and never will: `SchoolJobInput`
+   * declares no `district`, and the grant already identifies the school.
+   */
+  district?: string;
+  /**
+   * Forwarded to Contract One only, and — unlike `district` — safe to send
+   * completely unchecked. eduFleet never validates `state`:
+   * `createPartnerJob` reads it once, to decide whether the Karnataka
+   * district/taluk checks apply (`state.toLowerCase() === "karnataka"`), and
+   * otherwise stores it verbatim on `Job.state`. There is no enum, no list
+   * and no rejection path for it, so no value IDAP can hold here can cost a
+   * write unit on its own.
    */
   state?: string;
   // eduFleet accepts either `city` or `branchId` for Contract Two
@@ -136,6 +163,142 @@ function sanitizeFacilities(input: string[] | undefined): string[] | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// District — the one free-text field eduFleet validates against a closed list
+// ---------------------------------------------------------------------------
+
+/**
+ * Case, leading/trailing space and runs of internal whitespace are all things
+ * a typist varies and nothing about a district actually means, so they are
+ * normalised away before either lookup below. Everything else — spelling,
+ * punctuation, word order — is left alone, because varying any of those is a
+ * DIFFERENT value and guessing at it is what step 4 of this design refuses to
+ * do.
+ */
+function foldDistrict(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+/** Folded form → the canonical key spelling eduFleet's `Object.hasOwn` wants.
+ *  Derived from the transcribed list so the two can never disagree. */
+const CANONICAL_DISTRICTS = new Map<string, string>(
+  EDUFLEET_KARNATAKA_DISTRICTS.map((name) => [foldDistrict(name), name]),
+);
+
+/**
+ * The 2014 Karnataka district renames, and nothing else.
+ *
+ * Every entry is an official rename of a DISTRICT whose old name refers to
+ * exactly one district on eduFleet's current list, so resolving it involves no
+ * guess about what the school meant — the place is the same place and only its
+ * transliteration changed. These are also the spellings still printed on
+ * letterheads, so they are what a school types.
+ *
+ * Three families of near-miss are deliberately NOT here, because each would
+ * require inventing intent:
+ *
+ * - **`Bangalore` alone is AMBIGUOUS** between `Bengaluru Urban` and
+ *   `Bengaluru Rural`, which are two different districts with two different
+ *   sets of teachers. `Bangalore Urban`/`Bangalore Rural` carry the
+ *   disambiguator themselves and are safe; the bare name is not, and falls
+ *   through to the warning like any other unrecognised value. `Bengaluru`
+ *   alone is the same case and is likewise absent.
+ * - **A city typed into the district box.** `Mangalore`/`Mangaluru` is a city
+ *   in `Dakshina Kannada`, and `Hospet`/`Hosapete` is a taluk of
+ *   `Vijayanagara` (`karnataka-taxonomy.ts` lists it under that district's
+ *   taluks) — neither was ever a district name, so mapping them would be
+ *   IDAP deciding what a school meant rather than what it wrote.
+ * - **Ordinary misspellings.** `Bengalore`, `Mysoore`. Correcting those is
+ *   spellchecking, and a spellchecker that is wrong once sends an advert to
+ *   the wrong district's teachers permanently and silently.
+ *
+ * Keyed by folded form so the alias itself is matched case- and
+ * whitespace-insensitively, exactly like a canonical key.
+ */
+const DISTRICT_ALIASES = new Map<string, string>(
+  (
+    [
+      ["Bangalore Urban", "Bengaluru Urban"],
+      ["Bangalore Rural", "Bengaluru Rural"],
+      ["Belgaum", "Belagavi"],
+      ["Bellary", "Ballari"],
+      ["Bijapur", "Vijayapura"],
+      ["Chikmagalur", "Chikkamagaluru"],
+      ["Gulbarga", "Kalaburagi"],
+      ["Mysore", "Mysuru"],
+      ["Shimoga", "Shivamogga"],
+      ["Tumkur", "Tumakuru"],
+    ] as const
+  ).map(([legacy, canonical]) => [foldDistrict(legacy), canonical]),
+);
+
+/**
+ * IDAP's free-text district → the key eduFleet will accept, or `undefined`.
+ *
+ * This is the whole of the district design, and it exists because the two
+ * obvious options are both wrong. Sending the raw text 400s for every legacy
+ * spelling, and — since `spendWrite` runs before validation — takes a unit
+ * from the PLATFORM-WIDE pool each time, so one school's profile typo
+ * degrades publishing for every unconnected school. Dropping the field
+ * outright looks free and is not: `createPartnerJob` ends with
+ * `notifyMatchingTeachers(job)` (`partner-jobs.ts:185`), and both matchers in
+ * `job-match-logic.ts` read `job.district` —
+ *
+ *     // jobLocationMatchesTeacher
+ *     if (jobDistrict && teacherDistrict) return jobDistrict === teacherDistrict;
+ *     // ...otherwise the job's free-text CITY vs the teacher's cities
+ *
+ *     // jobMatchesSavedAlert
+ *     if (jobDistrict ? jobDistrict !== target : jobCity !== target) return false;
+ *
+ * — so an advert with no district falls back to comparing a city string
+ * against a district name. For a district-scoped saved alert that is a
+ * guaranteed miss for all but the handful of districts named after their own
+ * city, which means a school with a perfectly valid district loses
+ * district-scoped alerts entirely. That is a permanent, silent reach
+ * regression paid by every correctly-configured school to close a hazard only
+ * the misconfigured ones create.
+ *
+ * So: resolve locally, send what resolves, omit and warn about what does not.
+ * An unresolved district is never a refusal — see `preflight`, which
+ * deliberately has no district check. The advert is entirely publishable
+ * without one; refusing locally would block a publish over optional metadata
+ * and would start blocking legitimate publishes the day Karnataka notifies a
+ * new district. Under this design that same drift degrades to exactly the
+ * omit-and-warn behaviour above, which is why a transcribed table is safe to
+ * keep against a partner that has shipped breaking changes three times.
+ *
+ * Returns the CANONICAL spelling, never the input: `isValidKarnatakaDistrict`
+ * is `Object.hasOwn`, so `bengaluru urban` must go over the wire as
+ * `Bengaluru Urban` or it 400s exactly like an unknown name.
+ */
+export function resolveDistrict(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const folded = foldDistrict(value);
+  if (!folded) return undefined;
+  return CANONICAL_DISTRICTS.get(folded) ?? DISTRICT_ALIASES.get(folded);
+}
+
+/**
+ * What the school is told when their district did not resolve.
+ *
+ * Written like every other string in this module — for a school admin to act
+ * on, naming the value that failed and the exact consequence, never an error
+ * code. The consequence is specific on purpose: "matched by city alone" is
+ * what `jobLocationMatchesTeacher` actually falls back to, and naming
+ * district-scoped alerts is what tells an admin why an advert that looks live
+ * is reaching nobody.
+ *
+ * The district is user-entered text on its way to a browser toast, so it is
+ * clipped on the same principle `vacancy-publish.service.ts` clips
+ * `blockedReason`: `Institution.district` has no `maxlength` on the schema
+ * (only `optionalText(120)` on the write path), so a legacy row can be longer
+ * than any value the form would accept today.
+ */
+function districtOmittedWarning(district: string): string {
+  return `eduFleet does not recognise "${district.trim().slice(0, 120)}" as a Karnataka district, so this advert was published without one — teachers who search or set job alerts by district will not be matched to it until the district on the institution profile is corrected.`;
+}
+
+// ---------------------------------------------------------------------------
 // Reasons shared by both preflights
 //
 // `preflight` (a create) and `preflightPatch` (an update) refuse different
@@ -175,6 +338,18 @@ const SALARY_ORDER = "The salary minimum cannot exceed the maximum";
  * Deliberately collects every applicable reason rather than stopping at the
  * first: a caller surfacing this to an admin wants the whole punch list in
  * one pass, not one round-trip per fixed field.
+ *
+ * **There is deliberately no `district` check here, and there must not be
+ * one.** `district` is the one field this module resolves rather than
+ * validates (`resolveDistrict`), because an unresolved district cannot cost a
+ * write unit — `buildAggregatedJobBody` omits it, so eduFleet's
+ * `isKarnataka && district && …` conjunction never fires — and the advert is
+ * entirely publishable without it. A reason returned here is a REFUSAL: it
+ * blocks the publish outright. Refusing over optional display-and-matching
+ * metadata would trade a reach limitation for a hard failure, and would start
+ * blocking legitimate publishes the day Karnataka notifies a new district.
+ * The city gate stays exactly as it is; a district gate would be a different
+ * thing wearing its clothes.
  */
 export function preflight(
   v: VacancyPushInput,
@@ -313,13 +488,13 @@ export function preflightPatch(v: VacancyPushInput, remote: RemoteJobSalary = {}
 /**
  * Contract One's body: `externalJobId` (IDAP's own `vacancyId`), `title`,
  * `subject`, `description`, `institutionName`, `city`, plus optional `state`
- * when IDAP has one. `facilities` is filtered through `sanitizeFacilities`
- * above so nothing eduFleet would silently drop is ever sent. Call only after
- * `preflight` returns `[]` — this function does not itself validate.
+ * and `district` when IDAP has them. `facilities` is filtered through
+ * `sanitizeFacilities` above so nothing eduFleet would silently drop is ever
+ * sent. Call only after `preflight` returns `[]` — this function does not
+ * itself validate.
  *
- * **`district` is deliberately absent, and this is the whole of the H2 fix.**
- * It used to be forwarded unconditionally and checked by nothing. eduFleet's
- * `createPartnerJob` does this:
+ * **`district` is resolved before it is sent, and omitted with a warning when
+ * it cannot be.** eduFleet's `createPartnerJob` does this:
  *
  *     const state = input.state?.trim() || "Karnataka";
  *     const isKarnataka = state.toLowerCase() === "karnataka";
@@ -330,55 +505,50 @@ export function preflightPatch(v: VacancyPushInput, remote: RemoteJobSalary = {}
  * against 31 display strings in the current Kannada spellings
  * (`karnataka-taxonomy.ts`), and a BLANK state defaults to Karnataka — so
  * omitting the state opts in rather than out. IDAP's own district is free
- * text (`Institution.ts`, `optionalText(120)`, a bare `TextField` with no
- * dropdown), and the spellings schools actually type — `Bangalore`,
- * `Bangalore Urban`, `Bengaluru`, `Mysore`, `Belgaum`, `Mangalore`, `Tumkur`
- * — are every one of them a 400. Because `spendWrite` runs before validation,
- * each is a unit gone from the PLATFORM-WIDE 500/day pool (see this module's
- * docblock), so one school with a legacy district spelling in its profile
- * degrades publishing for every unconnected school on IDAP.
+ * text (`institution.ts`'s `optionalText(120)`, a bare `TextField` with no
+ * dropdown), so the raw value must never be forwarded: the spellings schools
+ * actually type would 400, at a unit each from the PLATFORM-WIDE 500/day pool
+ * (see this module's docblock).
  *
- * Two ways to close that; this is the one taken and why.
+ * An earlier fix removed the field entirely on the stated ground that it is
+ * "purely denormalised display text — nothing filters, searches or matches on
+ * it". **That is false at source, and `resolveDistrict` carries the
+ * refutation**: `createPartnerJob` ends with `notifyMatchingTeachers(job)`
+ * and both matchers read `job.district`, so dropping it silently removes
+ * every IDAP advert from eduFleet's district matching and from
+ * district-scoped saved alerts — for every school, including the majority
+ * whose district was valid and whose pushes never 400'd. Resolving locally
+ * keeps that reach for them and costs the rest nothing but a warning.
  *
- * - **Drop the key.** `district` is optional to eduFleet and purely
- *   denormalised display text on `Job` — nothing filters, searches or matches
- *   on it. The cost is one line of address on the advert; `city` still
- *   carries the location a teacher actually reads, and `city` is required
- *   and already gated. The hazard disappears entirely: with no `district` in
- *   the body, `isKarnataka && district` is false and the check never runs
- *   whatever the state says. IDAP also never sends `taluk`, which is guarded
- *   by the same conditional, so nothing on this path can reach either check.
- * - **Transcribe the 31 keys and check them in `preflight`,** the way
- *   `VACANCY_SUBJECTS` and `VACANCY_BENEFITS` already are. Rejected. Those
- *   two are transcribed because the values are ones IDAP itself CHOOSES from
- *   a fixed list it controls, so a mismatch is a bug. A district is typed by
- *   a school into a free-text box, so the check would not save a doomed push
- *   — it would convert it into a hard local refusal that blocks publishing
- *   until an admin discovers eduFleet's exact preferred spelling, for a field
- *   that changes nothing about the advert. It would also add a 31-entry table
- *   to keep synchronised with a partner that has shipped breaking changes
- *   three times during this integration, and district/taluk boundaries change
- *   by government notification.
- *
- * Note what is NOT done: sending the key with an invalid value silently
+ * Note what is still NOT done: sending the key with an invalid value quietly
  * dropped. That is the `sanitizeFacilities` antipattern — a body that says
- * less than the caller believes it says — and the key being absent from this
- * object entirely, rather than conditionally omitted, is what keeps it out.
+ * less than the caller believes it says — and the returned `warnings` is what
+ * keeps this out of it. The omission is reported by the same call that makes
+ * it, so there is no arrangement in which one happens without the other.
  */
-export function buildAggregatedJobBody(v: VacancyPushInput, i: InstitutionPushInput): Rec {
-  return omitUndefined({
-    externalJobId: v.vacancyId,
-    title: v.title,
-    subject: v.subject,
-    description: v.description,
-    institutionName: i.institutionName,
-    city: i.city,
-    state: i.state,
-    salaryMin: v.salaryMin,
-    salaryMax: v.salaryMax,
-    experienceRequired: v.experienceRequired,
-    facilities: sanitizeFacilities(v.facilities),
-  });
+export function buildAggregatedJobBody(v: VacancyPushInput, i: InstitutionPushInput): BuiltJobBody {
+  const district = resolveDistrict(i.district);
+  return {
+    body: omitUndefined({
+      externalJobId: v.vacancyId,
+      title: v.title,
+      subject: v.subject,
+      description: v.description,
+      institutionName: i.institutionName,
+      city: i.city,
+      district,
+      state: i.state,
+      salaryMin: v.salaryMin,
+      salaryMax: v.salaryMax,
+      experienceRequired: v.experienceRequired,
+      facilities: sanitizeFacilities(v.facilities),
+    }),
+    // Only when IDAP HELD a district and it did not resolve. A school that
+    // has never filled the field in has nothing to correct and is told
+    // nothing — a warning for an empty optional field is noise that teaches
+    // admins to dismiss the ones that matter.
+    warnings: i.district?.trim() && !district ? [districtOmittedWarning(i.district)] : [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -399,18 +569,28 @@ export function buildAggregatedJobBody(v: VacancyPushInput, i: InstitutionPushIn
  * grant already identifies exactly one school, so eduFleet does not accept
  * any of those four on this route (api-map §2.3, and confirmed directly
  * against `SchoolJobInput`, which declares none of them).
+ *
+ * `warnings` is therefore always empty here, and that is structural rather
+ * than a placeholder: `district` is the only field IDAP has to resolve before
+ * sending, this route does not accept it, and nothing else on this body can
+ * be dropped. The pair shape is shared with `buildAggregatedJobBody` so the
+ * one call site that picks between them by contract does not have to know
+ * which of the two it got.
  */
-export function buildSchoolJobBody(v: VacancyPushInput, i: InstitutionPushInput): Rec {
-  return omitUndefined({
-    externalJobId: v.vacancyId,
-    title: v.title,
-    subject: v.subject,
-    description: v.description,
-    city: i.city,
-    branchId: i.branchId,
-    salaryMin: v.salaryMin,
-    salaryMax: v.salaryMax,
-    experienceRequired: v.experienceRequired,
-    facilities: sanitizeFacilities(v.facilities),
-  });
+export function buildSchoolJobBody(v: VacancyPushInput, i: InstitutionPushInput): BuiltJobBody {
+  return {
+    body: omitUndefined({
+      externalJobId: v.vacancyId,
+      title: v.title,
+      subject: v.subject,
+      description: v.description,
+      city: i.city,
+      branchId: i.branchId,
+      salaryMin: v.salaryMin,
+      salaryMax: v.salaryMax,
+      experienceRequired: v.experienceRequired,
+      facilities: sanitizeFacilities(v.facilities),
+    }),
+    warnings: [],
+  };
 }

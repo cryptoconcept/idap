@@ -624,6 +624,45 @@ export const VACANCY_BENEFITS = [
 ] as const;
 export type VacancyBenefit = (typeof VACANCY_BENEFITS)[number];
 
+/**
+ * eduFleet's 31 Karnataka districts, transcribed from
+ * /Users/automicai/edufleet-exchange/web/src/lib/karnataka-taxonomy.ts
+ * (`KARNATAKA_DISTRICTS`) in that file's exact key order.
+ *
+ * The third eduFleet vocabulary IDAP transcribes, and the only one whose
+ * values a school types rather than picks. `isValidKarnatakaDistrict` is
+ * `Object.hasOwn` against these keys — an EXACT, case-sensitive match — and
+ * `createPartnerJob` runs it on every Contract One create whose state is
+ * Karnataka (a blank state DEFAULTS to Karnataka, so omitting the state opts
+ * in rather than out). These are the modern transliterations, which is
+ * precisely why the legacy spellings a school still types — `Mysore`,
+ * `Belgaum`, `Gulbarga`, `Bijapur`, `Shimoga`, `Tumkur`, `Bellary`,
+ * `Bangalore Urban` — every one of them 400s, at a write unit each from the
+ * PLATFORM-WIDE pool.
+ *
+ * Transcribed rather than fetched, same as the two lists above: publishing a
+ * vacancy must not depend on eduFleet being reachable, and this list is what
+ * lets IDAP decide locally whether a district is safe to send.
+ *
+ * **Drift is safe here, and that is the point.** A district Karnataka adds
+ * after this was written simply fails to resolve, and an unresolved district
+ * is omitted with a warning — never a refusal — so the worst a stale list can
+ * do is cost that one school its district-based reach until this array is
+ * updated. Nothing here can ever block a publish. See
+ * `edufleet-vacancy-map.ts`'s `resolveDistrict` for the resolution and
+ * `tests/unit/edufleet-districts.test.ts` for the verbatim pin.
+ */
+export const EDUFLEET_KARNATAKA_DISTRICTS = [
+  "Bagalkot", "Ballari", "Belagavi", "Bengaluru Rural", "Bengaluru Urban",
+  "Bidar", "Chamarajanagar", "Chikkaballapur", "Chikkamagaluru", "Chitradurga",
+  "Dakshina Kannada", "Davanagere", "Dharwad", "Gadag", "Hassan",
+  "Haveri", "Kalaburagi", "Kodagu", "Kolar", "Koppal",
+  "Mandya", "Mysuru", "Raichur", "Ramanagara", "Shivamogga",
+  "Tumakuru", "Udupi", "Uttara Kannada", "Vijayapura", "Vijayanagara",
+  "Yadgir",
+] as const;
+export type EduFleetKarnatakaDistrict = (typeof EDUFLEET_KARNATAKA_DISTRICTS)[number];
+
 /** DRAFT is never pushed to eduFleet. */
 export const VACANCY_STATUSES = ["DRAFT", "OPEN", "FILLED", "CLOSED"] as const;
 export type VacancyStatus = (typeof VACANCY_STATUSES)[number];

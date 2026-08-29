@@ -202,39 +202,73 @@ describe("rule 1: contract selection", () => {
     expect(listing?.claimState).toBe("unclaimed");
   });
 
-  // NOT marked MUTATION-DISTINGUISHING, and the label was withheld on
-  // evidence rather than caution. Two INDEPENDENT guards hold this property:
-  // `toInstitutionInput` no longer reads `district` off the institution row,
-  // and `buildAggregatedJobBody` no longer puts the key in the body. Each
-  // single mutation was run against this test and it passed under BOTH — so
-  // the assertion cannot distinguish either guard on its own, and claiming it
-  // could would be a false claim about the test. The distinguishing test for
-  // the body builder lives in `tests/unit/edufleet-vacancy-map.test.ts`; this
-  // one is still worth keeping, as the only proof the whole path from a
-  // stored profile field to the wire carries no district.
-  it("a Contract One create carries no district, even when the profile holds one eduFleet would reject", async () => {
-    // H2, end to end. "Bangalore Urban" is not one of eduFleet's 31 district
-    // keys (its current spelling is "Bengaluru Urban"), and the check is
-    // exact and case-sensitive. Sending it would 400 AFTER `spendWrite` had
-    // taken a unit from the platform-wide 500/day pool that every unconnected
-    // school shares — so this school's stale profile field would degrade
-    // publishing for every other school on IDAP.
+  /**
+   * H-1, end to end: the whole path from a stored profile field to the wire.
+   *
+   * `toInstitutionInput` reads the district RAW and `buildAggregatedJobBody`
+   * resolves it, so these two assert the property the platform-wide 500/day
+   * pool actually depends on — that whatever reaches eduFleet is a key
+   * `Object.hasOwn(KARNATAKA_DISTRICTS, …)` accepts, and that anything else
+   * is left out rather than sent and 400'd after `spendWrite` has taken a
+   * unit from every unconnected school's shared budget.
+   */
+  it("MUTATION-DISTINGUISHING: a Contract One create sends a legacy district under eduFleet's own spelling", async () => {
+    // "Bangalore Urban" is what a school still has on file; eduFleet holds
+    // "Bengaluru Urban" and matches exactly and case-sensitively. Dropping
+    // the field instead — the previous fix — would have removed this advert
+    // from `jobLocationMatchesTeacher`'s district comparison and from every
+    // district-scoped saved alert, for a school whose profile is fine.
     await makeInstitution("INS0001", { district: "Bangalore Urban", state: "Karnataka" });
     await makeCredential();
     const vacancy = await makeVacancy("INS0001");
     const fetchMock = stubFetch(jsonResponse(201, { jobId: "ef-job-2b", status: "active" }));
 
-    await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+    const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
 
     const call = callAt(fetchMock, 0);
     expect(call.url).toBe(`${BASE_URL}/api/partner/jobs`);
-    expect(call.body).not.toHaveProperty("district");
-    // Controls: the push still happened and still carries what Contract One
-    // needs, so a failure above reads as "district leaked" and nothing else.
-    // `state` stays because eduFleet never validates it — it only reads it to
-    // decide whether the district check applies, and there is no district.
+    expect(call.body.district).toBe("Bengaluru Urban");
+    // A district that resolved is not a warning: nothing was left out.
+    expect(outcome).toMatchObject({ status: "PUSHED" });
+    expect((outcome as { warnings?: string[] }).warnings).toBeUndefined();
+    // Controls: the push still carries everything else Contract One needs, so
+    // a failure above reads as "the district went wrong" and nothing else.
     expect(call.body.city).toBe("Mysore");
     expect(call.body.state).toBe("Karnataka");
+  });
+
+  it("MUTATION-DISTINGUISHING: a district eduFleet cannot recognise is left out, and the school is told", async () => {
+    // "Bangalore" is genuinely ambiguous — Bengaluru Urban and Bengaluru
+    // Rural are different districts with different teachers — so IDAP must
+    // not guess. Sending it raw would 400 after `spendWrite`, taking a unit
+    // from the platform-wide pool; refusing locally would block a publish
+    // over optional metadata. So: omit, publish, and say so.
+    await makeInstitution("INS0001", { district: "Bangalore", state: "Karnataka" });
+    await makeCredential();
+    const vacancy = await makeVacancy("INS0001");
+    const fetchMock = stubFetch(jsonResponse(201, { jobId: "ef-job-2c", status: "active" }));
+
+    const outcome = await VacancyPublishService.publish("INS0001", String(vacancy._id), actor);
+
+    // The publish happened — an unrecognised district is a reach limitation,
+    // never a refusal, and it cost no extra call.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(outcome.status).toBe("PUSHED");
+    const call = callAt(fetchMock, 0);
+    expect(call.body).not.toHaveProperty("district");
+    expect(call.body.state).toBe("Karnataka");
+
+    // ...and the omission is reported, naming the value the school has to fix.
+    const warnings = (outcome as { warnings?: string[] }).warnings;
+    expect(warnings).toHaveLength(1);
+    expect(warnings?.[0]).toContain("Bangalore");
+
+    // The listing is recorded exactly as any other successful push, with no
+    // `blockedReason` — a warning must never make the reconciler REPUSH this
+    // advert on every sweep, one write unit at a time, to change nothing.
+    const listing = await storedListing(String(vacancy._id));
+    expect(listing?.jobId).toBe("ef-job-2c");
+    expect(listing?.blockedReason).toBeUndefined();
   });
 
   it("uses Contract One when a connection exists but is not CONNECTED, and when it holds no grant", async () => {

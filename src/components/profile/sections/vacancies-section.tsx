@@ -1035,6 +1035,12 @@ export function VacanciesSection() {
    * `CONFLICT` with no listing only happens on a create, which had none to
    * begin with. Keeping a stale one would be inventing state the server does
    * not have.
+   *
+   * `PUSHED` may also carry `warnings` — a third thing, and not a fourth
+   * answer. They ride on a push that succeeded and say what the advert went
+   * out without, so they are shown alongside the success rather than instead
+   * of it, and they never touch the card: there is nothing wrong with the
+   * listing to display.
    */
   async function publish(vacancy: VacancyDTO) {
     setPublishingId(vacancy.id);
@@ -1046,6 +1052,15 @@ export function VacanciesSection() {
       toast.error(outcome.message);
     } else if (outcome.status === "PUSHED") {
       toast.success(`Published to ${EDUFLEET}`);
+      // The advert went out, and went out without something it could have
+      // carried — today that is only an institution district eduFleet did not
+      // recognise, which costs the advert its district-based teacher matching
+      // and every district-scoped job alert. A separate toast rather than a
+      // suffix on the success one: the publish genuinely succeeded, and the
+      // thing to fix is on the institution profile, not on this vacancy.
+      // `toast.warning`, never `toast.error` — nothing failed and nothing is
+      // to be retried.
+      for (const warning of outcome.warnings ?? []) toast.warning(warning);
     } else if (outcome.status === "CLOSED") {
       toast.success(`Closed on ${EDUFLEET}`);
     } else {

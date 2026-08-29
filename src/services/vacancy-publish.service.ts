@@ -67,9 +67,12 @@ import { ActivityService } from "./activity.service";
  * A push that reliably fails under Contract One is therefore not a
  * per-school bug: one misconfigured institution can exhaust the pool and
  * stop every OTHER unconnected school from publishing. That asymmetry is why
- * `preflight` refuses locally rather than letting eduFleet answer, and why
- * the mapping module sends no field eduFleet exact-match validates against a
- * list IDAP does not control (see `buildAggregatedJobBody` on `district`).
+ * `preflight` refuses locally rather than letting eduFleet answer, and why no
+ * field eduFleet exact-match validates against a list IDAP does not control
+ * ever leaves the mapping module unresolved — `district` is checked against a
+ * transcribed copy of that list and omitted with a warning when it does not
+ * match, so a profile typo costs reach rather than the platform's budget (see
+ * `buildAggregatedJobBody`).
  *
  * Every local refusal below therefore happens before `ctx.http` exists, and
  * no failure is ever retried.
@@ -123,7 +126,23 @@ export type VacancyListingDTO = {
  * being able to tell that apart from a close that was refused.
  */
 export type VacancyPublishOutcome =
-  | { status: "PUSHED"; listing: VacancyListingDTO }
+  | {
+      status: "PUSHED";
+      listing: VacancyListingDTO;
+      /**
+       * Things the advert went out WITHOUT, on a push that otherwise
+       * succeeded — today, only an institution district eduFleet could not
+       * recognise (`buildAggregatedJobBody`). Absent on almost every push.
+       *
+       * Deliberately not `blockedReason`, which the card prints and which the
+       * reconciler reads as "this listing is out of step with IDAP" — writing
+       * one here would make `planFor` REPUSH this vacancy on every sweep, one
+       * write unit at a time, to change nothing. This is the opposite fact:
+       * the push landed, and the advert simply reaches fewer teachers than it
+       * could. So it is reported once, to the person who pressed Publish.
+       */
+      warnings?: string[];
+    }
   | { status: "CLOSED"; listing: VacancyListingDTO }
   | { status: "NOT_LISTED" }
   | { status: "BLOCKED"; message: string; listing?: VacancyListingDTO }
@@ -485,22 +504,26 @@ function toVacancyInput(vacancy: VacancyDoc, externalJobId: string): VacancyPush
 }
 
 /**
- * `district` is deliberately not read off the institution at all, not merely
- * left out of the body: eduFleet exact-match validates it against 31
- * Karnataka display strings and IDAP's is free text, so forwarding it spends
- * the platform-wide pool on a 400 for an ordinary profile typo
- * (`buildAggregatedJobBody` carries the full reasoning). `state` stays —
- * eduFleet never validates it, it only reads it to decide whether the
- * district check applies, and with no district sent that check cannot fire.
+ * `district` is passed through **raw**, exactly as the school typed it, and
+ * that is required rather than lazy: `buildAggregatedJobBody` is what
+ * resolves it against eduFleet's 31 keys, and it can only name the value in
+ * its warning if it sees the original. Pre-cleaning it here would put the
+ * same decision in two places, which is how the two spellings of a rule
+ * drift apart.
+ *
+ * `state` needs no such care — eduFleet never validates it, it only reads it
+ * to decide whether the district check applies at all.
  */
 function toInstitutionInput(institution: {
   institutionName: string;
   city?: string | null;
+  district?: string | null;
   state?: string | null;
 }): InstitutionPushInput {
   return {
     institutionName: institution.institutionName,
     city: institution.city ?? undefined,
+    district: institution.district ?? undefined,
     state: institution.state ?? undefined,
     // `branchId` is left undefined on purpose: IDAP has no source for an
     // eduFleet branch id, and inventing one from any other field would 400
@@ -1162,7 +1185,7 @@ async function pushFields(
   const vacancyInput = toVacancyInput(vacancy, externalJobId);
   const institutionInput = toInstitutionInput(institution);
 
-  const body =
+  const { body, warnings } =
     contract === "SCHOOL_POSTED"
       ? buildSchoolJobBody(vacancyInput, institutionInput)
       : buildAggregatedJobBody(vacancyInput, institutionInput);
@@ -1190,7 +1213,7 @@ async function pushFields(
       : adapter.createJob(ctx, connection, body, contract),
   );
 
-  return settle(
+  const outcome = await settle(
     institutionId,
     vacancy,
     {
@@ -1222,6 +1245,19 @@ async function pushFields(
     result,
     actor,
   );
+
+  // A warning is attached to a CREATE that landed, and only there.
+  //
+  // Not to an update: `toPatchBody` keeps `EDUFLEET_PATCHABLE_KEYS`, and
+  // `district` is not one of them because no update route reads it — so on an
+  // edit the same sentence would name a field this request never carried,
+  // hung off a title change that worked. Not to a `BLOCKED` or a `CONFLICT`
+  // either: there is no advert, so "this advert was published without a
+  // district" is not yet true, and the message the school must read is the
+  // one about the push that did not land.
+  return !live && outcome.status === "PUSHED" && warnings.length > 0
+    ? { ...outcome, warnings }
+    : outcome;
 }
 
 /**
