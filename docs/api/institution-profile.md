@@ -378,7 +378,7 @@ ever wanted photos, it should now filter on `media[].kind === "IMAGE"` — the
 array also carries videos, brochures and prospectuses, none of which `gallery`
 ever returned.
 
-### Deploy sequence (required) — media is empty until this runs
+### Deploy sequence (required) — two one-time migrations, both after deploy
 
 `npm run migrate:media -- --apply` **must be run immediately after this
 release deploys, before the deployment takes production traffic.** It is a
@@ -392,6 +392,36 @@ institution whose photos are still in the legacy `gallery` field publishes
 website, with no error and no indication anywhere that it is temporary. This
 is expected only if the migration is run right after deploy; there is no
 code-level safeguard that stops someone from skipping or delaying it.
+
+`npm run migrate:facility-codes -- --apply` is the second required one-time
+step of this release. It converts `Institution.facilities[].code` from the
+eleven legacy uppercase codes onto the 38-key **lowercase** vocabulary in
+`src/lib/profile/facilities.ts`. Nine codes map 1:1; `HOSTEL` and `SPORTS`
+have no honest target and are left alone and reported under `unmapped` for a
+human to re-pick.
+
+**It must run only AFTER this release is deployed, never against a server
+still on the previous build — and it fails silently if you get that wrong.**
+The pre-release schema declared the field as:
+
+```js
+code: { type: String, required: true, trim: true, uppercase: true },
+```
+
+Mongoose applies `uppercase: true` on write. Run the migration while that
+build is still serving and every lowercase code it writes is re-uppercased on
+its way into the document. The script reads its own writes back as successful,
+reports the full converted count, and exits `0` — while the data is exactly as
+it was. There is no error, no warning, and nothing in the report distinguishes
+this from a real conversion. The only way to detect it afterwards is to read
+the stored codes and notice they are still uppercase.
+
+That constraint is about deploy order, not about the other migration: this and
+`migrate:media` touch different fields and may be run in either order relative
+to each other, provided both run after the deploy.
+
+Dry-run first — `npm run migrate:facility-codes` with no `--apply` reports what
+it would change without writing.
 
 ### `GET /api/public/:institutionId/profile`
 
