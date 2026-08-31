@@ -1,0 +1,230 @@
+/*
+ * Landing page styles — everything is scoped under `.landing` so none of it
+ * can reach the product UI, and the product's tokens (globals.css) reach in
+ * here instead: the page is built from the same "clear sky" palette the app
+ * now wears, plus the two FeesBasket accents (marigold, teal) that the app
+ * reserves for charts.
+ *
+ * Motion policy: every animation on this page is decorative. Under
+ * `prefers-reduced-motion: reduce` all of it — entrances, reveals, the
+ * marquee, the drawn connectors, the traveling dots — collapses to the
+ * final resting frame via the block at the bottom of this file.
+ */
+
+.landing {
+  --sky: #0ea5e9;
+  --sky-deep: #0284c7;
+  --sky-wash: #e0f2fe;
+  --marigold: #f5a524;
+  --teal: #0e9f7e;
+
+  color: var(--graphite);
+  background: var(--paper);
+  overflow-x: clip;
+}
+
+/* ---------------------------------------------------------------- header */
+
+.landing-header {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(12px);
+  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  border-bottom: 1px solid var(--line);
+}
+
+/* ------------------------------------------------------------------ hero */
+
+.landing-hero {
+  position: relative;
+  background:
+    radial-gradient(60rem 30rem at 85% -10%, color-mix(in srgb, var(--sky-wash) 80%, transparent), transparent 65%),
+    radial-gradient(45rem 26rem at -10% 25%, color-mix(in srgb, var(--mist) 90%, transparent), transparent 60%),
+    var(--paper);
+}
+
+/* Staged entrance: each child steps in on load. Animation lives on a class
+   rather than on tags so the stagger is explicit where it's used. */
+.hero-enter {
+  opacity: 0;
+  transform: translateY(18px);
+  animation: landing-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.hero-enter-1 { animation-delay: 0.05s; }
+.hero-enter-2 { animation-delay: 0.18s; }
+.hero-enter-3 { animation-delay: 0.32s; }
+.hero-enter-4 { animation-delay: 0.48s; }
+
+@keyframes landing-rise {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* The marigold full stop after the headline — the one warm note on the page. */
+.hero-dot { color: var(--marigold); }
+
+/* Hero photo composition: one anchor image, two smaller cards floating over
+   its corners, each drifting on its own period so the group never syncs. */
+.hero-photo-main {
+  border-radius: 20px;
+  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.07), 0 24px 48px -16px rgba(2, 132, 199, 0.35);
+}
+.hero-float {
+  animation: landing-drift 7s ease-in-out infinite;
+  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.08), 0 16px 32px -12px rgba(12, 45, 72, 0.28);
+  border-radius: 14px;
+}
+.hero-float-slow { animation-duration: 9.5s; animation-delay: 1.2s; }
+
+@keyframes landing-drift {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+/* -------------------------------------------------------------- reveals */
+
+.reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+/* Children can stagger off the parent's visibility. */
+.reveal-stagger > * {
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.reveal-stagger.is-visible > * { opacity: 1; transform: translateY(0); }
+.reveal-stagger.is-visible > *:nth-child(2) { transition-delay: 0.08s; }
+.reveal-stagger.is-visible > *:nth-child(3) { transition-delay: 0.16s; }
+.reveal-stagger.is-visible > *:nth-child(4) { transition-delay: 0.24s; }
+.reveal-stagger.is-visible > *:nth-child(5) { transition-delay: 0.32s; }
+.reveal-stagger.is-visible > *:nth-child(6) { transition-delay: 0.4s; }
+
+/* ------------------------------------------------- syndication diagram */
+
+/* The signature element: the institution's record at the center, connectors
+   drawing themselves out to the four places the data lands. The draw runs
+   once when the section becomes visible; the dots keep traveling. */
+.syn-path {
+  stroke-dasharray: 400;
+  stroke-dashoffset: 400;
+}
+.is-visible .syn-path {
+  animation: landing-draw 1.4s cubic-bezier(0.65, 0, 0.35, 1) forwards;
+}
+.is-visible .syn-path-2 { animation-delay: 0.15s; }
+.is-visible .syn-path-3 { animation-delay: 0.3s; }
+.is-visible .syn-path-4 { animation-delay: 0.45s; }
+
+@keyframes landing-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+.syn-node {
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease;
+}
+.syn-node:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.07), 0 18px 40px -16px rgba(2, 132, 199, 0.3);
+}
+
+.syn-core {
+  animation: landing-pulse 3.2s ease-in-out infinite;
+}
+@keyframes landing-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sky) 28%, transparent); }
+  55% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--sky) 0%, transparent); }
+}
+
+/* -------------------------------------------------------------- marquee */
+
+.marquee {
+  display: flex;
+  gap: 1.25rem;
+  width: max-content;
+  animation: landing-marquee 48s linear infinite;
+}
+.marquee-reverse { animation-direction: reverse; animation-duration: 56s; }
+.marquee:hover { animation-play-state: paused; }
+
+@keyframes landing-marquee {
+  /* The track holds its content twice; half-width travel loops seamlessly. */
+  to { transform: translateX(-50%); }
+}
+
+.marquee-card {
+  border-radius: 14px;
+  overflow: hidden;
+  flex: none;
+  border: 1px solid var(--line);
+  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.marquee-card:nth-child(odd) { transform: rotate(-1.2deg); }
+.marquee-card:nth-child(even) { transform: rotate(1deg) translateY(8px); }
+.marquee-card:hover { transform: rotate(0deg) scale(1.03); }
+
+/* ------------------------------------------------------ developer band */
+
+.landing-dev {
+  background:
+    radial-gradient(50rem 24rem at 110% 0%, color-mix(in srgb, var(--sky-deep) 22%, transparent), transparent 60%),
+    #0c2d48;
+  color: #e6f1fa;
+}
+.landing-dev .dev-muted { color: #8fb0ca; }
+.dev-code {
+  background: #081d2f;
+  border: 1px solid #1a3a55;
+  border-radius: 14px;
+}
+
+/* --------------------------------------------------------------- shared */
+
+.landing-card {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--paper);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.landing-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--silver);
+  box-shadow: 0 1px 2px rgba(2, 132, 199, 0.05), 0 16px 36px -14px rgba(2, 132, 199, 0.25);
+}
+
+.landing a:focus-visible,
+.landing button:focus-visible {
+  outline: 2px solid var(--sky-deep);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+/* ------------------------------------------------------ reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-enter,
+  .is-visible .syn-path {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    stroke-dashoffset: 0;
+  }
+  .hero-float,
+  .hero-float-slow,
+  .syn-core,
+  .marquee {
+    animation: none;
+  }
+  .reveal,
+  .reveal-stagger > * {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+  .landing .syn-dot { display: none; }
+}

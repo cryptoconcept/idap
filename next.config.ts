@@ -5,6 +5,15 @@ const nextConfig: NextConfig = {
   // being bundled into the server build.
   serverExternalPackages: ["mongoose", "pdfkit", "bcryptjs"],
 
+  images: {
+    remotePatterns: [
+      // The landing page's photography. Every URL shipped was verified to
+      // resolve before being committed — including one famous Unsplash id
+      // that 404s today, which is exactly why they get checked.
+      { protocol: "https", hostname: "images.unsplash.com" },
+    ],
+  },
+
   async headers() {
     return [
       {
