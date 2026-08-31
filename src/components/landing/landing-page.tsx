@@ -22,8 +22,12 @@ import "./landing.css";
 const fraunces = Fraunces({
   subsets: ["latin"],
   style: ["normal", "italic"],
-  weight: ["400", "500", "600"],
+  // The reference's weight set. 700 matters most: the section headings are
+  // font-bold, and a weight the font doesn't ship makes the browser smear a
+  // synthetic bold over the 600 face — visibly wrong in a serif.
+  weight: ["300", "400", "600", "700", "900"],
   variable: "--font-fraunces",
+  display: "swap",
 });
 
 /* The reference sets the landing's body face to DM Sans and its code to
@@ -33,12 +37,14 @@ const dmSans = DM_Sans({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-dm-sans",
+  display: "swap",
 });
 
 const jetBrainsMono = JetBrains_Mono({
   subsets: ["latin"],
   weight: ["400", "500"],
   variable: "--font-jb-mono",
+  display: "swap",
 });
 
 const display = "font-[family-name:var(--font-fraunces)]";
