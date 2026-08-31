@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Fraunces } from "next/font/google";
 import { RevealObserver } from "./reveal";
+import { OnboardedInstitutions } from "./onboarded";
 import "./landing.css";
 
 /**
@@ -102,7 +103,7 @@ function MarqueeRow({ items, reverse }: { items: typeof MARQUEE_TOP; reverse?: b
   );
 }
 
-export function LandingPage() {
+export async function LandingPage() {
   return (
     <div className={`landing ${fraunces.variable}`}>
       <RevealObserver />
@@ -207,6 +208,8 @@ export function LandingPage() {
           </div>
         </div>
       </section>
+
+      <OnboardedInstitutions />
 
       {/* -------------------------------------------- syndication (signature) */}
       <section id="connected" className="border-y border-border bg-muted/60 py-20 md:py-28">

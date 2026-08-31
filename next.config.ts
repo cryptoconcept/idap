@@ -11,6 +11,9 @@ const nextConfig: NextConfig = {
       // resolve before being committed — including one famous Unsplash id
       // that 404s today, which is exactly why they get checked.
       { protocol: "https", hostname: "images.unsplash.com" },
+      // Institution logos and covers — uploaded through the media routes,
+      // stored on Vercel Blob. The subdomain is per-store, hence the wildcard.
+      { protocol: "https", hostname: "*.public.blob.vercel-storage.com" },
     ],
   },
 
