@@ -28,7 +28,7 @@ export async function OnboardedInstitutions() {
           {institutions.map((institution) => (
             <div
               key={institution.institutionId}
-              className="landing-card flex items-center gap-3 px-5 py-3"
+              className="landing-card spotlight-card flex items-center gap-3 px-5 py-3"
             >
               {institution.logoUrl ? (
                 <Image

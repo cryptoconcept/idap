@@ -1,14 +1,19 @@
 /*
- * Landing page styles — everything is scoped under `.landing` so none of it
- * can reach the product UI, and the product's tokens (globals.css) reach in
- * here instead: the page is built from the same "clear sky" palette the app
- * now wears, plus the two FeesBasket accents (marigold, teal) that the app
- * reserves for charts.
+ * Landing page styles, ported from the reference implementation at
+ * github.com/cryptoconcept/idap (src/styles/tailwind.css) — its keyframes,
+ * easings, durations, gradient stops and hover treatments are carried over
+ * verbatim; only the selector names follow this repo's landing markup, and
+ * everything stays scoped under `.landing` so none of it reaches the product
+ * UI.
  *
- * Motion policy: every animation on this page is decorative. Under
- * `prefers-reduced-motion: reduce` all of it — entrances, reveals, the
- * marquee, the drawn connectors, the traveling dots — collapses to the
- * final resting frame via the block at the bottom of this file.
+ * The reference's landing-wide token overrides land here too: inside the
+ * landing subtree, `--accent` IS the sky blue (not the app's mist wash),
+ * `--ring` follows it, `--muted` is the deeper sky wash, and the radius steps
+ * up to 0.75rem. The app's own tokens are untouched outside this subtree.
+ *
+ * Motion policy is the reference's own: under `prefers-reduced-motion:
+ * reduce`, every animation — entrances, floats, marquee, drawn connectors,
+ * traveling dots, the pulse — collapses to the resting frame.
  */
 
 .landing {
@@ -18,6 +23,16 @@
   --marigold: #f5a524;
   --teal: #0e9f7e;
 
+  /* Reference :root overrides, landing-scoped. */
+  --accent: #0ea5e9;
+  --accent-foreground: #ffffff;
+  --secondary: #eff7fe;
+  --secondary-foreground: #0c2d48;
+  --muted: #e0f2fe;
+  --muted-foreground: #425a72;
+  --ring: #0ea5e9;
+  --radius: 0.75rem;
+
   color: var(--graphite);
   background: var(--paper);
   overflow-x: clip;
@@ -25,78 +40,79 @@
 
 /* ---------------------------------------------------------------- header */
 
+/* Reference `.nav-blur`. */
 .landing-header {
   position: sticky;
   top: 0;
   z-index: 40;
-  backdrop-filter: blur(12px);
-  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  background: rgba(255, 255, 255, 0.88);
   border-bottom: 1px solid var(--line);
 }
 
 /* ------------------------------------------------------------------ hero */
 
+/* Reference `.hero-sky-gradient`. */
 .landing-hero {
   position: relative;
-  background:
-    radial-gradient(60rem 30rem at 85% -10%, color-mix(in srgb, var(--sky-wash) 80%, transparent), transparent 65%),
-    radial-gradient(45rem 26rem at -10% 25%, color-mix(in srgb, var(--mist) 90%, transparent), transparent 60%),
-    var(--paper);
+  background: linear-gradient(160deg, #eff7fe 0%, #e0f2fe 40%, #f0f9ff 70%, #ffffff 100%);
 }
 
-/* Staged entrance: each child steps in on load. Animation lives on a class
-   rather than on tags so the stagger is explicit where it's used. */
+/* Reference `animationIn`: rises out of a 4px blur. */
 .hero-enter {
-  opacity: 0;
-  transform: translateY(18px);
-  animation: landing-rise 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation: landing-animation-in 0.8s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 .hero-enter-1 { animation-delay: 0.05s; }
 .hero-enter-2 { animation-delay: 0.18s; }
 .hero-enter-3 { animation-delay: 0.32s; }
 .hero-enter-4 { animation-delay: 0.48s; }
 
-@keyframes landing-rise {
-  to { opacity: 1; transform: translateY(0); }
+@keyframes landing-animation-in {
+  0% { opacity: 0; transform: translateY(24px); filter: blur(4px); }
+  100% { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 
-/* The marigold full stop after the headline — the one warm note on the page. */
 .hero-dot { color: var(--marigold); }
 
-/* Hero photo composition: one anchor image, two smaller cards floating over
-   its corners, each drifting on its own period so the group never syncs. */
 .hero-photo-main {
   border-radius: 20px;
   box-shadow: 0 2px 4px rgba(2, 132, 199, 0.07), 0 24px 48px -16px rgba(2, 132, 199, 0.35);
 }
+
+/* Reference `floatA`/`floatB`: the drift carries a standing rotation. */
 .hero-float {
-  animation: landing-drift 7s ease-in-out infinite;
+  animation: landing-float-a 6s ease-in-out infinite;
   box-shadow: 0 2px 4px rgba(2, 132, 199, 0.08), 0 16px 32px -12px rgba(12, 45, 72, 0.28);
   border-radius: 14px;
 }
-.hero-float-slow { animation-duration: 9.5s; animation-delay: 1.2s; }
+.hero-float-slow { animation: landing-float-b 8s ease-in-out infinite; }
 
-@keyframes landing-drift {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-10px); }
+@keyframes landing-float-a {
+  0%, 100% { transform: translateY(0px) rotate(-2deg); }
+  50% { transform: translateY(-12px) rotate(-2deg); }
+}
+@keyframes landing-float-b {
+  0%, 100% { transform: translateY(0px) rotate(2deg); }
+  50% { transform: translateY(-8px) rotate(2deg); }
 }
 
 /* -------------------------------------------------------------- reveals */
 
+/* Reference `.reveal-on-scroll` / `.revealed`. */
 .reveal {
   opacity: 0;
-  transform: translateY(24px);
-  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1), transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateY(28px);
+  transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1), transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .reveal.is-visible {
   opacity: 1;
   transform: translateY(0);
 }
-/* Children can stagger off the parent's visibility. */
 .reveal-stagger > * {
   opacity: 0;
-  transform: translateY(16px);
-  transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+  transform: translateY(28px);
+  transition: opacity 0.7s cubic-bezier(0.22, 1, 0.36, 1), transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .reveal-stagger.is-visible > * { opacity: 1; transform: translateY(0); }
 .reveal-stagger.is-visible > *:nth-child(2) { transition-delay: 0.08s; }
@@ -107,65 +123,67 @@
 
 /* ------------------------------------------------- syndication diagram */
 
-/* The signature element: the institution's record at the center, connectors
-   drawing themselves out to the four places the data lands. The draw runs
-   once when the section becomes visible; the dots keep traveling. */
+/* Reference `.connector-path` — a transition to `.drawn`, staggered by an
+   inline delay, rather than a keyframe. `.is-visible` is this page's
+   trigger for the same state. */
 .syn-path {
-  stroke-dasharray: 400;
-  stroke-dashoffset: 400;
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  transition: stroke-dashoffset 1.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.is-visible .syn-path {
-  animation: landing-draw 1.4s cubic-bezier(0.65, 0, 0.35, 1) forwards;
-}
-.is-visible .syn-path-2 { animation-delay: 0.15s; }
-.is-visible .syn-path-3 { animation-delay: 0.3s; }
-.is-visible .syn-path-4 { animation-delay: 0.45s; }
-
-@keyframes landing-draw {
-  to { stroke-dashoffset: 0; }
-}
+.is-visible .syn-path { stroke-dashoffset: 0; }
+.is-visible .syn-path-2 { transition-delay: 0.18s; }
+.is-visible .syn-path-3 { transition-delay: 0.36s; }
+.is-visible .syn-path-4 { transition-delay: 0.54s; }
 
 .syn-node {
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease;
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .syn-node:hover {
   transform: translateY(-3px);
-  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.07), 0 18px 40px -16px rgba(2, 132, 199, 0.3);
+  box-shadow: 0 20px 48px -12px rgba(12, 45, 72, 0.12);
 }
 
+/* Reference `pulseGlow`. */
 .syn-core {
-  animation: landing-pulse 3.2s ease-in-out infinite;
+  animation: landing-pulse-glow 2.5s ease-in-out infinite;
 }
-@keyframes landing-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--sky) 28%, transparent); }
-  55% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--sky) 0%, transparent); }
+@keyframes landing-pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.3); }
+  50% { box-shadow: 0 0 0 8px rgba(14, 165, 233, 0); }
 }
 
 /* -------------------------------------------------------------- marquee */
 
+/* Reference `marqueeLeft` 32s / `marqueeRight` 38s. */
 .marquee {
   display: flex;
   gap: 1.25rem;
   width: max-content;
-  animation: landing-marquee 48s linear infinite;
+  animation: landing-marquee-left 32s linear infinite;
 }
-.marquee-reverse { animation-direction: reverse; animation-duration: 56s; }
+.marquee-reverse { animation: landing-marquee-right 38s linear infinite; }
 .marquee:hover { animation-play-state: paused; }
 
-@keyframes landing-marquee {
-  /* The track holds its content twice; half-width travel loops seamlessly. */
-  to { transform: translateX(-50%); }
+@keyframes landing-marquee-left {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes landing-marquee-right {
+  0% { transform: translateX(-50%); }
+  100% { transform: translateX(0); }
 }
 
+/* Reference photo tilts: -3deg / 2.5deg. */
 .marquee-card {
   border-radius: 14px;
   overflow: hidden;
   flex: none;
   border: 1px solid var(--line);
-  transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.marquee-card:nth-child(odd) { transform: rotate(-1.2deg); }
-.marquee-card:nth-child(even) { transform: rotate(1deg) translateY(8px); }
+.marquee-card:nth-child(odd) { transform: rotate(-3deg); }
+.marquee-card:nth-child(even) { transform: rotate(2.5deg) translateY(8px); }
 .marquee-card:hover { transform: rotate(0deg) scale(1.03); }
 
 /* ------------------------------------------------------ developer band */
@@ -177,25 +195,55 @@
   color: #e6f1fa;
 }
 .landing-dev .dev-muted { color: #8fb0ca; }
+
+/* Reference `.code-block`: white-alpha glass on the navy band. */
 .dev-code {
-  background: #081d2f;
-  border: 1px solid #1a3a55;
-  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.75rem;
 }
 
 /* --------------------------------------------------------------- shared */
 
+/* Reference `.feature-card` hover: -6px lift, navy shadow. */
 .landing-card {
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--paper);
-  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease, border-color 0.3s ease;
+  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.3s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .landing-card:hover {
-  transform: translateY(-4px);
-  border-color: var(--silver);
-  box-shadow: 0 1px 2px rgba(2, 132, 199, 0.05), 0 16px 36px -14px rgba(2, 132, 199, 0.25);
+  transform: translateY(-6px);
+  box-shadow: 0 20px 48px -12px rgba(12, 45, 72, 0.12);
 }
+
+/* Reference `.spotlight-card`: a sky radial border glow that follows the
+   pointer. The observer script maintains --mouse-x/--mouse-y per card;
+   without JS the default -999px keeps the glow parked off-canvas. */
+.spotlight-card {
+  position: relative;
+  overflow: hidden;
+}
+.spotlight-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: radial-gradient(
+    600px circle at var(--mouse-x, -999px) var(--mouse-y, -999px),
+    rgba(14, 165, 233, 0.35),
+    transparent 40%
+  );
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+  z-index: 2;
+}
+.spotlight-card:hover::before { opacity: 1; }
 
 .landing a:focus-visible,
 .landing button:focus-visible {
@@ -208,18 +256,15 @@
 
 @media (prefers-reduced-motion: reduce) {
   .hero-enter,
-  .is-visible .syn-path {
-    animation: none;
-    opacity: 1;
-    transform: none;
-    stroke-dashoffset: 0;
-  }
   .hero-float,
   .hero-float-slow,
   .syn-core,
-  .marquee {
-    animation: none;
+  .marquee,
+  .marquee-reverse {
+    animation: none !important;
   }
+  .hero-enter { opacity: 1; transform: none; filter: none; }
+  .syn-path { stroke-dashoffset: 0 !important; transition: none !important; }
   .reveal,
   .reveal-stagger > * {
     opacity: 1;
@@ -227,4 +272,5 @@
     transition: none;
   }
   .landing .syn-dot { display: none; }
+  .spotlight-card::before { display: none; }
 }

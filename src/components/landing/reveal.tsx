@@ -3,16 +3,20 @@
 import { useEffect } from "react";
 
 /**
- * The landing page's only JavaScript: watches every `.reveal` and
- * `.reveal-stagger` element and stamps `.is-visible` the first time it
- * scrolls into view. The animation itself is entirely CSS — this component
- * renders nothing and holds no state, so the page stays a server component
- * with one inert client leaf.
+ * The landing page's only JavaScript, both halves ported from the reference
+ * implementation (github.com/cryptoconcept/idap):
  *
- * If JS never runs (crawler, reader mode), a no-JS rule is NOT needed:
- * `prefers-reduced-motion` already forces every reveal visible, and for the
- * scripted-but-motion-tolerant case the observer fires on mount for anything
- * already in the viewport, so nothing above the fold waits for a scroll.
+ * 1. Scroll reveals — watches `.reveal` / `.reveal-stagger` and stamps
+ *    `.is-visible` on first intersection. The animation itself is CSS.
+ * 2. Spotlight cards — the reference's FeatureGrid tracks the pointer at the
+ *    document level and writes `--mouse-x`/`--mouse-y` into each
+ *    `.spotlight-card`, which the CSS turns into a sky border glow under the
+ *    cursor. rAF-throttled here so a mousemove flood costs one write per
+ *    frame; the CSS default of -999px keeps the glow off-canvas until the
+ *    first move, and without JS entirely.
+ *
+ * Renders nothing and holds no state — the page stays a server component
+ * with one inert client leaf.
  */
 export function RevealObserver() {
   useEffect(() => {
@@ -29,7 +33,27 @@ export function RevealObserver() {
       { threshold: 0.18, rootMargin: "0px 0px -40px 0px" },
     );
     targets.forEach((target) => observer.observe(target));
-    return () => observer.disconnect();
+
+    const cards = Array.from(document.querySelectorAll<HTMLElement>(".spotlight-card"));
+    let frame = 0;
+    const handleMouseMove = (event: MouseEvent) => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        for (const card of cards) {
+          const rect = card.getBoundingClientRect();
+          card.style.setProperty("--mouse-x", `${event.clientX - rect.left}px`);
+          card.style.setProperty("--mouse-y", `${event.clientY - rect.top}px`);
+        }
+      });
+    };
+    document.addEventListener("mousemove", handleMouseMove);
+
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("mousemove", handleMouseMove);
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, []);
 
   return null;

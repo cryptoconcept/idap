@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { Fraunces } from "next/font/google";
+import { DM_Sans, Fraunces, JetBrains_Mono } from "next/font/google";
 import { RevealObserver } from "./reveal";
 import { OnboardedInstitutions } from "./onboarded";
 import "./landing.css";
@@ -24,6 +24,21 @@ const fraunces = Fraunces({
   style: ["normal", "italic"],
   weight: ["400", "500", "600"],
   variable: "--font-fraunces",
+});
+
+/* The reference sets the landing's body face to DM Sans and its code to
+   JetBrains Mono; both load here, scoped to this subtree, so the product UI
+   keeps Geist. */
+const dmSans = DM_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-dm-sans",
+});
+
+const jetBrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-jb-mono",
 });
 
 const display = "font-[family-name:var(--font-fraunces)]";
@@ -105,7 +120,9 @@ function MarqueeRow({ items, reverse }: { items: typeof MARQUEE_TOP; reverse?: b
 
 export async function LandingPage() {
   return (
-    <div className={`landing ${fraunces.variable}`}>
+    <div
+      className={`landing ${fraunces.variable} ${dmSans.variable} ${jetBrainsMono.variable} font-[family-name:var(--font-dm-sans)]`}
+    >
       <RevealObserver />
 
       {/* ------------------------------------------------------- header */}
@@ -233,26 +250,30 @@ export async function LandingPage() {
               preserveAspectRatio="none"
               aria-hidden
             >
+              {/* Each connector wears its destination's accent, exactly as
+                  the reference colors them (stroke opacity 0.4, round caps),
+                  and the dot travels in the same color. */}
               {[
-                ["M 50 22 C 38 22, 30 8, 15 7", "syn-path"],
-                ["M 50 22 C 62 22, 70 8, 85 7", "syn-path syn-path-2"],
-                ["M 50 22 C 38 22, 30 36, 15 37", "syn-path syn-path-3"],
-                ["M 50 22 C 62 22, 70 36, 85 37", "syn-path syn-path-4"],
-              ].map(([d, cls], index) => (
+                "M 50 22 C 38 22, 30 8, 15 7",
+                "M 50 22 C 62 22, 70 8, 85 7",
+                "M 50 22 C 38 22, 30 36, 15 37",
+                "M 50 22 C 62 22, 70 36, 85 37",
+              ].map((d, index) => (
                 <g key={d}>
                   <path
                     d={d}
-                    className={cls}
+                    className={`syn-path${index > 0 ? ` syn-path-${index + 1}` : ""}`}
                     fill="none"
-                    stroke="var(--sky-deep)"
-                    strokeOpacity="0.35"
+                    stroke={DESTINATIONS[index].accent}
+                    strokeOpacity="0.4"
                     strokeWidth="1.5"
+                    strokeLinecap="round"
                     vectorEffect="non-scaling-stroke"
                   />
-                  <circle r="0.55" fill="var(--sky-deep)" className="syn-dot">
+                  <circle r="0.55" fill={DESTINATIONS[index].accent} opacity="0.9" className="syn-dot">
                     <animateMotion
-                      dur={`${3.4 + index * 0.5}s`}
-                      begin={`${index * 0.7}s`}
+                      dur={`${2.2 + index * 0.4}s`}
+                      begin={`${index * 0.6}s`}
                       repeatCount="indefinite"
                       path={d}
                     />
@@ -282,7 +303,7 @@ export async function LandingPage() {
                 return (
                   <div
                     key={destination.name}
-                    className={`syn-node landing-card z-10 w-full max-w-xs px-5 py-4 md:absolute ${anchors[index]}`}
+                    className={`syn-node landing-card spotlight-card z-10 w-full max-w-xs px-5 py-4 md:absolute ${anchors[index]}`}
                   >
                     <div className="flex items-center gap-2.5">
                       <span
@@ -315,7 +336,7 @@ export async function LandingPage() {
           </div>
           <div className="reveal-stagger mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {FEATURES.map((feature) => (
-              <div key={feature.title} className="landing-card px-6 py-6">
+              <div key={feature.title} className="landing-card spotlight-card px-6 py-6">
                 <h3 className="text-base font-semibold">{feature.title}</h3>
                 <p className="mt-2.5 text-sm leading-relaxed text-muted-foreground">{feature.body}</p>
               </div>
@@ -343,7 +364,7 @@ export async function LandingPage() {
               A static site — or any site — reads the school&apos;s published data straight from the
               Website API. No credentials in the browser, CORS-open, rate-limited per IP, cached
               five minutes. The directory, the full profile, fees, results, scholarships, offers
-              and open vacancies are all one <code className="font-mono text-sm">GET</code> away.
+              and open vacancies are all one <code className="font-[family-name:var(--font-jb-mono)] text-sm">GET</code> away.
             </p>
             <a
               href="/api/v1/openapi.yaml"
@@ -352,7 +373,7 @@ export async function LandingPage() {
               Read the OpenAPI spec
             </a>
           </div>
-          <div className="reveal dev-code overflow-x-auto p-5 font-mono text-xs leading-relaxed">
+          <div className="reveal dev-code overflow-x-auto p-5 font-[family-name:var(--font-jb-mono)] text-xs leading-relaxed">
             <p className="dev-muted"># the public directory — no key needed</p>
             <p className="mt-1">curl https://your-idap.example/api/public/institutions</p>
             <pre className="dev-muted mt-4">{`{
