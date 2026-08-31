@@ -1,15 +1,16 @@
 /*
- * Landing page styles, ported from the reference implementation at
- * github.com/cryptoconcept/idap (src/styles/tailwind.css) — its keyframes,
- * easings, durations, gradient stops and hover treatments are carried over
- * verbatim; only the selector names follow this repo's landing markup, and
- * everything stays scoped under `.landing` so none of it reaches the product
- * UI.
+ * Landing page styles. The motion system — keyframes, easings, durations,
+ * hover treatments — is ported verbatim from the reference implementation at
+ * github.com/cryptoconcept/idap (src/styles/tailwind.css); the colors are the
+ * IDAP logo's own, sampled from the artwork (see globals.css for the palette
+ * story). Everything stays scoped under `.landing` so none of it reaches the
+ * product UI.
  *
  * The reference's landing-wide token overrides land here too: inside the
- * landing subtree, `--accent` IS the sky blue (not the app's mist wash),
- * `--ring` follows it, `--muted` is the deeper sky wash, and the radius steps
- * up to 0.75rem. The app's own tokens are untouched outside this subtree.
+ * landing subtree, `--accent` IS the brand teal (at its 4.90:1 text cut),
+ * `--ring` follows it, `--muted` is the deeper teal wash, and the radius
+ * steps up to 0.75rem. The app's own tokens are untouched outside this
+ * subtree.
  *
  * Motion policy is the reference's own: under `prefers-reduced-motion:
  * reduce`, every animation — entrances, floats, marquee, drawn connectors,
@@ -17,20 +18,24 @@
  */
 
 .landing {
-  --sky: #0ea5e9;
-  --sky-deep: #0284c7;
-  --sky-wash: #e0f2fe;
-  --marigold: #f5a524;
-  --teal: #0e9f7e;
+  /* The logo's own colors, sampled from the artwork (see globals.css). */
+  --teal: #1aac94; /* the D */
+  --teal-blue: #0981a7; /* the D's lower gradient stop, the pill's left end */
+  --teal-text: #087a9e; /* the same hue at 4.90:1 — the only teal words wear */
+  --green: #34af7b; /* pixel */
+  --lime: #a2c929; /* the pill's right end */
+  --orange: #f1901b; /* the dot on the i */
+  --amber: #f0b710; /* pixel */
+  --brand-gradient: linear-gradient(90deg, #0981a7, #1aac94, #a2c929);
 
-  /* Reference :root overrides, landing-scoped. */
-  --accent: #0ea5e9;
+  /* Reference-shape overrides, landing-scoped, in the logo's hues. */
+  --accent: var(--teal-text);
   --accent-foreground: #ffffff;
-  --secondary: #eff7fe;
-  --secondary-foreground: #0c2d48;
-  --muted: #e0f2fe;
-  --muted-foreground: #425a72;
-  --ring: #0ea5e9;
+  --secondary: #eef7f4;
+  --secondary-foreground: #253748;
+  --muted: #dff2ec;
+  --muted-foreground: #465a6b;
+  --ring: var(--teal-text);
   --radius: 0.75rem;
 
   color: var(--graphite);
@@ -53,10 +58,10 @@
 
 /* ------------------------------------------------------------------ hero */
 
-/* Reference `.hero-sky-gradient`. */
+/* Reference gradient shape, in the logo's teal washes. */
 .landing-hero {
   position: relative;
-  background: linear-gradient(160deg, #eff7fe 0%, #e0f2fe 40%, #f0f9ff 70%, #ffffff 100%);
+  background: linear-gradient(160deg, #eaf7f3 0%, #dff2ec 40%, #f2faf3 70%, #ffffff 100%);
 }
 
 /* Reference `animationIn`: rises out of a 4px blur. */
@@ -73,17 +78,17 @@
   100% { opacity: 1; transform: translateY(0); filter: blur(0); }
 }
 
-.hero-dot { color: var(--marigold); }
+.hero-dot { color: var(--orange); }
 
 .hero-photo-main {
   border-radius: 20px;
-  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.07), 0 24px 48px -16px rgba(2, 132, 199, 0.35);
+  box-shadow: 0 2px 4px rgba(9, 129, 167, 0.07), 0 24px 48px -16px rgba(9, 129, 167, 0.35);
 }
 
 /* Reference `floatA`/`floatB`: the drift carries a standing rotation. */
 .hero-float {
   animation: landing-float-a 6s ease-in-out infinite;
-  box-shadow: 0 2px 4px rgba(2, 132, 199, 0.08), 0 16px 32px -12px rgba(12, 45, 72, 0.28);
+  box-shadow: 0 2px 4px rgba(9, 129, 167, 0.08), 0 16px 32px -12px rgba(37, 55, 72, 0.28);
   border-radius: 14px;
 }
 .hero-float-slow { animation: landing-float-b 8s ease-in-out infinite; }
@@ -141,7 +146,7 @@
 }
 .syn-node:hover {
   transform: translateY(-3px);
-  box-shadow: 0 20px 48px -12px rgba(12, 45, 72, 0.12);
+  box-shadow: 0 20px 48px -12px rgba(37, 55, 72, 0.12);
 }
 
 /* Reference `pulseGlow`. */
@@ -149,8 +154,8 @@
   animation: landing-pulse-glow 2.5s ease-in-out infinite;
 }
 @keyframes landing-pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.3); }
-  50% { box-shadow: 0 0 0 8px rgba(14, 165, 233, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(26, 172, 148, 0.3); }
+  50% { box-shadow: 0 0 0 8px rgba(26, 172, 148, 0); }
 }
 
 /* -------------------------------------------------------------- marquee */
@@ -190,11 +195,11 @@
 
 .landing-dev {
   background:
-    radial-gradient(50rem 24rem at 110% 0%, color-mix(in srgb, var(--sky-deep) 22%, transparent), transparent 60%),
-    #0c2d48;
-  color: #e6f1fa;
+    radial-gradient(50rem 24rem at 110% 0%, color-mix(in srgb, var(--teal) 22%, transparent), transparent 60%),
+    #253748;
+  color: #e8f1f5;
 }
-.landing-dev .dev-muted { color: #8fb0ca; }
+.landing-dev .dev-muted { color: #8fb3c4; }
 
 /* Reference `.code-block`: white-alpha glass on the navy band. */
 .dev-code {
@@ -214,10 +219,10 @@
 }
 .landing-card:hover {
   transform: translateY(-6px);
-  box-shadow: 0 20px 48px -12px rgba(12, 45, 72, 0.12);
+  box-shadow: 0 20px 48px -12px rgba(37, 55, 72, 0.12);
 }
 
-/* Reference `.spotlight-card`: a sky radial border glow that follows the
+/* Reference `.spotlight-card`: a teal radial border glow that follows the
    pointer. The observer script maintains --mouse-x/--mouse-y per card;
    without JS the default -999px keeps the glow parked off-canvas. */
 .spotlight-card {
@@ -232,7 +237,7 @@
   padding: 1px;
   background: radial-gradient(
     600px circle at var(--mouse-x, -999px) var(--mouse-y, -999px),
-    rgba(14, 165, 233, 0.35),
+    rgba(26, 172, 148, 0.35),
     transparent 40%
   );
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
@@ -247,7 +252,7 @@
 
 .landing a:focus-visible,
 .landing button:focus-visible {
-  outline: 2px solid var(--sky-deep);
+  outline: 2px solid var(--teal-text);
   outline-offset: 3px;
   border-radius: 6px;
 }

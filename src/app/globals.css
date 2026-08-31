@@ -56,34 +56,30 @@
 }
 
 /*
- * FeesBasket's "clear sky" palette, carried over from
- * /Users/automicai/Projects/educonnect/src/app/globals.css and mapped onto
- * this token system's names. Two deliberate departures from a verbatim copy:
+ * The brand palette, extracted from the IDAP logo (public/brand/idap-logo.png)
+ * by sampling the artwork itself: navy ink #253748 (the wordmark and the i),
+ * a teal-to-lime gradient family (#0981a7 → #1aac94 → #a2c929, the D and the
+ * tagline pill), green #34af7b and amber #f0b710 (the pixel squares), and
+ * orange #f1901b (the dot on the i).
  *
- * - `--mid` is #425a72, NOT FeesBasket's ink-muted #5b7a94. Their value is
- *   4.51:1 on white — bare AA — and `--muted-foreground` is this product's
- *   most-used text colour, mostly at 12px. #425a72 is the same hue at 7.15:1
- *   (AAA), preserving the fix that raised this token from #666666.
+ * The logo's own hues are DECORATIVE by contrast arithmetic — teal #1aac94 is
+ * 2.85:1 on white, lime 1.92:1 — so text never wears them raw. Text tokens
+ * are AAA derivatives of the same hues: `--mid` is #465a6b (7.15:1), the
+ * accent-text teal is #087a9e (4.90:1), and the raw brand colors live in the
+ * charts and the landing page's decoration, where a hue carries data or
+ * identity rather than words.
  *
- * - `--primary` stays mapped to `--graphite` (now navy), because FeesBasket's
- *   own primary surfaces are `bg-ink`, not `bg-brand`: counted from their
- *   components, dark-ink buttons outnumber brand ones 38 to 26, and the sky
- *   blue appears overwhelmingly as TEXT (`text-brand-700`, 123 uses) and pale
- *   washes (`bg-brand-50`). White on their brand #0ea5e9 is 2.77:1 —
- *   unusable for button labels — which is presumably why they don't either.
- *
- * FeesBasket ships no dark mode (`color-scheme: light`), so the `.dark` block
- * below is this repo's own navy derivation of the same identity, tuned to the
- * same contrast floors (muted text 7.52:1 on the page ground).
+ * The logo ships no dark mode, so the `.dark` block is this repo's own navy
+ * derivation at the same floors (muted 7.44:1 on the page ground).
  */
 :root {
-  --ink: #071f33;
-  --graphite: #0c2d48; /* FeesBasket --color-ink */
-  --slate: #1e425f; /* FeesBasket --color-ink-soft */
-  --mid: #425a72; /* FeesBasket ink-muted's hue, darkened to 7.15:1 (AAA) */
-  --silver: #5b7a94; /* FeesBasket --color-ink-muted — rings and decoration only, never text */
-  --line: #d6e9f8; /* FeesBasket --color-line */
-  --mist: #eff7fe; /* FeesBasket --color-paper-2 */
+  --ink: #1b2a38;
+  --graphite: #253748; /* the logo's navy — wordmark and the i stem */
+  --slate: #3a4d5f;
+  --mid: #465a6b; /* the navy's hue at 7.15:1 (AAA) — the muted-text workhorse */
+  --silver: #7d93a3; /* rings and decoration only, never text */
+  --line: #d8e7e3; /* teal-tinted hairline */
+  --mist: #eef7f4; /* teal wash */
   --paper: #ffffff;
 
   --background: var(--paper);
@@ -106,14 +102,14 @@
   --input: var(--line);
   --ring: var(--silver);
 
-  /* FeesBasket's accent trio — brand, teal, marigold — lives here, where a
-     hue carries data rather than chrome. brand-700 over brand-500 for the
-     same reason as everywhere else: it holds 4.10:1 on white. */
-  --chart-1: #0284c7; /* FeesBasket --color-brand-700 */
-  --chart-2: #0e9f7e; /* FeesBasket --color-teal */
-  --chart-3: #d4870c; /* FeesBasket --color-marigold-600 */
-  --chart-4: var(--silver);
-  --chart-5: #b7d9f2; /* FeesBasket --color-line-strong */
+  /* The logo's own colors, raw, where a hue carries data rather than words:
+     the pill's teal (text-safe #087a9e cut), the pixels' green and amber,
+     the i-dot orange, the pill's lime. */
+  --chart-1: #087a9e;
+  --chart-2: #34af7b;
+  --chart-3: #f0b710;
+  --chart-4: #f1901b;
+  --chart-5: #a2c929;
 
   --radius: 0.5rem;
 
@@ -121,46 +117,46 @@
   --sidebar-foreground: var(--graphite);
   --sidebar-primary: var(--graphite);
   --sidebar-primary-foreground: var(--paper);
-  --sidebar-accent: #e0f2fe; /* FeesBasket --color-brand-50 */
+  --sidebar-accent: #dff2ec; /* the deeper teal wash */
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--silver);
 }
 
 .dark {
-  --ink: #f2f8fd;
-  --graphite: #e6f1fa;
-  --slate: #c3d9ea;
-  --mid: #8fb0ca; /* 7.52:1 on --paper — same AAA floor as light mode */
-  --silver: #4a6d8f;
-  --line: #16324a;
-  --mist: #0c2338;
-  --paper: #081d2f;
+  --ink: #f4f9fb;
+  --graphite: #e8f1f5;
+  --slate: #c6d8e2;
+  --mid: #8fb3c4; /* 7.44:1 on --paper — same AAA floor as light mode */
+  --silver: #4f7186;
+  --line: #1e3547;
+  --mist: #162835;
+  --paper: #10202c;
 
   --background: var(--paper);
   --foreground: var(--graphite);
-  --card: #0c2740;
+  --card: #152836;
   --card-foreground: var(--graphite);
-  --popover: #0c2740;
+  --popover: #152836;
   --popover-foreground: var(--graphite);
   --primary: var(--graphite);
-  --primary-foreground: #081d2f;
+  --primary-foreground: #10202c;
   --secondary: var(--mist);
   --secondary-foreground: var(--graphite);
   --muted: var(--mist);
   --muted-foreground: var(--mid);
-  --accent: #10304a;
+  --accent: #1b3242;
   --accent-foreground: var(--graphite);
   --destructive: var(--slate);
   --border: var(--line);
-  --input: #1a3a55;
+  --input: #234356;
   --ring: var(--silver);
 
-  --sidebar: #061826;
+  --sidebar: #0b1926;
   --sidebar-foreground: var(--graphite);
   --sidebar-primary: var(--graphite);
-  --sidebar-primary-foreground: #081d2f;
-  --sidebar-accent: #0f2c44;
+  --sidebar-primary-foreground: #10202c;
+  --sidebar-accent: #142c3d;
   --sidebar-accent-foreground: var(--graphite);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--silver);

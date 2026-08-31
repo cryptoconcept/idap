@@ -12,7 +12,7 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
           alignItems: "center",
           justifyContent: "center",
           background: "#ffffff",
-          color: "#0c2d48",
+          color: "#253748",
           fontFamily: "ui-sans-serif, system-ui, sans-serif",
         }}
       >
@@ -20,11 +20,11 @@ export default function GlobalError({ error }: { error: Error & { digest?: strin
           <h1 style={{ fontSize: 18, fontWeight: 600, margin: "0 0 8px" }}>
             Something went wrong.
           </h1>
-          <p style={{ fontSize: 14, color: "#425a72", margin: 0 }}>
+          <p style={{ fontSize: 14, color: "#465a6b", margin: 0 }}>
             Please reload the page and try again.
           </p>
           {error.digest ? (
-            <p style={{ fontSize: 11, color: "#5b7a94", marginTop: 12 }}>
+            <p style={{ fontSize: 11, color: "#7d93a3", marginTop: 12 }}>
               Reference {error.digest}
             </p>
           ) : null}

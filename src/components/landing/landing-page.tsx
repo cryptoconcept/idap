@@ -97,10 +97,10 @@ const FEATURES = [
 ];
 
 const DESTINATIONS = [
-  { name: "Your website", note: "Public Website API — CORS-open, no credentials", accent: "var(--sky-deep)" },
-  { name: "FeesBasket", note: "Fee discovery families already use", accent: "var(--teal)" },
-  { name: "PassPercent", note: "Results and school rankings", accent: "var(--marigold)" },
-  { name: "eduFleet Exchange", note: "Teacher hiring, both contracts", accent: "var(--sky)" },
+  { name: "Your website", note: "Public Website API — CORS-open, no credentials", accent: "var(--teal-blue)" },
+  { name: "FeesBasket", note: "Fee discovery families already use", accent: "var(--green)" },
+  { name: "PassPercent", note: "Results and school rankings", accent: "var(--amber)" },
+  { name: "eduFleet Exchange", note: "Teacher hiring, both contracts", accent: "var(--teal)" },
 ];
 
 function MarqueeRow({ items, reverse }: { items: typeof MARQUEE_TOP; reverse?: boolean }) {
@@ -134,7 +134,15 @@ export async function LandingPage() {
       {/* ------------------------------------------------------- header */}
       <header className="landing-header">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-          <Link href="/" className="flex items-center gap-2">
+          <Link href="/" className="flex items-center gap-2.5">
+            <Image
+              src="/brand/idap-mark.png"
+              alt=""
+              width={34}
+              height={37}
+              priority
+              className="h-9 w-auto"
+            />
             <span className={`${display} text-xl font-semibold tracking-tight`}>
               IDAP<span className="hero-dot">.</span>
             </span>
@@ -158,7 +166,7 @@ export async function LandingPage() {
         <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 pb-20 pt-16 md:grid-cols-[1.1fr_1fr] md:pb-28 md:pt-24">
           <div>
             <p className="hero-enter hero-enter-1 text-xs font-semibold uppercase tracking-widest text-accent">
-              IDAP — Institution Data &amp; Admissions Platform
+              IDAP — Institution Digital Appearance Platform
             </p>
             <h1 className={`${display} hero-enter hero-enter-2 mt-5 text-[2.75rem] leading-[1.0] tracking-tight sm:text-5xl lg:text-[3.5rem] xl:text-[4rem]`}>
               One profile.
@@ -389,7 +397,7 @@ export async function LandingPage() {
             </p>
             <a
               href="/api/v1/openapi.yaml"
-              className="mt-7 inline-block rounded-full border border-[#1a3a55] px-6 py-2.5 text-sm font-medium transition-colors hover:border-[#5b7a94]"
+              className="mt-7 inline-block rounded-full border border-[#234356] px-6 py-2.5 text-sm font-medium transition-colors hover:border-[#8fb3c4]"
             >
               Read the OpenAPI spec
             </a>
@@ -438,11 +446,14 @@ export async function LandingPage() {
       {/* -------------------------------------------------------- footer */}
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-muted-foreground md:flex-row">
-          <p>
-            <span className={`${display} font-semibold text-foreground`}>
-              IDAP<span className="hero-dot">.</span>
-            </span>{" "}
-            — Institution Data &amp; Admissions Platform
+          <p className="flex items-center gap-2.5">
+            <Image src="/brand/idap-mark.png" alt="" width={22} height={24} className="h-6 w-auto" />
+            <span>
+              <span className={`${display} font-semibold text-foreground`}>
+                IDAP<span className="hero-dot">.</span>
+              </span>{" "}
+              — Institution Digital Appearance Platform
+            </span>
           </p>
           <nav className="flex gap-6">
             <a href="/api/v1/openapi.yaml" className="transition-colors hover:text-foreground">
