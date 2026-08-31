@@ -134,18 +134,15 @@ export async function LandingPage() {
       {/* ------------------------------------------------------- header */}
       <header className="landing-header">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
-          <Link href="/" className="flex items-center gap-2.5">
+          <Link href="/" className="flex items-center">
             <Image
-              src="/brand/idap-mark.png"
-              alt=""
-              width={34}
-              height={37}
+              src="/brand/idap-logo.png"
+              alt="IDAP — Institution Digital Appearance Platform"
+              width={122}
+              height={48}
               priority
-              className="h-9 w-auto"
+              className="h-12 w-auto"
             />
-            <span className={`${display} text-xl font-semibold tracking-tight`}>
-              IDAP<span className="hero-dot">.</span>
-            </span>
           </Link>
           <nav className="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
             <a href="#platform" className="transition-colors hover:text-foreground">Platform</a>
@@ -446,15 +443,13 @@ export async function LandingPage() {
       {/* -------------------------------------------------------- footer */}
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-muted-foreground md:flex-row">
-          <p className="flex items-center gap-2.5">
-            <Image src="/brand/idap-mark.png" alt="" width={22} height={24} className="h-6 w-auto" />
-            <span>
-              <span className={`${display} font-semibold text-foreground`}>
-                IDAP<span className="hero-dot">.</span>
-              </span>{" "}
-              — Institution Digital Appearance Platform
-            </span>
-          </p>
+          <Image
+            src="/brand/idap-logo.png"
+            alt="IDAP — Institution Digital Appearance Platform"
+            width={203}
+            height={80}
+            className="h-20 w-auto"
+          />
           <nav className="flex gap-6">
             <a href="/api/v1/openapi.yaml" className="transition-colors hover:text-foreground">
               API reference
