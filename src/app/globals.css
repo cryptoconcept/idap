@@ -55,24 +55,35 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * FeesBasket's "clear sky" palette, carried over from
+ * /Users/automicai/Projects/educonnect/src/app/globals.css and mapped onto
+ * this token system's names. Two deliberate departures from a verbatim copy:
+ *
+ * - `--mid` is #425a72, NOT FeesBasket's ink-muted #5b7a94. Their value is
+ *   4.51:1 on white — bare AA — and `--muted-foreground` is this product's
+ *   most-used text colour, mostly at 12px. #425a72 is the same hue at 7.15:1
+ *   (AAA), preserving the fix that raised this token from #666666.
+ *
+ * - `--primary` stays mapped to `--graphite` (now navy), because FeesBasket's
+ *   own primary surfaces are `bg-ink`, not `bg-brand`: counted from their
+ *   components, dark-ink buttons outnumber brand ones 38 to 26, and the sky
+ *   blue appears overwhelmingly as TEXT (`text-brand-700`, 123 uses) and pale
+ *   washes (`bg-brand-50`). White on their brand #0ea5e9 is 2.77:1 —
+ *   unusable for button labels — which is presumably why they don't either.
+ *
+ * FeesBasket ships no dark mode (`color-scheme: light`), so the `.dark` block
+ * below is this repo's own navy derivation of the same identity, tuned to the
+ * same contrast floors (muted text 7.52:1 on the page ground).
+ */
 :root {
-  --ink: #000000;
-  --graphite: #111111;
-  --slate: #333333;
-  /*
-   * 7.00:1 on --paper, exactly WCAG AAA. This carries `--muted-foreground`,
-   * which is the most-used text colour in the product (220 sites against 79
-   * for `--foreground`), and most of those sites are 12px. At the previous
-   * #666666 it was 5.74:1 — AA, but below AAA and visibly faint at that size.
-   *
-   * It also brings light mode level with dark, which was already 6.95:1
-   * (#999999 on #0a0a0a). The two palettes were tuned separately and the
-   * light one had drifted weaker; changing this token is what closes the gap.
-   */
-  --mid: #595959;
-  --silver: #999999;
-  --line: #e5e5e5;
-  --mist: #f7f7f7;
+  --ink: #071f33;
+  --graphite: #0c2d48; /* FeesBasket --color-ink */
+  --slate: #1e425f; /* FeesBasket --color-ink-soft */
+  --mid: #425a72; /* FeesBasket ink-muted's hue, darkened to 7.15:1 (AAA) */
+  --silver: #5b7a94; /* FeesBasket --color-ink-muted — rings and decoration only, never text */
+  --line: #d6e9f8; /* FeesBasket --color-line */
+  --mist: #eff7fe; /* FeesBasket --color-paper-2 */
   --paper: #ffffff;
 
   --background: var(--paper);
@@ -95,11 +106,14 @@
   --input: var(--line);
   --ring: var(--silver);
 
-  --chart-1: var(--graphite);
-  --chart-2: var(--slate);
-  --chart-3: var(--mid);
+  /* FeesBasket's accent trio — brand, teal, marigold — lives here, where a
+     hue carries data rather than chrome. brand-700 over brand-500 for the
+     same reason as everywhere else: it holds 4.10:1 on white. */
+  --chart-1: #0284c7; /* FeesBasket --color-brand-700 */
+  --chart-2: #0e9f7e; /* FeesBasket --color-teal */
+  --chart-3: #d4870c; /* FeesBasket --color-marigold-600 */
   --chart-4: var(--silver);
-  --chart-5: var(--line);
+  --chart-5: #b7d9f2; /* FeesBasket --color-line-strong */
 
   --radius: 0.5rem;
 
@@ -107,46 +121,46 @@
   --sidebar-foreground: var(--graphite);
   --sidebar-primary: var(--graphite);
   --sidebar-primary-foreground: var(--paper);
-  --sidebar-accent: #efefef;
+  --sidebar-accent: #e0f2fe; /* FeesBasket --color-brand-50 */
   --sidebar-accent-foreground: var(--ink);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--silver);
 }
 
 .dark {
-  --ink: #ffffff;
-  --graphite: #f2f2f2;
-  --slate: #cccccc;
-  --mid: #999999;
-  --silver: #666666;
-  --line: #262626;
-  --mist: #161616;
-  --paper: #0a0a0a;
+  --ink: #f2f8fd;
+  --graphite: #e6f1fa;
+  --slate: #c3d9ea;
+  --mid: #8fb0ca; /* 7.52:1 on --paper — same AAA floor as light mode */
+  --silver: #4a6d8f;
+  --line: #16324a;
+  --mist: #0c2338;
+  --paper: #081d2f;
 
   --background: var(--paper);
   --foreground: var(--graphite);
-  --card: #121212;
+  --card: #0c2740;
   --card-foreground: var(--graphite);
-  --popover: #121212;
+  --popover: #0c2740;
   --popover-foreground: var(--graphite);
   --primary: var(--graphite);
-  --primary-foreground: #0a0a0a;
+  --primary-foreground: #081d2f;
   --secondary: var(--mist);
   --secondary-foreground: var(--graphite);
   --muted: var(--mist);
   --muted-foreground: var(--mid);
-  --accent: #1e1e1e;
+  --accent: #10304a;
   --accent-foreground: var(--graphite);
   --destructive: var(--slate);
   --border: var(--line);
-  --input: #2a2a2a;
+  --input: #1a3a55;
   --ring: var(--silver);
 
-  --sidebar: #0f0f0f;
+  --sidebar: #061826;
   --sidebar-foreground: var(--graphite);
   --sidebar-primary: var(--graphite);
-  --sidebar-primary-foreground: #0a0a0a;
-  --sidebar-accent: #1c1c1c;
+  --sidebar-primary-foreground: #081d2f;
+  --sidebar-accent: #0f2c44;
   --sidebar-accent-foreground: var(--graphite);
   --sidebar-border: var(--line);
   --sidebar-ring: var(--silver);
