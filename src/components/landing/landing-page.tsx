@@ -151,10 +151,10 @@ export async function LandingPage() {
       <section className="landing-hero">
         <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 pb-20 pt-16 md:grid-cols-[1.1fr_1fr] md:pb-28 md:pt-24">
           <div>
-            <p className="hero-enter hero-enter-1 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+            <p className="hero-enter hero-enter-1 text-xs font-semibold uppercase tracking-widest text-accent">
               IDAP — Institution Data &amp; Admissions Platform
             </p>
-            <h1 className={`${display} hero-enter hero-enter-2 mt-5 text-5xl leading-[1.05] tracking-tight md:text-6xl`}>
+            <h1 className={`${display} hero-enter hero-enter-2 mt-5 text-[2.75rem] leading-[1.0] tracking-tight sm:text-5xl lg:text-[3.5rem] xl:text-[4rem]`}>
               One profile.
               <br />
               <em className="font-medium">Everywhere</em> it matters<span className="hero-dot">.</span>
@@ -232,10 +232,13 @@ export async function LandingPage() {
       <section id="connected" className="border-y border-border bg-muted/60 py-20 md:py-28">
         <div className="mx-auto max-w-6xl px-5">
           <div className="reveal mx-auto max-w-2xl text-center">
-            <h2 className={`${display} text-3xl tracking-tight md:text-4xl`}>
-              Enter it once. It travels<span className="hero-dot">.</span>
+            <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-accent">
+              Enter it once. It travels.
+            </p>
+            <h2 className={`${display} text-3xl font-bold leading-tight md:text-4xl lg:text-5xl`}>
+              One record. Four destinations<span className="hero-dot">.</span>
             </h2>
-            <p className="mt-4 text-muted-foreground">
+            <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
               Edit a fee table, publish a result, open a vacancy — the change lands everywhere the
               school has said it should, and nowhere it hasn&apos;t.
             </p>
@@ -326,10 +329,11 @@ export async function LandingPage() {
       <section id="platform" className="py-20 md:py-28">
         <div className="mx-auto max-w-6xl px-5">
           <div className="reveal max-w-2xl">
-            <h2 className={`${display} text-3xl tracking-tight md:text-4xl`}>
-              Everything an office runs on<span className="hero-dot">.</span>
+            <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-accent">Platform</p>
+            <h2 className={`${display} text-3xl font-bold leading-tight md:text-4xl lg:text-5xl`}>
+              Everything a school manages<span className="hero-dot">.</span>
             </h2>
-            <p className="mt-4 text-muted-foreground">
+            <p className="mt-4 text-lg leading-relaxed text-muted-foreground">
               Not a website builder, not a portal login — the operating record underneath all of
               them.
             </p>
@@ -347,6 +351,14 @@ export async function LandingPage() {
 
       {/* --------------------------------------------------- photo band */}
       <section className="overflow-hidden border-y border-border bg-muted/60 py-16" aria-label="Schools in pictures">
+        <div className="reveal mx-auto mb-10 max-w-6xl px-5 text-center">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-accent">
+            Schools across India
+          </p>
+          <h2 className={`${display} text-2xl font-bold md:text-3xl`}>
+            Built for the institutions that shape futures<span className="hero-dot">.</span>
+          </h2>
+        </div>
         <div className="reveal space-y-5">
           <MarqueeRow items={MARQUEE_TOP} />
           <MarqueeRow items={MARQUEE_BOTTOM} reverse />
@@ -357,10 +369,13 @@ export async function LandingPage() {
       <section id="developers" className="landing-dev py-20 md:py-28">
         <div className="mx-auto grid max-w-6xl items-center gap-12 px-5 md:grid-cols-2">
           <div className="reveal">
-            <h2 className={`${display} text-3xl tracking-tight md:text-4xl`}>
+            <p className="mb-3 text-xs font-semibold uppercase tracking-widest text-accent">
+              Developers
+            </p>
+            <h2 className={`${display} text-3xl font-bold leading-tight md:text-4xl lg:text-5xl`}>
               Your website, powered by the same record<span className="hero-dot">.</span>
             </h2>
-            <p className="dev-muted mt-4 leading-relaxed">
+            <p className="dev-muted mt-4 text-lg leading-relaxed">
               A static site — or any site — reads the school&apos;s published data straight from the
               Website API. No credentials in the browser, CORS-open, rate-limited per IP, cached
               five minutes. The directory, the full profile, fees, results, scholarships, offers
@@ -394,10 +409,14 @@ export async function LandingPage() {
       <section className="py-20 md:py-24">
         <div className="mx-auto max-w-6xl px-5">
           <div className="reveal landing-hero rounded-3xl border border-border px-8 py-14 text-center md:py-20">
-            <h2 className={`${display} mx-auto max-w-xl text-3xl tracking-tight md:text-4xl`}>
+            <span className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-border bg-paper px-4 py-1.5 text-xs font-semibold uppercase tracking-widest text-accent">
+              <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden />
+              Ready when you are
+            </span>
+            <h2 className={`${display} mx-auto max-w-xl text-3xl font-bold leading-tight md:text-4xl lg:text-5xl`}>
               Put your school&apos;s data to work<span className="hero-dot">.</span>
             </h2>
-            <p className="mx-auto mt-4 max-w-md text-muted-foreground">
+            <p className="mx-auto mt-4 max-w-xl text-lg leading-relaxed text-muted-foreground">
               Sign in, finish your profile, and publish it once — everywhere.
             </p>
             <Link
