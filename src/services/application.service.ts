@@ -132,7 +132,7 @@ export const ApplicationService = {
     // Checked before consuming an application number, so the common retry
     // leaves no gap in the sequence.
     if (data.idempotencyKey) {
-      const existing = await Application.findOne({ idempotencyKey: data.idempotencyKey }).lean();
+      const existing = await Application.findOne({ institutionId: input.institutionId, idempotencyKey: data.idempotencyKey }).lean();
       if (existing) return serialize(existing as ApplicationRow);
     }
 
@@ -163,7 +163,7 @@ export const ApplicationService = {
       // duplicate-key collision (e.g. the application number) is unexpected —
       // rethrow it.
       if ((error as { code?: number }).code === 11000 && data.idempotencyKey) {
-        const won = await Application.findOne({ idempotencyKey: data.idempotencyKey }).lean();
+        const won = await Application.findOne({ institutionId: input.institutionId, idempotencyKey: data.idempotencyKey }).lean();
         if (won) return serialize(won as ApplicationRow);
       }
       throw error;

@@ -78,6 +78,30 @@ describe("application lifecycle", () => {
     expect(await Application.countDocuments({})).toBe(1);
   });
 
+  it("audit arch-M1: the same key at two institutions never crosses tenants", async () => {
+    // The dedup lookup is scoped to the institution. A key already used at
+    // INS0001, replayed against INS0002, must create a fresh INS0002 record —
+    // never return INS0001's applicant. Before the fix the lookup omitted
+    // institutionId and would have handed INS0002 back INS0001's PII.
+    await makeInstitution("INS0002");
+    const key = "9c5b94b1-35ad-49bb-9ba8-000000000001";
+    const a = await ApplicationService.createApplication({
+      institutionId: "INS0001",
+      data: { ...applicationInput, idempotencyKey: key },
+      source: "API",
+    });
+    const b = await ApplicationService.createApplication({
+      institutionId: "INS0002",
+      data: { ...applicationInput, idempotencyKey: key },
+      source: "API",
+    });
+
+    expect(a.applicationNumber).toMatch(/^INS0001-/);
+    expect(b.applicationNumber).toMatch(/^INS0002-/);
+    expect(b.applicationNumber).not.toBe(a.applicationNumber);
+    expect(await Application.countDocuments({})).toBe(2);
+  });
+
   it("audit M4: submissions without a key are never collapsed", async () => {
     // The dedup must key strictly on the token — two keyless submissions are
     // two applications, exactly as before.

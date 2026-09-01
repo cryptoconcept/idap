@@ -72,7 +72,16 @@ const ApplicationSchema = new Schema(
   { timestamps: true, collection: "applications" },
 );
 
-ApplicationSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
+// Tenant-scoped dedup (audit architecture M1): the key is unique WITHIN an
+// institution, not globally, so a key reused across tenants can never return
+// another tenant's record. Partial, not sparse: institutionId is always
+// present, so a sparse compound index would index every row and collide two
+// keyless submissions on { inst, null }; partialFilterExpression constrains
+// only the rows that actually carry a key.
+ApplicationSchema.index(
+  { institutionId: 1, idempotencyKey: 1 },
+  { unique: true, partialFilterExpression: { idempotencyKey: { $exists: true } } },
+);
 ApplicationSchema.index({ institutionId: 1, createdAt: -1 });
 ApplicationSchema.index({ institutionId: 1, status: 1, createdAt: -1 });
 ApplicationSchema.index({ institutionId: 1, academicYear: 1, createdAt: -1 });
