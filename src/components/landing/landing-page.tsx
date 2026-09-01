@@ -131,6 +131,14 @@ export async function LandingPage() {
     >
       <RevealObserver />
 
+      {/* Audit flows-L1: reveal sections default to opacity:0 and are shown by
+          the observer's .is-visible class. Without JS (and without a
+          reduced-motion preference) they would stay blank — so with JS off,
+          force them visible. */}
+      <noscript>
+        <style>{`.reveal,.reveal-stagger > *{opacity:1 !important;transform:none !important;}`}</style>
+      </noscript>
+
       {/* ------------------------------------------------------- header */}
       <header className="landing-header">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">

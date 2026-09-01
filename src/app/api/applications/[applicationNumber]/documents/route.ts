@@ -2,7 +2,7 @@ import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
 import { requirePermission } from "@/lib/tenant/permissions";
 import { ApplicationService } from "@/services/application.service";
-import { DocumentService } from "@/services/document.service";
+import { DocumentService, MAX_DOCUMENT_BYTES } from "@/services/document.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { handleApiError, jsonSuccess } from "@/lib/api/response";
 import { validationError } from "@/lib/api/errors";
@@ -48,6 +48,13 @@ export async function POST(
     const documentType = String(form.get("documentType") ?? "");
 
     if (!(file instanceof File)) throw validationError("file: choose a file to upload");
+    // Audit SEC-L2: reject an oversize file BEFORE materializing it. Without
+    // this the whole body is read (and copied again via arrayBuffer) before
+    // validateUpload's size check runs — the other upload routes all gate on
+    // file.size first.
+    if (file.size > MAX_DOCUMENT_BYTES) {
+      throw validationError("file: must be 5 MB or smaller");
+    }
     if (!DOCUMENT_TYPES.includes(documentType as DocumentType)) {
       throw validationError("documentType: choose what kind of document this is");
     }

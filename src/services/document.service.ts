@@ -8,7 +8,8 @@ import { notFound, validationError } from "@/lib/api/errors";
 import { requiredIso } from "@/lib/utils/serialize";
 import type { DocumentType } from "@/lib/constants";
 
-const MAX_SIZE_BYTES = 5 * 1024 * 1024;
+export const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024;
+const MAX_SIZE_BYTES = MAX_DOCUMENT_BYTES;
 
 /** Only formats an admissions office actually needs, and never anything executable. */
 const ALLOWED_MIME: Record<string, string[]> = {

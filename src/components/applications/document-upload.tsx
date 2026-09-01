@@ -14,6 +14,24 @@ import {
 } from "@/components/ui/select";
 import { DOCUMENT_TYPES, DOCUMENT_TYPE_LABELS, type DocumentType } from "@/lib/constants";
 
+// Client-side pre-check (audit flows-L4): reject an over-limit or wrong-type
+// file before it leaves the browser, so a parent on mobile isn't made to
+// upload a 30 MB file only to be told "5 MB" after the round-trip. The server
+// stays the authority — it re-checks size AND sniffs the magic bytes — this is
+// only UX. A document may be a scanned image or a PDF, so both are allowed at
+// the server's 5 MB document limit.
+const ACCEPTED_DOC_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+const MAX_DOC_BYTES = 5 * 1024 * 1024;
+
+function checkDocumentFile(file: File): string | null {
+  if (!ACCEPTED_DOC_TYPES.includes(file.type)) {
+    return `${file.name}: attach a JPG, PNG, WEBP or PDF.`;
+  }
+  if (file.size <= 0) return `${file.name}: the file is empty.`;
+  if (file.size > MAX_DOC_BYTES) return `${file.name}: must be 5 MB or smaller.`;
+  return null;
+}
+
 export function DocumentUpload({ applicationNumber }: { applicationNumber: string }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -22,6 +40,12 @@ export function DocumentUpload({ applicationNumber }: { applicationNumber: strin
   const [, startTransition] = useTransition();
 
   async function upload(file: File) {
+    const problem = checkDocumentFile(file);
+    if (problem) {
+      toast.error(problem);
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
     setUploading(true);
     try {
       const body = new FormData();

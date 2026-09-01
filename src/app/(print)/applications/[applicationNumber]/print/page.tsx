@@ -43,15 +43,21 @@ export default async function ApplicationPrintPage(
   }).lean();
   if (!institutionDoc) notFound();
 
-  await ActivityService.record({
-    institutionId: application.institutionId,
-    entityType: "APPLICATION",
-    entityId: application.id,
-    entityRef: application.applicationNumber,
-    action: "Application printed",
-    performedBy: user.id,
-    performedByName: user.name,
-  });
+  // Audit flows-L3: record a print only on an actual print intent
+  // (?autoprint=1, which the dashboard Print button always sets and AutoPrint
+  // acts on), not on every GET. Opening the view to read it, or refreshing,
+  // no longer logs a print that never happened.
+  if (searchParams.autoprint === "1") {
+    await ActivityService.record({
+      institutionId: application.institutionId,
+      entityType: "APPLICATION",
+      entityId: application.id,
+      entityRef: application.applicationNumber,
+      action: "Application printed",
+      performedBy: user.id,
+      performedByName: user.name,
+    });
+  }
 
   const encoded = encodeURIComponent(application.applicationNumber);
 
