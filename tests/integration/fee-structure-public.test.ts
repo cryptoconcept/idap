@@ -176,7 +176,9 @@ describe("GET /api/public/:institutionId/fees", () => {
       { params: Promise.resolve({ institutionId: "INS0001" }) } as never,
     );
 
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    // Public reads now carry a 60s cache (was 300) so an unpublish reflects
+    // within a minute — see the audit M1 fix.
+    expect(response.headers.get("Cache-Control")).toBe("public, max-age=60");
   });
 
   it("trips the shared public-read rate limit after 60 requests from one caller", async () => {

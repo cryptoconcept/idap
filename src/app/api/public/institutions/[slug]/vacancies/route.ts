@@ -7,7 +7,11 @@ import { publicCorsPreflight } from "@/lib/api/v1-handler";
 
 export const dynamic = "force-dynamic";
 
-const HEADERS = { "Cache-Control": "public, max-age=300" };
+// A short public cache: real CDN/browser protection against scrapers and
+// bursts, but an unpublish (or any edit) reflects within a minute instead
+// of the five the platform's "publish -> appears everywhere" promise could
+// not honour. Consent-bearing results use no-store instead (see that route).
+const HEADERS = { "Cache-Control": "public, max-age=60" };
 // A 404 or an error must never be cached: a public read taken while an
 // institution is still DRAFT would otherwise pin "not found" for the full
 // max-age, so a later publish would not appear for up to five minutes. The

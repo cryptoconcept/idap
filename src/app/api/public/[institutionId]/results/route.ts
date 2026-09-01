@@ -8,11 +8,13 @@ import { publicCorsPreflight } from "@/lib/api/v1-handler";
 
 export const dynamic = "force-dynamic";
 
-const HEADERS = { "Cache-Control": "public, max-age=300" };
-// A 404 or an error must never be cached: a public read taken while an
-// institution is still DRAFT would otherwise pin "not found" for the full
-// max-age, so a later publish would not appear for up to five minutes. The
-// 429 branch already uses this treatment for the same reason.
+// Results are never cached — not the 200, the 404, or an error. The public
+// projection's contract (results/public-projection.ts) is that withdrawing a
+// topper's consent takes them "off the API on the very next read"; a topper is
+// often a minor. A shared 5-minute cache broke that promise, keeping the
+// name+score+photo live in browsers/CDNs after withdrawal. no-store is the only
+// header that honours "next read" literally. (It also fixes the DRAFT-404
+// caching the other routes fix with a 60s TTL.)
 const NO_STORE = { "Cache-Control": "no-store" };
 
 /**
@@ -56,7 +58,7 @@ export async function GET(
       return jsonError("NOT_FOUND", "Institution not found", { headers: NO_STORE });
     }
 
-    return jsonSuccess({ results }, { headers: HEADERS });
+    return jsonSuccess({ results }, { headers: NO_STORE });
   } catch (error) {
     return handleApiError(error, NO_STORE);
   }

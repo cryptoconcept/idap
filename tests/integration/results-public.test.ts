@@ -48,7 +48,9 @@ describe("public results endpoint", () => {
     expect(response.status).toBe(200);
     expect(payload.results).toHaveLength(1);
     expect(payload.results[0].passPercentage).toBe(98.6);
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=300");
+    // Results are never cached (audit M1): the projection promises a withdrawn
+    // topper leaves "on the very next read", which a shared cache cannot honour.
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("is reachable by slug and returns the same payload", async () => {
