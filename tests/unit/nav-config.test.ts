@@ -43,10 +43,12 @@ describe("navForRole — non-admin institution roles", () => {
   // them. Asserting only the href list would let an empty "Academics" heading
   // render, which is a visible defect an href assertion cannot see.
   for (const role of ["COUNSELOR", "FRONT_DESK"] as const) {
-    it(`${role} sees only the three non-admin items, in one unlabelled group`, () => {
+    it(`${role} sees only the two non-admin items, in one unlabelled group`, () => {
       const { groups } = navForRole(role);
 
-      expect(hrefs(role)).toEqual(["/dashboard", "/enquiries", "/applications"]);
+      // Applications became adminOnly with the audit's H1 fix — the plane is
+      // INSTITUTION_ADMIN-only, so it must no longer appear in the non-admin nav.
+      expect(hrefs(role)).toEqual(["/dashboard", "/enquiries"]);
       expect(groups).toHaveLength(1);
       expect(groups[0].title).toBeUndefined();
     });
@@ -54,6 +56,7 @@ describe("navForRole — non-admin institution roles", () => {
     it(`${role} reaches no admin-only route`, () => {
       const reachable = hrefs(role);
       for (const adminRoute of [
+        "/applications",
         "/results",
         "/academic-structure",
         "/fees",

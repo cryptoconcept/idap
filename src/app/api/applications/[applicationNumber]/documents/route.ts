@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { requirePermission } from "@/lib/tenant/permissions";
 import { ApplicationService } from "@/services/application.service";
 import { DocumentService } from "@/services/document.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -16,6 +17,7 @@ export async function GET(
 ) {
   try {
     const { user } = await requireApiUser(request);
+    requirePermission(user, "APPLICATIONS_VIEW");
     const { applicationNumber } = await context.params;
     const application = await ApplicationService.getApplication(
       tenantFilter(user),
@@ -38,6 +40,7 @@ export async function POST(
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
+    requirePermission(user, "APPLICATIONS_CREATE");
     const { applicationNumber } = await context.params;
 
     const form = await request.formData();

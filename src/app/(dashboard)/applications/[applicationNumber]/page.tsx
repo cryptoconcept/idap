@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { ArrowLeft, Download } from "lucide-react";
+import { hasPermission } from "@/lib/tenant/permissions";
 import { requireTenantUserPage, tenantFilter } from "@/lib/tenant";
 import { ApplicationService } from "@/services/application.service";
 import { NoteService } from "@/services/note.service";
@@ -41,6 +42,10 @@ export default async function ApplicationDetailPage(
   props: PageProps<"/applications/[applicationNumber]">,
 ) {
   const user = await requireTenantUserPage();
+  // H1 fix: the applications plane is INSTITUTION_ADMIN-only. Without this a
+  // FRONT_DESK/COUNSELOR could reach the server-rendered record directly by
+  // URL even though the API now refuses them.
+  if (!hasPermission(user, "APPLICATIONS_VIEW")) redirect("/dashboard");
   const { applicationNumber } = await props.params;
 
   let application;

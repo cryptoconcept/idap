@@ -317,6 +317,14 @@ export const PERMISSIONS = [
   "LEADS_DELETE",
   "LEADS_EXPORT",
   "STAFF_MANAGE",
+  // Applications carry applicant PII (incl. minors' documents) and the
+  // admit/reject decision. VIEW gates every read (list, detail, documents,
+  // pdf, notes); CREATE gates manual dashboard entry, document upload and
+  // note-writing; DECIDE gates the approve/reject PATCH. Split from VIEW so a
+  // role can read applications without being able to decide them.
+  "APPLICATIONS_VIEW",
+  "APPLICATIONS_CREATE",
+  "APPLICATIONS_DECIDE",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -343,6 +351,14 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     "LEADS_DELETE",
     "LEADS_EXPORT",
     "STAFF_MANAGE",
+    // Applications are granted to INSTITUTION_ADMIN only. Before this, NO role
+    // held any application permission yet every authenticated user could reach
+    // the routes — the gap the routes now close. Granting VIEW to COUNSELOR (an
+    // admissions officer who works applicants) is a deliberate, additive
+    // product decision; it is intentionally NOT assumed here.
+    "APPLICATIONS_VIEW",
+    "APPLICATIONS_CREATE",
+    "APPLICATIONS_DECIDE",
   ]),
   COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP"]),
   FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),

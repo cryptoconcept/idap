@@ -52,7 +52,7 @@ const INSTITUTION_NAV: NavGroup[] = [
     items: [
       { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { href: "/enquiries", label: "Enquiries", icon: Inbox, prefix: true },
-      { href: "/applications", label: "Applications", icon: FileText, prefix: true },
+      { href: "/applications", label: "Applications", icon: FileText, prefix: true, adminOnly: true },
     ],
   },
   {

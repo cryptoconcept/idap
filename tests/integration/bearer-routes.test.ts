@@ -9,7 +9,8 @@ import { cookies } from "next/headers";
 import { LeadService } from "@/services/lead.service";
 import { createLeadSchema } from "@/lib/validation/lead";
 import { GET as listLeads, POST as createLead } from "@/app/api/leads/route";
-import { POST as createApplication } from "@/app/api/applications/route";
+import { GET as listApplications, POST as createApplication } from "@/app/api/applications/route";
+import { PATCH as decideApplication } from "@/app/api/applications/[applicationNumber]/route";
 import { PATCH as patchLead } from "@/app/api/leads/[id]/route";
 import { POST as assignLead } from "@/app/api/leads/[id]/assign/route";
 import { Application, Lead } from "@/models";
@@ -189,8 +190,8 @@ describe("routes accept bearer tokens", () => {
     // the permission layer turns it away before tenantFilter ever runs. Both
     // things that matter here — the 403 and the absent record — are unchanged,
     // and tenantFilter's own platform-admin message stays covered by "refuses a
-    // platform admin on the bearer path too" (GET, which has no permission
-    // gate) and by the application counterpart below.
+    // platform admin on the bearer path too" (GET /api/leads, which has no
+    // permission gate, so tenantFilter is what turns SUPER_ADMIN away there).
     expect((await response.json()).error.message).toMatch(/do not have access/i);
     expect(await Lead.countDocuments({})).toBe(0);
   });
@@ -211,8 +212,32 @@ describe("routes accept bearer tokens", () => {
     );
 
     expect(response.status).toBe(403);
-    expect((await response.json()).error.message).toMatch(/cannot access institution data/i);
+    // Applications are now gated by requirePermission exactly like leads (the
+    // fix for the audit's H1 — the applications plane had no per-role gate at
+    // all). So the refusal is the permission layer's, not tenantFilter's:
+    // SUPER_ADMIN holds no permissions, so APPLICATIONS_CREATE turns it away
+    // before tenantFilter runs. The 403 and the absent record are unchanged.
+    expect((await response.json()).error.message).toMatch(/do not have access/i);
     expect(await Application.countDocuments({})).toBe(0);
+  });
+
+  it("H1 regression: FRONT_DESK cannot read applicant PII or decide an admission", async () => {
+    // The audit's HIGH-1: the applications plane had no per-role gate, so
+    // FRONT_DESK — granted zero application permissions — could list every
+    // applicant's record and approve/reject admissions. Both must now 403.
+    const { token } = await bearerFor("FRONT_DESK", "INS0001", "frontdesk@example.test");
+
+    const listed = await listApplications(bearerRequest(token) as NextRequest);
+    expect(listed.status).toBe(403);
+
+    const decided = await decideApplication(
+      bearerRequest(token, {
+        url: "http://localhost/api/applications/INS0001-APP-000001",
+        body: { status: "APPROVED" },
+      }) as NextRequest,
+      { params: Promise.resolve({ applicationNumber: "INS0001-APP-000001" }) },
+    );
+    expect(decided.status).toBe(403);
   });
 
   it("lets ordinary staff create an enquiry, scoped to their own institution", async () => {

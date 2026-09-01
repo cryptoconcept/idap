@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { requirePermission } from "@/lib/tenant/permissions";
 import { applicationQuerySchema, createApplicationSchema } from "@/lib/validation/application";
 import { ApplicationService } from "@/services/application.service";
 import { assertSameOrigin } from "@/lib/api/csrf";
@@ -11,6 +12,7 @@ export const dynamic = "force-dynamic";
 export async function GET(request: NextRequest) {
   try {
     const { user } = await requireApiUser(request);
+    requirePermission(user, "APPLICATIONS_VIEW");
     const query = applicationQuerySchema.parse(Object.fromEntries(request.nextUrl.searchParams));
     const clause = tenantFilter(user);
 
@@ -26,6 +28,7 @@ export async function POST(request: NextRequest) {
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
+    requirePermission(user, "APPLICATIONS_CREATE");
     // Through tenantFilter like every other tenant-touching path, rather than
     // reading user.institutionId directly. The platform's isolation story rests
     // on that single function, and these two were the last write paths outside

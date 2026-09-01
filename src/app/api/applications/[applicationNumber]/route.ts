@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { requirePermission } from "@/lib/tenant/permissions";
 import { updateApplicationStatusSchema } from "@/lib/validation/application";
 import { ApplicationService } from "@/services/application.service";
 import { NoteService } from "@/services/note.service";
@@ -14,6 +15,7 @@ export async function GET(
 ) {
   try {
     const { user } = await requireApiUser(request);
+    requirePermission(user, "APPLICATIONS_VIEW");
     const { applicationNumber } = await context.params;
     const application = await ApplicationService.getApplication(
       tenantFilter(user),
@@ -32,6 +34,7 @@ export async function PATCH(
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
+    requirePermission(user, "APPLICATIONS_DECIDE");
     const { applicationNumber } = await context.params;
     const body = await request.json().catch(() => ({}));
     const { status, note } = updateApplicationStatusSchema.parse(body);

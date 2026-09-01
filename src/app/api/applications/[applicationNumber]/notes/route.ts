@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
+import { requirePermission } from "@/lib/tenant/permissions";
 import { createNoteSchema } from "@/lib/validation/note";
 import { ApplicationService } from "@/services/application.service";
 import { NoteService } from "@/services/note.service";
@@ -15,6 +16,7 @@ export async function GET(
 ) {
   try {
     const { user } = await requireApiUser(request);
+    requirePermission(user, "APPLICATIONS_VIEW");
     const { applicationNumber } = await context.params;
     const application = await ApplicationService.getApplication(
       tenantFilter(user),
@@ -34,6 +36,7 @@ export async function POST(
   try {
     const { user, viaBearer } = await requireApiUser(request);
     assertSameOrigin(request, { viaBearer });
+    requirePermission(user, "APPLICATIONS_CREATE");
     const { applicationNumber } = await context.params;
     const body = await request.json().catch(() => ({}));
     const { note } = createNoteSchema.parse(body);

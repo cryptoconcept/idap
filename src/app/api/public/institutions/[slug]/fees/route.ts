@@ -9,6 +9,11 @@ import { publicCorsPreflight } from "@/lib/api/v1-handler";
 export const dynamic = "force-dynamic";
 
 const HEADERS = { "Cache-Control": "public, max-age=300" };
+// A 404 or an error must never be cached: a public read taken while an
+// institution is still DRAFT would otherwise pin "not found" for the full
+// max-age, so a later publish would not appear for up to five minutes. The
+// 429 branch already uses this treatment for the same reason.
+const NO_STORE = { "Cache-Control": "no-store" };
 
 export async function GET(
   request: Request,
@@ -39,12 +44,12 @@ export async function GET(
 
     const feeStructures = await FeeStructureService.listPublic({ slug, ...query });
     if (feeStructures === null) {
-      return jsonError("NOT_FOUND", "Institution not found", { headers: HEADERS });
+      return jsonError("NOT_FOUND", "Institution not found", { headers: NO_STORE });
     }
 
     return jsonSuccess({ feeStructures }, { headers: HEADERS });
   } catch (error) {
-    return handleApiError(error, HEADERS);
+    return handleApiError(error, NO_STORE);
   }
 }
 

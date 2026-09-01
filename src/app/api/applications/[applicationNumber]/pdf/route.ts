@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { connectToDatabase } from "@/lib/db/mongoose";
 import { Institution } from "@/models";
 import { requireApiUser, serializeInstitution, tenantFilter } from "@/lib/tenant";
+import { requirePermission } from "@/lib/tenant/permissions";
 import { ApplicationService } from "@/services/application.service";
 import { ActivityService } from "@/services/activity.service";
 import { buildApplicationPdf } from "@/lib/pdf/application-pdf";
@@ -18,6 +19,7 @@ export async function GET(
 ) {
   try {
     const { user } = await requireApiUser(request);
+    requirePermission(user, "APPLICATIONS_VIEW");
     const { applicationNumber } = await context.params;
 
     const application = await ApplicationService.getApplication(

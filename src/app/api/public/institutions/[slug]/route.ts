@@ -10,6 +10,11 @@ export const dynamic = "force-dynamic";
 // CORS for the whole /api/public/:path* prefix is applied globally by
 // next.config.ts, so this route only adds the caching header it owns.
 const HEADERS = { "Cache-Control": "public, max-age=300" };
+// A 404 or an error must never be cached: a public read taken while an
+// institution is still DRAFT would otherwise pin "not found" for the full
+// max-age, so a later publish would not appear for up to five minutes. The
+// 429 branch already uses this treatment for the same reason.
+const NO_STORE = { "Cache-Control": "no-store" };
 
 /**
  * Public full-profile lookup by slug, for the hosted profile page's pretty
@@ -46,11 +51,11 @@ export async function GET(
 
     const profile = await InstitutionService.getPublicProfile({ slug: slug.toLowerCase() });
     if (!profile) {
-      return jsonError("NOT_FOUND", "Institution not found", { headers: HEADERS });
+      return jsonError("NOT_FOUND", "Institution not found", { headers: NO_STORE });
     }
     return jsonSuccess({ profile }, { headers: HEADERS });
   } catch (error) {
-    return handleApiError(error, HEADERS);
+    return handleApiError(error, NO_STORE);
   }
 }
 
