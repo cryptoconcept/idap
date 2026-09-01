@@ -227,6 +227,20 @@ describe("passpercentAdapter", () => {
       }
     });
 
+    it("throws on a redeem 200 that carries no token, rather than storing the string \"undefined\" as a credential", async () => {
+      // Audit M2 regression. `String(body.token)` would have coerced a missing
+      // token to the 7-char string "undefined", encrypted and stored as the
+      // grant, leaving the connection CONNECTED/healthy while every authed call
+      // sent `Bearer undefined`. The guard must reject a token-less 200 instead.
+      const http = vi
+        .fn()
+        .mockResolvedValueOnce({ status: 200, body: { status: "approved" } })
+        .mockResolvedValueOnce({ status: 200, body: { scopes: ["profile:write"], institution: { name: "X" } } });
+      const ctx = makeCtx(http);
+
+      await expect(passpercentAdapter.refresh!(ctx, makeConnection())).rejects.toThrow(/no grant token/i);
+    });
+
     it("surfaces a redeem race (409) as REJECTED with the reconnect detail, not as a thrown error", async () => {
       const http = vi
         .fn()

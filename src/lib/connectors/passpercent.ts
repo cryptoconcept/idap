@@ -143,11 +143,22 @@ async function redeem(ctx: AdapterContext, remoteRequestId: string): Promise<Ref
 
   if (resp.status === 200) {
     const body = rec(resp.body) ?? {};
+    // Never String()-coerce a credential. `String(undefined)` is the 7-char
+    // string "undefined", which would be encrypted and stored as the grant,
+    // leaving the connection reading CONNECTED/healthy while every authed call
+    // sends `Bearer undefined` and fails — and it never self-heals, because the
+    // row HAS a stored grant. A 200 that carries no token is a server contract
+    // violation, so throw rather than store garbage. eduFleet's redeem guards
+    // the identical spot the same way (edufleet.ts).
+    const grantToken = str(body.token);
+    if (!grantToken) {
+      throw new Error("PassPercent: redeem succeeded but the response carried no grant token");
+    }
     const institution = rec(body.institution);
     return {
       kind: "CONNECTED",
       remoteStatus: "completed",
-      grantToken: String(body.token),
+      grantToken,
       scopes: stringArray(body.scopes),
       remoteInstitution: institution
         ? { name: str(institution.name), city: str(institution.city), slug: str(institution.slug) }
