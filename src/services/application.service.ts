@@ -125,10 +125,22 @@ export const ApplicationService = {
     ipAddress?: string;
   }): Promise<ApplicationDTO> {
     await connectToDatabase();
-    const applicationNumber = await generateApplicationNumber(input.institutionId);
     const { data } = input;
 
-    const created = await Application.create({
+    // Audit M4: a retry after a dropped response replays the same key. Return
+    // the record the first attempt already wrote instead of creating a second.
+    // Checked before consuming an application number, so the common retry
+    // leaves no gap in the sequence.
+    if (data.idempotencyKey) {
+      const existing = await Application.findOne({ idempotencyKey: data.idempotencyKey }).lean();
+      if (existing) return serialize(existing as ApplicationRow);
+    }
+
+    const applicationNumber = await generateApplicationNumber(input.institutionId);
+
+    let created;
+    try {
+      created = await Application.create({
       applicationNumber,
       institutionId: input.institutionId,
       academicYear: data.academicYear,
@@ -143,7 +155,19 @@ export const ApplicationService = {
       status: "SUBMITTED",
       source: input.source,
       sourceUrl: data.sourceUrl,
-    });
+      idempotencyKey: data.idempotencyKey,
+      });
+    } catch (error) {
+      // The unique index lost a race: a concurrent request with the same key
+      // committed first. Return its record, not a duplicate. Any other
+      // duplicate-key collision (e.g. the application number) is unexpected —
+      // rethrow it.
+      if ((error as { code?: number }).code === 11000 && data.idempotencyKey) {
+        const won = await Application.findOne({ idempotencyKey: data.idempotencyKey }).lean();
+        if (won) return serialize(won as ApplicationRow);
+      }
+      throw error;
+    }
 
     await ActivityService.record({
       institutionId: input.institutionId,

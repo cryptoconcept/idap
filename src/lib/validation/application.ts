@@ -23,6 +23,9 @@ const documentSchema = z.object({
  * object behaviour, which is what protects the models from mass assignment.
  */
 export const createApplicationSchema = z.object({
+  // Optional client-minted dedup token (audit M4). uuid() so a malformed value
+  // is a 400, not a key that silently never matches.
+  idempotencyKey: z.string().uuid().optional(),
   academicYear: academicYearSchema,
   student: z.object({
     firstName: requiredText("Student first name", 80),

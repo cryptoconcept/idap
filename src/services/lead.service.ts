@@ -112,9 +112,18 @@ export const LeadService = {
     ipAddress?: string;
   }): Promise<LeadDTO> {
     await connectToDatabase();
+
+    // Audit M4 — see the matching comment in application.service.ts.
+    if (input.data.idempotencyKey) {
+      const existing = await Lead.findOne({ idempotencyKey: input.data.idempotencyKey }).lean();
+      if (existing) return serialize(existing as LeadRow);
+    }
+
     const leadNumber = await generateLeadNumber(input.institutionId);
 
-    const created = await Lead.create({
+    let created;
+    try {
+      created = await Lead.create({
       leadNumber,
       institutionId: input.institutionId,
       studentName: input.data.studentName,
@@ -127,7 +136,15 @@ export const LeadService = {
       source: input.source,
       sourceApplication: input.data.sourceApplication,
       sourceUrl: input.data.sourceUrl,
-    });
+      idempotencyKey: input.data.idempotencyKey,
+      });
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000 && input.data.idempotencyKey) {
+        const won = await Lead.findOne({ idempotencyKey: input.data.idempotencyKey }).lean();
+        if (won) return serialize(won as LeadRow);
+      }
+      throw error;
+    }
 
     await ActivityService.record({
       institutionId: input.institutionId,

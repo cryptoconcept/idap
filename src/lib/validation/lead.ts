@@ -13,6 +13,7 @@ import {
  * `institutionId` is deliberately absent — the tenant comes from the credential.
  */
 export const createLeadSchema = z.object({
+  idempotencyKey: z.string().uuid().optional(),
   studentName: requiredText("Student name", 120),
   parentName: optionalText(120),
   phone: phoneSchema,

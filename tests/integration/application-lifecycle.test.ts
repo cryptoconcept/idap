@@ -5,7 +5,7 @@ import { ApplicationService } from "@/services/application.service";
 import { ActivityService } from "@/services/activity.service";
 import { buildApplicationPdf } from "@/lib/pdf/application-pdf";
 import { serializeInstitution } from "@/lib/tenant";
-import { Institution } from "@/models";
+import { Application, Institution } from "@/models";
 import { createApplicationSchema } from "@/lib/validation/application";
 
 const TENANT = { institutionId: "INS0001" };
@@ -56,6 +56,34 @@ describe("application lifecycle", () => {
     const application = await create();
     expect(application.status).toBe("SUBMITTED");
     expect(application.applicationNumber).toBe("INS0001-APP-000001");
+  });
+
+  it("audit M4: a replayed idempotency key returns the first record, not a duplicate", async () => {
+    // Simulates the public form retrying after a dropped response: the second
+    // submit carries the SAME key the first one did. Without dedup the office
+    // would receive two identical applications with different numbers.
+    const key = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+    const first = await ApplicationService.createApplication({
+      institutionId: "INS0001",
+      data: { ...applicationInput, idempotencyKey: key },
+      source: "API",
+    });
+    const retry = await ApplicationService.createApplication({
+      institutionId: "INS0001",
+      data: { ...applicationInput, idempotencyKey: key },
+      source: "API",
+    });
+
+    expect(retry.applicationNumber).toBe(first.applicationNumber);
+    expect(await Application.countDocuments({})).toBe(1);
+  });
+
+  it("audit M4: submissions without a key are never collapsed", async () => {
+    // The dedup must key strictly on the token — two keyless submissions are
+    // two applications, exactly as before.
+    await create();
+    await create();
+    expect(await Application.countDocuments({})).toBe(2);
   });
 
   it("derives a searchable full name from the name parts", async () => {

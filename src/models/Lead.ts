@@ -4,6 +4,9 @@ import { LEAD_STATUSES, SOURCES } from "@/lib/constants";
 const LeadSchema = new Schema(
   {
     leadNumber: { type: String, required: true, unique: true, index: true },
+    // Request-dedup token from the public enquiry form (audit M4) — see the
+    // matching field on Application. Sparse: only public submissions carry one.
+    idempotencyKey: { type: String },
     institutionId: { type: String, required: true, index: true },
     studentName: { type: String, required: true, trim: true },
     parentName: { type: String, trim: true },
@@ -30,6 +33,7 @@ const LeadSchema = new Schema(
 );
 
 // Every dashboard query is tenant-scoped and sorted newest-first.
+LeadSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 LeadSchema.index({ institutionId: 1, createdAt: -1 });
 LeadSchema.index({ institutionId: 1, status: 1, createdAt: -1 });
 // "My queue": a counselor's own assigned leads, newest first.

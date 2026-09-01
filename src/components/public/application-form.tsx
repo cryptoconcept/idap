@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { z } from "zod";
 import { createApplicationSchema } from "@/lib/validation/application";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,11 @@ function academicYearOptions(): string[] {
 export function ApplicationForm({ institutionId }: { institutionId: string }) {
   const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
+  // One idempotency key per form instance, minted lazily on the first submit
+  // (client-only, so no SSR/hydration mismatch). A retry after a dropped
+  // response replays the SAME key, so the server collapses it onto the first
+  // write instead of creating a duplicate (audit M4).
+  const idempotencyKey = useRef<string | null>(null);
   const years = academicYearOptions();
 
   const {
@@ -53,7 +58,11 @@ export function ApplicationForm({ institutionId }: { institutionId: string }) {
       const response = await fetch(`/api/public/${institutionId}/applications`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...values, sourceUrl: window.location.href }),
+        body: JSON.stringify({
+          ...values,
+          sourceUrl: window.location.href,
+          idempotencyKey: (idempotencyKey.current ??= crypto.randomUUID()),
+        }),
       });
       const payload = await response.json();
 

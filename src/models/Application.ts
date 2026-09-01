@@ -14,6 +14,11 @@ const EmbeddedDocumentSchema = new Schema(
 const ApplicationSchema = new Schema(
   {
     applicationNumber: { type: String, required: true, unique: true, index: true },
+    // Request-dedup token from the public apply form (audit M4). A retry after
+    // a dropped response replays the same key, so the second write collapses
+    // onto the first instead of creating a duplicate application. Sparse: only
+    // public submissions carry one; dashboard manual entry does not.
+    idempotencyKey: { type: String },
     institutionId: { type: String, required: true, index: true },
     academicYear: { type: String, required: true, trim: true, index: true },
 
@@ -67,6 +72,7 @@ const ApplicationSchema = new Schema(
   { timestamps: true, collection: "applications" },
 );
 
+ApplicationSchema.index({ idempotencyKey: 1 }, { unique: true, sparse: true });
 ApplicationSchema.index({ institutionId: 1, createdAt: -1 });
 ApplicationSchema.index({ institutionId: 1, status: 1, createdAt: -1 });
 ApplicationSchema.index({ institutionId: 1, academicYear: 1, createdAt: -1 });
