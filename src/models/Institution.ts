@@ -184,6 +184,14 @@ InstitutionSchema.index({ slug: 1 }, { unique: true, sparse: true });
 InstitutionSchema.index({ institutionType: 1 });
 InstitutionSchema.index({ "academic.board": 1 });
 InstitutionSchema.index({ city: 1 });
+// The public directory (InstitutionService.listPublicDirectory) always filters
+// active + profileStatus and sorts by institutionName. This compound index
+// serves that base query as an index scan instead of a collection scan followed
+// by an in-memory sort — the single-field active/profileStatus indexes above
+// cannot serve the sort, and the `text` index below serves only $text, not a
+// { institutionName: 1 } sort or the \b-anchored name regex. The optional
+// city/board/type equality filters keep using their own single-field indexes.
+InstitutionSchema.index({ active: 1, profileStatus: 1, institutionName: 1 });
 InstitutionSchema.index({ institutionName: "text" });
 
 export type InstitutionDoc = InferSchemaType<typeof InstitutionSchema> & { _id: Types.ObjectId };

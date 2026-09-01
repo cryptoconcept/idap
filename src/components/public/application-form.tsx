@@ -89,6 +89,8 @@ export function ApplicationForm({ institutionId }: { institutionId: string }) {
             </Label>
             <select
               id="academicYear"
+              aria-invalid={Boolean(errors.academicYear)}
+              aria-describedby={errors.academicYear ? "academicYear-error" : undefined}
               className={`w-full border border-input bg-background px-2.5 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 ${PUBLIC_CONTROL}`}
               {...register("academicYear")}
             >
@@ -99,7 +101,9 @@ export function ApplicationForm({ institutionId }: { institutionId: string }) {
               ))}
             </select>
             {errors.academicYear ? (
-              <p className="text-xs text-foreground">{errors.academicYear.message}</p>
+              <p id="academicYear-error" role="alert" className="text-xs text-foreground">
+                {errors.academicYear.message}
+              </p>
             ) : null}
           </div>
           <TextField

@@ -67,11 +67,27 @@ export function TextField({
         {label}
         {required ? <span className="text-muted-foreground"> *</span> : null}
       </Label>
-      <Input id={id} aria-invalid={Boolean(error)} className={cn(PUBLIC_CONTROL, className)} {...props} />
+      <Input
+        id={id}
+        aria-invalid={Boolean(error)}
+        // Point the field at whichever message is showing so a screen reader
+        // announces the reason ("Enter a valid mobile number"), not just
+        // "invalid entry". Audit M5 — this component backs the public
+        // admission/enquiry forms a parent may complete with a screen reader.
+        aria-describedby={error ? `${id}-error` : hint ? `${id}-hint` : undefined}
+        className={cn(PUBLIC_CONTROL, className)}
+        {...props}
+      />
       {error ? (
-        <p className="text-xs text-foreground">{error}</p>
+        // role="alert" so the message is announced the moment it appears, e.g.
+        // after a failed submit moves focus to the first invalid field.
+        <p id={`${id}-error`} role="alert" className="text-xs text-foreground">
+          {error}
+        </p>
       ) : hint ? (
-        <p className="text-xs text-muted-foreground">{hint}</p>
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
       ) : null}
     </div>
   );
