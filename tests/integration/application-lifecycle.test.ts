@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { Types } from "mongoose";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { ApplicationService } from "@/services/application.service";
 import { ActivityService } from "@/services/activity.service";
 import { buildApplicationPdf } from "@/lib/pdf/application-pdf";
 import { serializeInstitution } from "@/lib/tenant";
-import { Application, Institution } from "@/models";
+import { Application, DocumentRecord, Institution } from "@/models";
 import { createApplicationSchema } from "@/lib/validation/application";
 
 const TENANT = { institutionId: "INS0001" };
@@ -117,6 +118,46 @@ describe("application lifecycle", () => {
     // That denormalised name is what makes the applications search work.
     const found = await ApplicationService.list(TENANT, { q: "Singh" });
     expect(found.total).toBe(1);
+  });
+
+  it("audit AM3: name search is word-anchored, identifier search stays substring", async () => {
+    await create(); // Rahul Singh Kumar, parent.phone 9876543210
+
+    // A name PREFIX (word start) matches...
+    expect((await ApplicationService.list(TENANT, { q: "Rah" })).total).toBe(1);
+    expect((await ApplicationService.list(TENANT, { q: "Sin" })).total).toBe(1);
+    // ...but a MID-name fragment does not (this is the anchoring — the old
+    // unanchored substring regex would have matched "ahul", full-scanning).
+    expect((await ApplicationService.list(TENANT, { q: "ahul" })).total).toBe(0);
+    // Identifier fields stay substring: a partial phone still matches.
+    expect((await ApplicationService.list(TENANT, { q: "543" })).total).toBe(1);
+  });
+
+  it("audit AM2: a DocumentRecord missing from the embedded array still shows on the detail read", async () => {
+    const app = await create();
+    // Simulate an interrupted upload: the canonical record was written but the
+    // embedded $push never landed. The file exists and is readable; without
+    // reconciliation it would be invisible on the application.
+    await DocumentRecord.create({
+      applicationId: new Types.ObjectId(app.id),
+      institutionId: "INS0001",
+      documentType: "MARKSHEET",
+      fileName: "generated-marksheet.pdf",
+      originalFileName: "My Marksheet.pdf",
+      storageKey: "INS0001/x/generated-marksheet.pdf",
+      fileUrl: "/api/documents/reconcile-orphan-1",
+      mimeType: "application/pdf",
+      sizeBytes: 1024,
+      uploadedAt: new Date(),
+    });
+
+    const detail = await ApplicationService.getApplication(TENANT, app.applicationNumber);
+    const doc = detail.documents.find((d) => d.fileUrl === "/api/documents/reconcile-orphan-1");
+    expect(doc).toBeDefined();
+    expect(doc?.fileName).toBe("My Marksheet.pdf");
+
+    // The LIST read is deliberately NOT reconciled (avoids per-row N+1); the
+    // orphan surfaces on the detail read the family actually manages documents from.
   });
 
   it("walks SUBMITTED to APPROVED and records each step", async () => {

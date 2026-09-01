@@ -2,7 +2,7 @@ import "server-only";
 import type { FilterQuery } from "mongoose";
 import { Types } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { Application, type ApplicationDoc } from "@/models";
+import { Application, DocumentRecord, type ApplicationDoc } from "@/models";
 import { generateApplicationNumber } from "./sequence.service";
 import { ActivityService } from "./activity.service";
 import { NotificationService } from "./notification.service";
@@ -97,17 +97,26 @@ function buildFilter(
   if (createdAt) filter.createdAt = createdAt;
 
   if (query.q) {
-    const pattern = new RegExp(escapeRegex(query.q), "i");
+    // Audit AM3: name fields are word-anchored so the query starts at a word
+    // boundary ("raj" -> Rajesh, not neeraj) — that lets the studentFullName
+    // index serve the match instead of a per-tenant collection scan, and is how
+    // people actually search names. Identifier fields (number, phone, email)
+    // stay substring so partial lookups — the last 4 digits of a phone, a
+    // fragment of an application number — still match. The public directory
+    // search anchors names for this same reason.
+    const term = escapeRegex(query.q);
+    const name = new RegExp(`\\b${term}`, "i");
+    const substr = new RegExp(term, "i");
     filter.$or = [
-      { applicationNumber: pattern },
-      { studentFullName: pattern },
-      { "student.firstName": pattern },
-      { "student.lastName": pattern },
-      { "parent.fatherName": pattern },
-      { "parent.motherName": pattern },
-      { "parent.guardianName": pattern },
-      { "parent.phone": pattern },
-      { "parent.email": pattern },
+      { applicationNumber: substr },
+      { studentFullName: name },
+      { "student.firstName": name },
+      { "student.lastName": name },
+      { "parent.fatherName": name },
+      { "parent.motherName": name },
+      { "parent.guardianName": name },
+      { "parent.phone": substr },
+      { "parent.email": substr },
     ];
   }
 
@@ -240,6 +249,32 @@ export const ApplicationService = {
 
     const row = await Application.findOne(filter).lean();
     if (!row) throw notFound("Application not found");
+
+    // Audit AM2: the upload writes a canonical DocumentRecord AND an embedded
+    // copy on the application, non-transactionally. If the embedded $push is
+    // interrupted after the record is written, the file exists and is readable
+    // but is missing from this list — the family sees "not uploaded" for a file
+    // that exists. Reconcile on this (detail) read: surface any DocumentRecord
+    // not reflected in the embedded array, deduped by fileUrl (both share the
+    // same /api/documents/{id} url). Detail-only, so no per-row N+1 on the list;
+    // applicationId is indexed. v1-API-supplied refs that have no DocumentRecord
+    // still show, because the embedded array is the base, not replaced.
+    const records = await DocumentRecord.find({ applicationId: row._id })
+      .select("_id documentType originalFileName fileName fileUrl uploadedAt")
+      .lean();
+    const embeddedUrls = new Set((row.documents ?? []).map((d) => d.fileUrl));
+    const orphans = records
+      .filter((r) => !embeddedUrls.has(r.fileUrl))
+      .map((r) => ({
+        _id: r._id,
+        documentType: r.documentType,
+        fileName: r.originalFileName ?? r.fileName,
+        fileUrl: r.fileUrl,
+        uploadedAt: r.uploadedAt,
+      }));
+    if (orphans.length > 0) {
+      (row as { documents?: unknown[] }).documents = [...(row.documents ?? []), ...orphans];
+    }
 
     return serialize(row as ApplicationRow);
   },

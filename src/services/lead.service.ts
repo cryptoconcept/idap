@@ -86,14 +86,19 @@ function buildFilter(
 
   if (query.q) {
     // Escaped so a search string can never be interpreted as a regex or operator.
-    const pattern = new RegExp(escapeRegex(query.q), "i");
+    // Audit AM3: name fields word-anchored (index-usable, matches how names are
+    // searched), identifier fields left substring so partial number/phone/email
+    // lookups still match. See application.service.ts for the full rationale.
+    const term = escapeRegex(query.q);
+    const name = new RegExp(`\\b${term}`, "i");
+    const substr = new RegExp(term, "i");
     and.push({
       $or: [
-        { leadNumber: pattern },
-        { studentName: pattern },
-        { parentName: pattern },
-        { phone: pattern },
-        { email: pattern },
+        { leadNumber: substr },
+        { studentName: name },
+        { parentName: name },
+        { phone: substr },
+        { email: substr },
       ],
     });
   }
