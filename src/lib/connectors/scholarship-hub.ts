@@ -17,6 +17,13 @@
  *
  * A revoked platform key (401) is deliberately NOT a `ConnectorAuthError`
  * here — see `classifyScholarshipPush` below.
+ *
+ * Connect flow: `initiate` provisions and reports `PENDING`; `refresh`
+ * immediately reports `CONNECTED` (no external approval step exists for this
+ * platform — see `refresh`'s own docblock). This reuses the two existing
+ * generic `REQUEST_APPROVE_REDEEM` mechanisms in `connection.service.ts`
+ * as-is; neither `InitiateResult`/`RefreshResult` (`types.ts`) nor
+ * `connection.service.ts` needed any change.
  */
 
 import { registerAdapter } from "./index";
@@ -26,6 +33,7 @@ import {
   type ConnectionState,
   type InitiateResult,
   type InstitutionSummary,
+  type RefreshResult,
   type ScholarshipPushResult,
   type SyncOutcome,
   type SyncScholarship,
@@ -140,17 +148,14 @@ async function withdrawScholarship(
  * institution whose state isn't already a bare 2-letter code (`city` has no
  * such constraint and is sent whenever present).
  *
- * IMPORTANT — confirmed gap, not silently worked around: `InitiateResult`
- * (`types.ts`) is `{remoteRequestId: string; remoteStatus: string; kind?:
- * "PENDING" | "AWAITING_APPROVAL"}` — there is no `"CONNECTED"` member of
- * that union. Only `RefreshResult` and `ConnectWithKey`'s unconditional
- * write can produce a `CONNECTED` `PlatformConnection`. So even though the
- * Hub side finishes in one synchronous call, this adapter cannot make
- * `connection.service.ts`'s generic `initiate()` (`status: result.kind ??
- * "PENDING"`) land on `CONNECTED` without either widening `InitiateResult`
- * or this adapter also implementing `refresh`. Neither is in this task's
- * scope (see the task report) — `kind` is left `undefined` here, which
- * resolves to `PENDING` at the call site.
+ * `InitiateResult` (`types.ts`) is `{remoteRequestId: string; remoteStatus:
+ * string; kind?: "PENDING" | "AWAITING_APPROVAL"}` — there is no
+ * `"CONNECTED"` member of that union, so this always reports `PENDING`
+ * (explicitly, not by omission) even though the Hub side is already done by
+ * the time this call returns. `remoteRequestId` carries the provisioned
+ * `providerId` forward onto the stored connection so `refresh` (below) can
+ * see it and immediately report `CONNECTED` — no second external call, no
+ * approval to wait on.
  */
 async function initiate(ctx: AdapterContext, institution: InstitutionSummary): Promise<InitiateResult> {
   const body: Record<string, unknown> = {
@@ -166,10 +171,52 @@ async function initiate(ctx: AdapterContext, institution: InstitutionSummary): P
     if (!b.providerId) {
       throw new Error("scholarship-hub: provider provisioning succeeded but the response carried no providerId");
     }
-    return { remoteRequestId: b.providerId, remoteStatus: "provisioned" };
+    return { remoteRequestId: b.providerId, remoteStatus: "provisioned", kind: "PENDING" };
   }
 
   throw new Error(`scholarship-hub: provisioning the Hub provider failed (status ${resp.status})`);
+}
+
+// ---------------------------------------------------------------------------
+// refresh — no external approval step; reports CONNECTED immediately
+// ---------------------------------------------------------------------------
+
+/**
+ * Scholarship Hub has no approve/redeem step for `initiate` to wait on: the
+ * provider record `initiate` just created (`POST /api/partner/providers`,
+ * confirmed idempotent and synchronous — see `initiate`'s docblock) is
+ * already live. `refresh` reports that immediately rather than polling
+ * anything, which is deliberate on two counts: there is nothing on the Hub
+ * side to poll (no request/approval resource exists for a provider), and a
+ * call here could only ever fail on a transient network blip against a fact
+ * that is already true, which would incorrectly read as "not connected yet".
+ *
+ * `grantToken` (required by `RefreshResult`'s `CONNECTED` variant) is a
+ * NOMINAL handle, not a credential: every push still authenticates with
+ * `ctx.platformKey` (Contract 1, shared across every institution), never
+ * with this value. It is set to `connection.remoteRequestId` — the
+ * `providerId` `initiate` stored — purely so the connection row carries a
+ * record of which Hub provider it maps to; nothing ever reads it back for
+ * auth. `scopes` is `[]` for the same reason `JobPushResult`'s Contract One
+ * needs none: there is no per-institution scope negotiation on this
+ * platform to record.
+ *
+ * `remoteInstitution` is omitted: `ConnectionState` (`types.ts`) carries only
+ * ids/tokens, no institution name/city, and fetching one would mean exactly
+ * the external call this function exists to avoid.
+ */
+async function refresh(_ctx: AdapterContext, connection: ConnectionState): Promise<RefreshResult> {
+  if (!connection.remoteRequestId) {
+    throw new Error(
+      "scholarship-hub: refresh requires a remoteRequestId (the provisioned providerId), but the connection has none",
+    );
+  }
+  return {
+    kind: "CONNECTED",
+    remoteStatus: "connected",
+    grantToken: connection.remoteRequestId,
+    scopes: [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -299,6 +346,7 @@ export const scholarshipHubAdapter: PlatformAdapter = {
   platform: "SCHOLARSHIP_HUB",
   connectMode: "REQUEST_APPROVE_REDEEM",
   initiate,
+  refresh,
   sync,
   upsertScholarship,
   withdrawScholarship,
