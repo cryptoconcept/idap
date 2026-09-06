@@ -1,0 +1,10 @@
+{
+  "scholarshipCategories": ["government","private","university","merit","need_based","girl_students","stem","minority_community","disability","sports","international","csr"],
+  "educationLevels": ["school","puc","diploma","undergraduate","postgraduate","phd","other"],
+  "genders": ["female","male","other"],
+  "communityCategories": ["general","sc","st","obc","category_1","2a","2b","3a","3b","minority","ews"],
+  "questionTypes": ["text","textarea","select","radio","checkbox","date","number","file"],
+  "applicationModes": ["platform","external"],
+  "stateCodes": ["AP","AR","AS","BR","CT","GA","GJ","HR","HP","JH","KA","KL","MP","MH","MN","ML","MZ","NL","OR","PB","RJ","SK","TN","TG","TR","UP","UT","WB","AN","CH","DN","DL","JK","LA","LD","PY"],
+  "kaDistrictCodes": ["KA-BAG","KA-BLL","KA-BEL","KA-BLR","KA-BLU","KA-BID","KA-CHN","KA-CKB","KA-CKM","KA-CTD","KA-DKK","KA-DVG","KA-DHA","KA-GDG","KA-HAS","KA-HAV","KA-KLB","KA-KOD","KA-KOL","KA-KPL","KA-MAN","KA-MYS","KA-RAI","KA-RMN","KA-SHI","KA-TUM","KA-UDP","KA-UTK","KA-VJN","KA-VJP","KA-YAD"]
+}
