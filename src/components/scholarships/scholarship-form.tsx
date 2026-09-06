@@ -146,8 +146,14 @@ function VocabCheckboxGroup<T extends string>({
   }
 
   return (
-    <div className="space-y-1.5">
-      <p className="text-sm font-medium">{legend}</p>
+    // A <fieldset>/<legend> pair, not a <p> heading, so a screen reader on
+    // any one checkbox in a multi-option group (States has 37, KA districts
+    // 31) still announces the group's name. `border-0 p-0 m-0` resets the
+    // browser's default fieldset chrome (border/margin/padding) and the
+    // legend's own reset keeps its look identical to the `<p>` it replaces —
+    // markup/semantics only, no visual change.
+    <fieldset className="m-0 space-y-1.5 border-0 p-0">
+      <legend className="p-0 text-sm font-medium">{legend}</legend>
       <div className="grid max-h-40 gap-x-4 gap-y-2 overflow-y-auto rounded-md border border-border p-2.5 sm:grid-cols-3">
         {options.map((option) => {
           const id = `${groupId}-${option}`;
@@ -165,7 +171,7 @@ function VocabCheckboxGroup<T extends string>({
           );
         })}
       </div>
-    </div>
+    </fieldset>
   );
 }
 
