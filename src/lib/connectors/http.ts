@@ -36,7 +36,7 @@ export class ConnectorHttpError extends Error {
 export type ConnectorHttp = (
   path: string,
   init: {
-    method: "GET" | "POST" | "PUT" | "PATCH";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
     token: string; // sent as Authorization: Bearer <token>
     body?: unknown;
     headers?: Record<string, string>;
@@ -44,7 +44,7 @@ export type ConnectorHttp = (
 ) => Promise<{ status: number; body: unknown }>;
 
 type ConnectorRequestInit = {
-  method: "GET" | "POST" | "PUT" | "PATCH";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   token: string;
   body?: unknown;
   headers?: Record<string, string>;

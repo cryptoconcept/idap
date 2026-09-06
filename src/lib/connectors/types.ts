@@ -139,6 +139,19 @@ export type JobPushResult =
   | { kind: "BLOCKED"; reason: string; detail: string; claimState?: string }
   | { kind: "CONFLICT"; ownedByContract: string; jobId?: string; detail: string };
 
+/**
+ * The outcome of one push to a Scholarship Hub scholarship route (upsert or
+ * withdraw). PARALLEL to `JobPushResult`, not a generalization of it — the
+ * two push contracts are shaped differently (Hub upserts are idempotent by
+ * `externalRef` and have no claim/conflict semantics), and forcing them into
+ * one type would couple the vacancy path's behavior to a platform contract
+ * that has nothing to do with it.
+ */
+export type ScholarshipPushResult =
+  | { kind: "OK"; hubId: string; slug: string; publicUrl?: string; remoteStatus: "published" | "closed" }
+  | { kind: "BLOCKED"; reason: string; detail: string }
+  | { kind: "NOT_FOUND" };
+
 export interface PlatformAdapter {
   platform: Platform;
   connectMode: ConnectMode;
@@ -178,6 +191,20 @@ export interface PlatformAdapter {
     jobId: string,
     contract: VacancyListingContract,
   ): Promise<JobPushResult>;
+  /** Create or update a scholarship listing, keyed by `externalRef`. Optional
+   *  so adapters with no scholarship contract are unaffected. */
+  upsertScholarship?(
+    ctx: AdapterContext,
+    connection: ConnectionState,
+    externalRef: string,
+    body: Record<string, unknown>,
+  ): Promise<ScholarshipPushResult>;
+  /** Withdraws a previously-pushed scholarship listing. */
+  withdrawScholarship?(
+    ctx: AdapterContext,
+    connection: ConnectionState,
+    externalRef: string,
+  ): Promise<ScholarshipPushResult>;
 }
 
 /**
@@ -251,6 +278,25 @@ export type SyncVacancy = {
   close(): Promise<VacancyActionResult>;
 };
 
+/**
+ * One scholarship a reconciling `sync` may act on — mirrors `SyncVacancy`
+ * for the same reason: the actions are closures the SERVICE supplies, so the
+ * adapter decides WHICH scholarships need WHAT without reimplementing the
+ * institution-row/preflight/write-back plumbing the service already owns.
+ */
+export type SyncScholarship = {
+  scholarshipId: string;
+  /** For naming this scholarship in a warning; never sent anywhere. */
+  name: string;
+  status: string;
+  /** Absent when the institution has never published this scholarship to the platform. */
+  listing?: { remoteStatus: "published" | "closed"; blockedReason?: string };
+  /** Push this scholarship's current values to the listing it ALREADY has. */
+  repush(): Promise<{ ok: true } | { ok: false; scope: "SCHOLARSHIP" | "RUN"; detail: string }>;
+  /** Close this scholarship's listing on the platform. */
+  close(): Promise<{ ok: true } | { ok: false; scope: "SCHOLARSHIP" | "RUN"; detail: string }>;
+};
+
 /** Everything an adapter may push, loaded by the service so adapters never touch models. */
 export type SyncSourceData = {
   institution: Record<string, unknown>;
@@ -285,6 +331,17 @@ export type SyncSourceData = {
    * must not call the run a success.
    */
   vacanciesTruncated?: boolean;
+  /**
+   * The institution's scholarships, for an adapter whose `sync` reconciles
+   * them. Optional on the same basis as `vacancies` above: populated only
+   * for a platform that implements the per-record scholarship methods
+   * (`upsertScholarship`/`withdrawScholarship`).
+   */
+  scholarships?: SyncScholarship[];
+  /** L3, mirrored for scholarships: true when the list above is a prefix
+   *  rather than the whole set. See `vacanciesTruncated` for why a silent
+   *  cap is refused rather than reported as a clean sweep. */
+  scholarshipsTruncated?: boolean;
 };
 
 /**
