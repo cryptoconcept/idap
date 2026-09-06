@@ -1,0 +1,77 @@
+[
+  {
+    "description": "fully-complete platform listing",
+    "input": {
+      "name": "Merit Scholarship for Grade 10",
+      "summary": "A merit-based scholarship for outstanding students.",
+      "description": "This scholarship supports outstanding students who demonstrate academic excellence and financial need. Recipients receive tuition assistance, mentorship opportunities, and access to a dedicated career guidance program throughout the year.",
+      "categories": ["merit"],
+      "benefits": { "amountMin": 5000 },
+      "dates": { "closesAt": "2099-01-01T00:00:00.000Z" },
+      "applicationMode": "platform",
+      "requiredDocuments": [{ "key": "marksheet", "label": "Marksheet", "required": true }]
+    },
+    "expectedMissing": []
+  },
+  {
+    "description": "missing closesAt (no dates at all)",
+    "input": {
+      "name": "Merit Scholarship for Grade 10",
+      "summary": "A merit-based scholarship for outstanding students.",
+      "description": "This scholarship supports outstanding students who demonstrate academic excellence and financial need. Recipients receive tuition assistance, mentorship opportunities, and access to a dedicated career guidance program throughout the year.",
+      "categories": ["merit"],
+      "benefits": { "amountMin": 5000 },
+      "applicationMode": "platform",
+      "requiredDocuments": [{ "key": "marksheet", "label": "Marksheet", "required": true }]
+    },
+    "expectedMissing": ["closesAt"]
+  },
+  {
+    "description": "missing requiredDocuments in platform mode",
+    "input": {
+      "name": "Merit Scholarship for Grade 10",
+      "summary": "A merit-based scholarship for outstanding students.",
+      "description": "This scholarship supports outstanding students who demonstrate academic excellence and financial need. Recipients receive tuition assistance, mentorship opportunities, and access to a dedicated career guidance program throughout the year.",
+      "categories": ["merit"],
+      "benefits": { "amountMin": 5000 },
+      "dates": { "closesAt": "2099-01-01T00:00:00.000Z" },
+      "applicationMode": "platform",
+      "requiredDocuments": []
+    },
+    "expectedMissing": ["requiredDocuments"]
+  },
+  {
+    "description": "free-text amount only satisfies the benefit check (no benefits object)",
+    "input": {
+      "name": "Merit Scholarship for Grade 10",
+      "summary": "A merit-based scholarship for outstanding students.",
+      "description": "This scholarship supports outstanding students who demonstrate academic excellence and financial need. Recipients receive tuition assistance, mentorship opportunities, and access to a dedicated career guidance program throughout the year.",
+      "categories": ["merit"],
+      "amount": "Up to ₹50,000",
+      "dates": { "closesAt": "2099-01-01T00:00:00.000Z" },
+      "applicationMode": "platform",
+      "requiredDocuments": [{ "key": "marksheet", "label": "Marksheet", "required": true }]
+    },
+    "expectedMissing": []
+  },
+  {
+    "description": "external mode missing externalUrl",
+    "input": {
+      "name": "Merit Scholarship for Grade 10",
+      "summary": "A merit-based scholarship for outstanding students.",
+      "description": "This scholarship supports outstanding students who demonstrate academic excellence and financial need. Recipients receive tuition assistance, mentorship opportunities, and access to a dedicated career guidance program throughout the year.",
+      "categories": ["merit"],
+      "benefits": { "amountMin": 1000 },
+      "dates": { "closesAt": "2099-01-01T00:00:00.000Z" },
+      "applicationMode": "external"
+    },
+    "expectedMissing": ["externalUrl"]
+  },
+  {
+    "description": "bare minimum — only name given, everything else missing (platform default)",
+    "input": {
+      "name": "Bare Scholarship"
+    },
+    "expectedMissing": ["summary", "description", "categories", "benefits", "closesAt", "requiredDocuments"]
+  }
+]
