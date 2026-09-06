@@ -56,12 +56,12 @@ describe("scholarshipHubAdapter", () => {
     await expect(scholarshipHubAdapter.upsertScholarship!(ctx(vi.fn().mockResolvedValue({ status: 429, body: {} })), conn, REF, {})).rejects.toBeInstanceOf(ConnectorCapExceededError);
   });
   it("upsert 422 → ConnectorRejectedError carrying the extracted missing-field list (error.details.missing, not error.missing)", async () => {
-    await expect(
-      scholarshipHubAdapter.upsertScholarship!(
-        ctx(vi.fn().mockResolvedValue({ status: 422, body: { error: { code: "INCOMPLETE", details: { missing: ["closesAt"] } } } })),
-        conn, REF, {},
-      ),
-    ).rejects.toMatchObject({ reason: "INCOMPLETE", detail: JSON.stringify(["closesAt"]) });
+    const err = await scholarshipHubAdapter.upsertScholarship!(
+      ctx(vi.fn().mockResolvedValue({ status: 422, body: { error: { code: "INCOMPLETE", details: { missing: ["closesAt"] } } } })),
+      conn, REF, {},
+    ).catch((e) => e);
+    expect(err).toBeInstanceOf(ConnectorRejectedError);
+    expect(err).toMatchObject({ reason: "INCOMPLETE", detail: JSON.stringify(["closesAt"]) });
   });
   it("upsert 401 → plain hard error, never ConnectorAuthError (Ruling B: shared platform key)", async () => {
     const err = await scholarshipHubAdapter.upsertScholarship!(
