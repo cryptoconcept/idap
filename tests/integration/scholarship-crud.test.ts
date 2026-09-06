@@ -186,6 +186,62 @@ describe("ScholarshipService", () => {
     expect(stored?.listing).toBeUndefined();
   });
 
+  it("Task 10: DTO gap fix — surfaces structured fields and the Hub listing (blockedReason included)", async () => {
+    // Carried note from the Task 10 brief: `ScholarshipDTO` used to expose
+    // none of Task 3/4's structured fields and no `listing` at all, so the
+    // dashboard editor and the Hub listing panel had nothing to read back.
+    // This is a mutation-distinguishing check on `serialize()`, not the DB —
+    // the structured fields and the listing are written directly here so a
+    // regression in `serialize()`'s mapping (not in `create`/Mongoose) is
+    // what would fail this.
+    const created = await ScholarshipService.create(
+      "INS0001",
+      {
+        name: "Merit",
+        summary: "Merit award",
+        categories: ["merit"],
+        benefits: { amountMin: 1000 },
+        applicationMode: "external",
+        externalUrl: "https://example.org/apply",
+      },
+      actor,
+    );
+    expect(created.summary).toBe("Merit award");
+    expect(created.categories).toEqual(["merit"]);
+    expect(created.benefits?.amountMin).toBe(1000);
+    // Also a regression test for a real Task 3 gap this task found: `externalUrl`
+    // was validated by `createScholarshipSchema` and read by
+    // `toHubScholarshipPayload`, but never declared on the Mongoose schema, so
+    // Mongoose's default `strict: true` silently dropped it on write.
+    expect(created.externalUrl).toBe("https://example.org/apply");
+    const persisted = await Scholarship.findById(created.id).lean();
+    expect(persisted?.externalUrl).toBe("https://example.org/apply");
+
+    // A BLOCKED push (Task 8/9's forward contract) can be recorded with
+    // `remoteStatus: "published"` and `hubId: ""` alongside a `blockedReason` —
+    // the DTO must carry it through untouched so the UI can treat it as
+    // authoritative over `remoteStatus` (see `listing-display.ts`).
+    await Scholarship.updateOne(
+      { _id: created.id },
+      {
+        $set: {
+          listing: {
+            hubId: "",
+            externalRef: `IDAP:INS0001:${created.id}`,
+            remoteStatus: "published",
+            lastPushedAt: new Date(),
+            blockedReason: "Scholarship Hub moderation hold",
+          },
+        },
+      },
+    );
+
+    const read = await ScholarshipService.get("INS0001", created.id);
+    expect(read.listing?.remoteStatus).toBe("published");
+    expect(read.listing?.blockedReason).toBe("Scholarship Hub moderation hold");
+    expect(read.listing?.hubId).toBe("");
+  });
+
   it("refuses to publish a scholarship whose name was blanked by a patch", async () => {
     const created = await ScholarshipService.create("INS0001", { name: "Merit" }, actor);
     await Scholarship.updateOne({ _id: created.id }, { $set: { name: "  " } });

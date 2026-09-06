@@ -15,7 +15,58 @@ import { ActivityService } from "./activity.service";
 // Task 9: one-way dependency, same direction `vacancy.service.ts` already
 // takes on `vacancy-publish.service.ts` — `ScholarshipPublishService` must
 // never import this file back (see its own docblock).
-import { ScholarshipPublishService } from "./scholarship-publish.service";
+import {
+  ScholarshipPublishService,
+  toScholarshipListingDTO,
+  type ScholarshipListingDTO,
+} from "./scholarship-publish.service";
+
+export type ScholarshipBenefitsDTO = {
+  amountMin?: number;
+  amountMax?: number;
+  stipendMonthly?: number;
+  awards?: number;
+  tuitionWaiver?: boolean;
+};
+
+export type ScholarshipEligibilityDTO = {
+  stateCodes?: string[];
+  districtCodes?: string[];
+  educationLevels?: string[];
+  classesOrCourses?: string[];
+  streams?: string[];
+  genders?: string[];
+  ageMin?: number;
+  ageMax?: number;
+  minPercentage?: number;
+  maxAnnualIncome?: number;
+  communityCategories?: string[];
+  disabilityRequired?: boolean;
+  otherCriteria?: string[];
+};
+
+export type ScholarshipRequiredDocumentDTO = {
+  key: string;
+  label: string;
+  required?: boolean;
+};
+
+export type ScholarshipCustomQuestionDTO = {
+  key: string;
+  label: string;
+  type: string;
+  options?: string[];
+  required?: boolean;
+  helpText?: string;
+};
+
+export type ScholarshipDatesDTO = {
+  opensAt?: string;
+  closesAt?: string;
+  resultAt?: string;
+};
+
+export type ScholarshipFaqDTO = { q: string; a: string };
 
 export type ScholarshipDTO = {
   id: string;
@@ -27,6 +78,33 @@ export type ScholarshipDTO = {
   status: string;
   publishedAt?: string;
   updatedAt?: string;
+  // Structured fields for Scholarship Hub syndication (Task 3's model
+  // fields, Task 4's validation) — the dashboard editor's read side.
+  summary?: string;
+  description?: string;
+  categories?: string[];
+  tags?: string[];
+  benefits?: ScholarshipBenefitsDTO;
+  eligibility?: ScholarshipEligibilityDTO;
+  applicationMode?: string;
+  externalUrl?: string;
+  requiredDocuments?: ScholarshipRequiredDocumentDTO[];
+  customQuestions?: ScholarshipCustomQuestionDTO[];
+  applicationSteps?: string[];
+  dates?: ScholarshipDatesDTO;
+  selectionProcess?: string;
+  terms?: string;
+  faqs?: ScholarshipFaqDTO[];
+  sourceUrl?: string;
+  /**
+   * What Scholarship Hub knows about this listing, absent until it is
+   * published there. This is the DASHBOARD DTO, not the public projection
+   * (`toPublicScholarship` below, which deliberately withholds it) — the
+   * settings UI needs to show a school whether its listing is live, where to
+   * read it, or why the last push was blocked, exactly as `VacancyDTO`
+   * exposes its own `listing` for the same reason.
+   */
+  listing?: ScholarshipListingDTO;
 };
 
 /** A row with its label attached. The label is never stored — see `withLabels`. */
@@ -66,6 +144,87 @@ async function withLabels(
   }));
 }
 
+/** ISO-string a possibly-absent stored Date — same `??`/optional-chaining
+ *  convention as every other date field in this file's `serialize`. */
+function toIso(date?: Date | null): string | undefined {
+  return date ? new Date(date).toISOString() : undefined;
+}
+
+/** `undefined` for an absent or empty array, never `[]` — matches
+ *  `facilities?.length ? ... : undefined` in `vacancy.service.ts`'s own
+ *  serializer, so an empty list and "never set" read identically here too. */
+function nonEmpty<T>(values?: T[] | null): T[] | undefined {
+  return values && values.length > 0 ? values : undefined;
+}
+
+function mapBenefits(benefits?: ScholarshipDoc["benefits"] | null): ScholarshipBenefitsDTO | undefined {
+  if (!benefits) return undefined;
+  return {
+    amountMin: benefits.amountMin ?? undefined,
+    amountMax: benefits.amountMax ?? undefined,
+    stipendMonthly: benefits.stipendMonthly ?? undefined,
+    awards: benefits.awards ?? undefined,
+    tuitionWaiver: benefits.tuitionWaiver ?? undefined,
+  };
+}
+
+function mapEligibility(
+  eligibility?: ScholarshipDoc["eligibility"] | null,
+): ScholarshipEligibilityDTO | undefined {
+  if (!eligibility) return undefined;
+  return {
+    stateCodes: nonEmpty(eligibility.stateCodes as string[] | undefined),
+    districtCodes: nonEmpty(eligibility.districtCodes as string[] | undefined),
+    educationLevels: nonEmpty(eligibility.educationLevels as string[] | undefined),
+    classesOrCourses: nonEmpty(eligibility.classesOrCourses as string[] | undefined),
+    streams: nonEmpty(eligibility.streams as string[] | undefined),
+    genders: nonEmpty(eligibility.genders as string[] | undefined),
+    ageMin: eligibility.ageMin ?? undefined,
+    ageMax: eligibility.ageMax ?? undefined,
+    minPercentage: eligibility.minPercentage ?? undefined,
+    maxAnnualIncome: eligibility.maxAnnualIncome ?? undefined,
+    communityCategories: nonEmpty(eligibility.communityCategories as string[] | undefined),
+    disabilityRequired: eligibility.disabilityRequired ?? undefined,
+    otherCriteria: nonEmpty(eligibility.otherCriteria as string[] | undefined),
+  };
+}
+
+function mapDates(dates?: ScholarshipDoc["dates"] | null): ScholarshipDatesDTO | undefined {
+  if (!dates) return undefined;
+  const opensAt = toIso(dates.opensAt);
+  const closesAt = toIso(dates.closesAt);
+  const resultAt = toIso(dates.resultAt);
+  if (!opensAt && !closesAt && !resultAt) return undefined;
+  return { opensAt, closesAt, resultAt };
+}
+
+function mapRequiredDocuments(
+  docs?: ScholarshipDoc["requiredDocuments"] | null,
+): ScholarshipRequiredDocumentDTO[] | undefined {
+  return nonEmpty(docs)?.map((doc) => ({
+    key: doc.key,
+    label: doc.label,
+    required: doc.required ?? undefined,
+  }));
+}
+
+function mapCustomQuestions(
+  questions?: ScholarshipDoc["customQuestions"] | null,
+): ScholarshipCustomQuestionDTO[] | undefined {
+  return nonEmpty(questions)?.map((question) => ({
+    key: question.key,
+    label: question.label,
+    type: question.type,
+    options: nonEmpty(question.options as string[] | undefined),
+    required: question.required ?? undefined,
+    helpText: question.helpText || undefined,
+  }));
+}
+
+function mapFaqs(faqs?: ScholarshipDoc["faqs"] | null): ScholarshipFaqDTO[] | undefined {
+  return nonEmpty(faqs)?.map((faq) => ({ q: faq.q, a: faq.a }));
+}
+
 function serialize(row: ScholarshipRow): ScholarshipDTO {
   return {
     id: String(row._id),
@@ -77,6 +236,27 @@ function serialize(row: ScholarshipRow): ScholarshipDTO {
     status: row.status,
     publishedAt: row.publishedAt?.toISOString(),
     updatedAt: (row as ScholarshipDoc & { updatedAt?: Date }).updatedAt?.toISOString(),
+    summary: row.summary || undefined,
+    description: row.description || undefined,
+    categories: nonEmpty(row.categories as string[] | undefined),
+    tags: nonEmpty(row.tags as string[] | undefined),
+    benefits: mapBenefits(row.benefits),
+    eligibility: mapEligibility(row.eligibility),
+    applicationMode: row.applicationMode || undefined,
+    externalUrl: row.externalUrl || undefined,
+    requiredDocuments: mapRequiredDocuments(row.requiredDocuments),
+    customQuestions: mapCustomQuestions(row.customQuestions),
+    applicationSteps: nonEmpty(row.applicationSteps as string[] | undefined),
+    dates: mapDates(row.dates),
+    selectionProcess: row.selectionProcess || undefined,
+    terms: row.terms || undefined,
+    faqs: mapFaqs(row.faqs),
+    sourceUrl: row.sourceUrl || undefined,
+    // Built by `scholarship-publish.service.ts`'s own `toScholarshipListingDTO`
+    // rather than re-mapped here, so the listing a school reads on its
+    // dashboard and the one a push hands back are the same shape by
+    // construction — same rationale as `vacancy.service.ts`'s `toListingDTO`.
+    listing: row.listing ? toScholarshipListingDTO(row.listing) : undefined,
   };
 }
 

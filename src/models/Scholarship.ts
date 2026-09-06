@@ -71,6 +71,16 @@ const ScholarshipSchema = new Schema(
     benefits: { type: BenefitsSchema, default: undefined },
     eligibility: { type: EligibilitySchema, default: undefined },
     applicationMode: { type: String, enum: HUB_APPLICATION_MODES, default: "platform" },
+    /**
+     * Fix (Task 10): validated by `createScholarshipSchema`/
+     * `updateScholarshipSchema` (Task 4) and read by `toHubScholarshipPayload`
+     * (Task 6, `scholarship-hub-mapping.ts`), but never declared on this
+     * schema — Mongoose's default `strict: true` silently drops any key not
+     * declared here, so every `externalUrl` a caller sent was accepted by
+     * validation and then dropped on write, before Task 10 added the editor
+     * field that would have surfaced the gap.
+     */
+    externalUrl: String,
     requiredDocuments: { type: [RequiredDocumentSchema], default: undefined },
     customQuestions: { type: [CustomQuestionSchema], default: undefined },
     applicationSteps: [String],
