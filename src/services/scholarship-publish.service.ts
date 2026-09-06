@@ -17,7 +17,7 @@ import {
   type ScholarshipPushResult,
 } from "@/lib/connectors/types";
 import { toHubScholarshipPayload } from "@/lib/connectors/scholarship-hub-mapping";
-import { assertScholarshipHubPublishable } from "@/lib/validation/scholarship";
+import { assertScholarshipHubPublishable, scholarshipHubMissingFields } from "@/lib/validation/scholarship";
 import { ActivityService } from "./activity.service";
 
 /**
@@ -75,11 +75,23 @@ export type ScholarshipListingDTO = {
  * What one push did — PARALLEL to `VacancyPublishOutcome`, not a copy of it:
  * Scholarship Hub has no `CONFLICT` case at all (idempotent by `externalRef`,
  * no claim state), so that arm simply does not exist here.
+ *
+ * `SKIPPED` (fix round 1) is deliberately its own kind, not folded into
+ * `NOT_LISTED`. Both mean "nothing was pushed and nothing failed," but for
+ * different reasons a caller may need to tell apart: `NOT_LISTED` is "there
+ * was nothing to close," `SKIPPED` is "there was something to do, but Hub
+ * syndication is not yet possible for this scholarship/institution" —
+ * either it has never connected to Scholarship Hub, or the scholarship is
+ * not yet Hub-publishable (`scholarshipHubMissingFields`). Neither is a
+ * failure: Scholarship Hub syndication is a best-effort side-effect of the
+ * institution's own, always-local scholarship, never a precondition for it
+ * (fix round 1 — see `publish`/`pushClose` below).
  */
 export type ScholarshipPublishOutcome =
   | { status: "PUSHED"; listing: ScholarshipListingDTO }
   | { status: "CLOSED"; listing: ScholarshipListingDTO }
   | { status: "NOT_LISTED" }
+  | { status: "SKIPPED"; reason: string }
   | { status: "BLOCKED"; message: string; listing?: ScholarshipListingDTO };
 
 // ---------------------------------------------------------------------------
@@ -221,6 +233,25 @@ async function requireConnection(institutionId: string): Promise<ConnectionState
     remoteRequestId: row.remoteRequestId ?? undefined,
     scopes: row.scopes ?? undefined,
   };
+}
+
+/**
+ * Fix round 1. A NON-throwing version of the same CONNECTED check, for
+ * `publish`/`pushClose`'s own entry-level skip (below): best-effort Hub
+ * syndication must never turn "this institution has never connected to
+ * Scholarship Hub" into an exception the institution's own, always-local
+ * scholarship action would have to swallow. `requireConnection` itself is
+ * untouched and still throws — `pushFields`/`pushCloseFor` keep calling it,
+ * because `repush`'s two callers (`pushEdit`'s own try/catch, and the sync
+ * worklist's `runScholarshipAction`) already tolerate that throw, and a
+ * `repush`/reconciliation pass is not the "always succeeds locally" surface
+ * this fix is about.
+ */
+async function isHubConnected(institutionId: string): Promise<boolean> {
+  const row = await PlatformConnection.findOne({ institutionId, platform: PLATFORM })
+    .select("status")
+    .lean();
+  return Boolean(row && row.status === "CONNECTED");
 }
 
 // ---------------------------------------------------------------------------
@@ -571,10 +602,37 @@ async function pushCloseFor(
 // ---------------------------------------------------------------------------
 
 export const ScholarshipPublishService = {
-  /** The institution's explicit publish action — may create a new listing. */
+  /**
+   * The institution's explicit publish action — may create a new listing.
+   *
+   * Fix round 1: this is now a BEST-EFFORT syndication attempt, never a
+   * precondition for the institution's own local publish
+   * (`scholarship.service.ts`'s `setStatus` calls this unconditionally
+   * after the local status write already succeeded). So the two ordinary
+   * reasons Hub syndication cannot happen yet — the scholarship is not yet
+   * filled in for the Hub, or the institution has never connected to
+   * Scholarship Hub — are reported back as `SKIPPED` here, ahead of
+   * `pushFields`'s own (still-throwing) gates, rather than left to become
+   * exceptions. The CONNECTED, Hub-ready path is untouched: `pushFields`
+   * below still runs its own `assertScholarshipHubPublishable`/
+   * `requireConnection` checks unchanged, so nothing here weakens them for
+   * `repush`, which shares `pushFields` and still throws on both.
+   */
   async publish(institutionId: string, scholarshipId: string, actor: Actor): Promise<ScholarshipPublishOutcome> {
     await connectToDatabase();
     const scholarship = await loadScholarship(institutionId, scholarshipId);
+
+    const missing = scholarshipHubMissingFields(scholarship as never);
+    if (missing.length > 0) {
+      return {
+        status: "SKIPPED",
+        reason: `Not yet publishable to ${LABEL} — missing: ${missing.join(", ")}`,
+      };
+    }
+    if (!(await isHubConnected(institutionId))) {
+      return { status: "SKIPPED", reason: `${LABEL} is not connected` };
+    }
+
     return pushFields(institutionId, scholarship, actor, true);
   },
 
@@ -607,11 +665,31 @@ export const ScholarshipPublishService = {
     }
   },
 
-  /** Close this scholarship's listing on Scholarship Hub, whatever its IDAP
-   *  status. Returns `NOT_LISTED` when there is nothing to close. */
+  /**
+   * Close this scholarship's listing on Scholarship Hub, whatever its IDAP
+   * status. Returns `NOT_LISTED` when there is nothing to close.
+   *
+   * Fix round 1: best-effort, same as `publish` above —
+   * `scholarship.service.ts`'s `setStatus`/`remove` call this unconditionally
+   * as a side-effect of a local action that must always succeed on its own.
+   * `NOT_LISTED` is checked FIRST — "nothing to close" is true regardless of
+   * connection state, and must not be reported as a skip. Only when there
+   * IS a live listing does the (still non-throwing) CONNECTED check run: an
+   * institution that disconnected after publishing to the Hub gets
+   * `SKIPPED` rather than a thrown error, so a local `remove` can still
+   * delete its own row — the residual risk (the listing stays live and
+   * unreachable on the Hub until the institution reconnects) is the
+   * accepted trade-off of "local scholarship actions always succeed."
+   */
   async pushClose(institutionId: string, scholarshipId: string, actor: Actor): Promise<ScholarshipPublishOutcome> {
     await connectToDatabase();
     const scholarship = await loadScholarship(institutionId, scholarshipId);
+
+    if (!isListingLive(scholarship.listing ?? undefined)) return { status: "NOT_LISTED" };
+    if (!(await isHubConnected(institutionId))) {
+      return { status: "SKIPPED", reason: `${LABEL} is not connected` };
+    }
+
     return pushCloseFor(institutionId, scholarship, actor);
   },
 };

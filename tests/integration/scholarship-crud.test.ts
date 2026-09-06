@@ -1,10 +1,9 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
 import { AcademicUnit, Scholarship } from "@/models";
 import { AcademicStructureService, type AcademicUnitDTO } from "@/services/academic-structure.service";
 import { ScholarshipService } from "@/services/scholarship.service";
-import { ScholarshipPublishService } from "@/services/scholarship-publish.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -31,9 +30,6 @@ beforeEach(async () => {
     { segment: "SCHOOL", name: "Grade 10" },
     actor,
   );
-});
-afterEach(() => {
-  vi.restoreAllMocks();
 });
 
 describe("ScholarshipService", () => {
@@ -155,16 +151,6 @@ describe("ScholarshipService", () => {
   });
 
   it("publishes, stamps publishedAt, and keeps it across a republish", async () => {
-    // Task 9: `setStatus` now also calls `ScholarshipPublishService`, which
-    // requires a Scholarship Hub connection and a fully Hub-publishable
-    // scholarship (Task 6/8's own gate) — neither of which this test's bare
-    // `{ name: "Merit" }` scholarship has, nor is either concern this test's
-    // subject. Stubbed out here so the local status/`publishedAt` semantics
-    // this test actually covers stay isolated from Hub connectivity, which
-    // is covered by `scholarship-publish-service.test.ts` instead.
-    vi.spyOn(ScholarshipPublishService, "publish").mockResolvedValue(undefined as never);
-    vi.spyOn(ScholarshipPublishService, "pushClose").mockResolvedValue(undefined as never);
-
     const created = await ScholarshipService.create("INS0001", { name: "Merit" }, actor);
 
     const published = await ScholarshipService.setStatus("INS0001", created.id, "publish", actor);
@@ -180,6 +166,24 @@ describe("ScholarshipService", () => {
     );
 
     expect(republished.publishedAt).toBe(published.publishedAt);
+  });
+
+  it("fix round 1: publishes locally even with no Scholarship Hub connection — succeeds, does not throw, and writes no listing", async () => {
+    // Local scholarship actions are IDAP-owned and must always succeed
+    // regardless of Scholarship Hub connection/readiness — Hub syndication
+    // is a best-effort side-effect only. No PlatformConnection row exists
+    // for INS0001 at all here, and this bare `{ name: "Merit" }` scholarship
+    // is nowhere near Hub-publishable either, so the real (unmocked)
+    // `ScholarshipPublishService.publish` returns `SKIPPED` internally —
+    // this asserts the OUTWARD-FACING contract: local publish still
+    // succeeds, and nothing was ever written to `listing`.
+    const created = await ScholarshipService.create("INS0001", { name: "Merit" }, actor);
+
+    const published = await ScholarshipService.setStatus("INS0001", created.id, "publish", actor);
+
+    expect(published.status).toBe("PUBLISHED");
+    const stored = await Scholarship.findById(created.id).lean();
+    expect(stored?.listing).toBeUndefined();
   });
 
   it("refuses to publish a scholarship whose name was blanked by a patch", async () => {

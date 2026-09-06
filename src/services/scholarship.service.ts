@@ -290,14 +290,25 @@ export const ScholarshipService = {
       performedByName: actor.name,
     });
 
-    // Task 9: the explicit status action drives the Hub listing. `publish`
-    // is the institution's own explicit action — a hard connector error is
-    // allowed to surface to the caller, unlike `update`'s `pushEdit`, which
-    // never throws. `unpublish`/`archive` withdraw the listing the same way.
-    if (action === "publish") {
-      await ScholarshipPublishService.publish(institutionId, scholarshipId, actor);
-    } else {
-      await ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor);
+    // Fix round 1: the local status change above has already landed —
+    // LOCAL scholarship actions are IDAP-owned and must always succeed
+    // regardless of Scholarship Hub connection/readiness. Hub syndication
+    // from here on is a best-effort side-effect: `publish`/`pushClose`
+    // already report "not connected"/"not yet Hub-publishable" as a
+    // `SKIPPED` outcome rather than throwing, and this try/catch is the
+    // remaining backstop for anything that can still throw once CONNECTED
+    // (an unreachable Hub, a spent rate limit, a payload the Hub rejects
+    // outright) — none of which may turn "publish"/"unpublish"/"archive"
+    // into a failed request. A `BLOCKED` push already gets its reason
+    // recorded onto the listing by the orchestrator itself.
+    try {
+      if (action === "publish") {
+        await ScholarshipPublishService.publish(institutionId, scholarshipId, actor);
+      } else {
+        await ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor);
+      }
+    } catch {
+      // Best-effort: swallowed on purpose — see comment above.
     }
 
     return serialize(enriched);
@@ -311,13 +322,21 @@ export const ScholarshipService = {
     await connectToDatabase();
     const before = await findOwned(institutionId, scholarshipId);
 
-    // Task 9: withdraw the Hub listing BEFORE the local row is gone, so a
-    // published scholarship never disappears from IDAP while staying live
-    // and orphaned on Scholarship Hub. Unlike `update`'s `pushEdit`, this is
-    // not wrapped — a hard connector error refuses the delete rather than
-    // risk exactly that orphan. Resolves quietly (`NOT_LISTED`) when there
-    // is nothing to close.
-    await ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor);
+    // Fix round 1: withdraw the Hub listing BEFORE the local row is gone,
+    // best-effort — but a withdraw failure must never block the delete.
+    // LOCAL scholarship actions are IDAP-owned and must always succeed
+    // regardless of Scholarship Hub connection/readiness; `pushClose`
+    // already resolves quietly (`NOT_LISTED`/`SKIPPED`) rather than
+    // throwing for the ordinary cases, and this try/catch is the backstop
+    // for anything else (an unreachable Hub, a spent rate limit). The
+    // accepted trade-off: a listing that cannot be withdrawn here (Hub
+    // unreachable, or the institution disconnected while still live) may
+    // stay live and orphaned on Scholarship Hub after this row is deleted.
+    try {
+      await ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor);
+    } catch {
+      // Best-effort: swallowed on purpose — see comment above.
+    }
 
     await Scholarship.deleteOne({ _id: before._id, institutionId });
 

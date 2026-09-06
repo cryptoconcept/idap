@@ -1,11 +1,10 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeProfiledInstitution } from "../helpers/factories";
 import { GET as getByInstitutionId } from "@/app/api/public/[institutionId]/scholarships/route";
 import { GET as getBySlug } from "@/app/api/public/institutions/[slug]/scholarships/route";
 import { Scholarship } from "@/models";
 import { ScholarshipService } from "@/services/scholarship.service";
-import { ScholarshipPublishService } from "@/services/scholarship-publish.service";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -23,19 +22,7 @@ beforeAll(async () => {
   await Scholarship.syncIndexes();
 });
 afterAll(stopTestDatabase);
-beforeEach(async () => {
-  await clearDatabase();
-  // Task 9: `setStatus` now also calls `ScholarshipPublishService`, which
-  // requires a Scholarship Hub connection and a fully Hub-publishable
-  // scholarship — neither of which this file's bare `input()` fixture has,
-  // nor is Hub connectivity what this file (the PUBLIC LISTING endpoint) is
-  // about. Stubbed out for every test here, the same way
-  // `scholarship-crud.test.ts` does for its own publish test.
-  vi.spyOn(ScholarshipPublishService, "publish").mockResolvedValue(undefined as never);
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+beforeEach(clearDatabase);
 
 describe("GET /api/public/:institutionId/scholarships", () => {
   it("returns a published scholarship by institutionId", async () => {

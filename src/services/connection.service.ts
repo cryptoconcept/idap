@@ -344,6 +344,11 @@ async function runScholarshipAction(
     case "NOT_LISTED":
       // Nothing was there to close — no HTTP call, nothing failed.
       return { ok: true };
+    case "SKIPPED":
+      // Fix round 1: best-effort syndication was not attempted (no
+      // Scholarship Hub connection, or not yet Hub-publishable) — not a
+      // failure of this sweep, nothing to retry, nothing HTTP was ever sent.
+      return { ok: true };
     default:
       // BLOCKED: Scholarship Hub answered and the service has already
       // written the reason onto the listing, so the institution sees it on
