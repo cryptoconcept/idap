@@ -8,6 +8,7 @@ import type { PlatformAdapter } from "./types";
 // way, though (Task 8 fix — see the comment below).
 import "./passpercent";
 import "./edufleet";
+import "./scholarship-hub";
 
 /**
  * One registry, one lookup point. Adapters register themselves as a
