@@ -103,6 +103,7 @@ describe("connections routes — happy paths", () => {
       "EDUFLEET",
       "FEESBASKET",
       "PASSPERCENT",
+      "SCHOLARSHIP_HUB",
     ]);
   });
 

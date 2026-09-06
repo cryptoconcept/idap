@@ -468,13 +468,14 @@ export const OFFER_KIND_LABELS: Record<OfferKind, string> = {
 export const SCHOLARSHIP_MAX_PER_INSTITUTION = 40;
 export const OFFER_MAX_PER_INSTITUTION = 40;
 
-export const PLATFORMS = ["PASSPERCENT", "FEESBASKET", "EDUFLEET"] as const;
+export const PLATFORMS = ["PASSPERCENT", "FEESBASKET", "EDUFLEET", "SCHOLARSHIP_HUB"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const PLATFORM_LABELS: Record<Platform, string> = {
   PASSPERCENT: "PassPercent",
   FEESBASKET: "FeesBasket",
   EDUFLEET: "eduFleet Exchange",
+  SCHOLARSHIP_HUB: "Scholarship Hub",
 };
 
 /**
@@ -772,3 +773,6 @@ export function isTerminalClaim(claimState: string | null | undefined): boolean 
  */
 export const VACANCY_LISTING_REMOTE_STATUSES = ["active", "closed"] as const;
 export type VacancyListingRemoteStatus = (typeof VACANCY_LISTING_REMOTE_STATUSES)[number];
+
+export const SCHOLARSHIP_LISTING_REMOTE_STATUSES = ["published", "closed"] as const;
+export type ScholarshipListingRemoteStatus = (typeof SCHOLARSHIP_LISTING_REMOTE_STATUSES)[number];
