@@ -11,6 +11,34 @@ import {
   HUB_STATE_CODES,
 } from "@/lib/scholarship-hub/vocabulary";
 
+/**
+ * Mirrors the Hub's shared `httpsUrlSchema`
+ * (scholarship-hub/packages/shared/src/validation/scholarship.ts):
+ * `z.url().max(2000)` plus a refine that the protocol is exactly `https:`.
+ * Defined once and reused for both `externalUrl` and `sourceUrl` below — an
+ * `http:` value on either field used to clear this local gate and then 422
+ * at push, since a plain `z.string().url()` accepts any protocol.
+ */
+const httpsUrlSchema = z
+  .string()
+  .url()
+  .max(2000)
+  .refine(
+    (value) => {
+      // Zod's string checks don't short-circuit on an earlier failure — a
+      // value that already failed `.url()` above still reaches this refine,
+      // and `new URL()` throws a raw (non-Zod) `TypeError` on anything that
+      // isn't a parseable URL. Caught here so a malformed value fails
+      // validation gracefully instead of crashing the request.
+      try {
+        return new URL(value).protocol === "https:";
+      } catch {
+        return false;
+      }
+    },
+    { message: "must start with https://" },
+  );
+
 const benefitsSchema = z
   .object({
     amountMin: z.number().min(0).optional(),
@@ -79,7 +107,7 @@ export const createScholarshipSchema = z.object({
   benefits: benefitsSchema,
   eligibility: eligibilitySchema,
   applicationMode: z.enum(HUB_APPLICATION_MODES).optional(),
-  externalUrl: z.string().url().optional(),
+  externalUrl: httpsUrlSchema.optional(),
   requiredDocuments: z.array(requiredDocumentSchema).max(30).optional(),
   customQuestions: z.array(customQuestionSchema).max(50).optional(),
   applicationSteps: z.array(z.string()).max(20).optional(),
@@ -93,7 +121,7 @@ export const createScholarshipSchema = z.object({
   selectionProcess: z.string().max(5000).optional(),
   terms: z.string().max(20000).optional(),
   faqs: z.array(z.object({ q: z.string().min(1), a: z.string().min(1) })).max(30).optional(),
-  sourceUrl: z.string().url().optional(),
+  sourceUrl: httpsUrlSchema.optional(),
 });
 export type CreateScholarshipInput = z.infer<typeof createScholarshipSchema>;
 

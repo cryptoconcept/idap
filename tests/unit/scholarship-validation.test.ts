@@ -30,6 +30,46 @@ describe("createScholarshipSchema", () => {
   });
 });
 
+describe("createScholarshipSchema — externalUrl/sourceUrl https-only", () => {
+  // The Hub's shared `httpsUrlSchema` (scholarship-hub/packages/shared/src/
+  // validation/scholarship.ts) rejects `http:` outright. An external-mode
+  // listing with an `http:` externalUrl used to clear IDAP's local gate and
+  // then 422 at push — these two fields must match the Hub's stricter rule.
+  it("rejects an http externalUrl", () => {
+    expect(() =>
+      createScholarshipSchema.parse({
+        name: "Merit",
+        externalUrl: "http://example.com/apply",
+      }),
+    ).toThrow();
+  });
+
+  it("accepts an https externalUrl", () => {
+    const parsed = createScholarshipSchema.parse({
+      name: "Merit",
+      externalUrl: "https://example.com/apply",
+    });
+    expect(parsed.externalUrl).toBe("https://example.com/apply");
+  });
+
+  it("rejects an http sourceUrl", () => {
+    expect(() =>
+      createScholarshipSchema.parse({
+        name: "Merit",
+        sourceUrl: "http://example.com/announcement",
+      }),
+    ).toThrow();
+  });
+
+  it("accepts an https sourceUrl", () => {
+    const parsed = createScholarshipSchema.parse({
+      name: "Merit",
+      sourceUrl: "https://example.com/announcement",
+    });
+    expect(parsed.sourceUrl).toBe("https://example.com/announcement");
+  });
+});
+
 describe("updateScholarshipSchema", () => {
   it("accepts a partial patch", () => {
     const parsed = updateScholarshipSchema.parse({ amount: "Up to ₹50,000" });
