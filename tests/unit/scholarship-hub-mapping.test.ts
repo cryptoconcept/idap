@@ -1,6 +1,22 @@
 import { describe, it, expect } from "vitest";
 import { toHubScholarshipPayload } from "@/lib/connectors/scholarship-hub-mapping";
 
+/**
+ * Task 10 lint fix: `toHubScholarshipPayload` returns `Record<string, unknown>`
+ * (the mapper's only promise is "an allow-listed plain object" — see its own
+ * file), so reading `p.benefits.amountText` off it needs a cast somewhere.
+ * The pre-existing `Record<string, any>` cast satisfied the compiler but
+ * tripped `@typescript-eslint/no-explicit-any`; this narrows only the three
+ * nested groups the assertions below actually dot into, leaving every other
+ * key `unknown` — which `expect()` accepts regardless, since it never reads
+ * a static type off its argument.
+ */
+type MappedPayload = Record<string, unknown> & {
+  benefits: Record<string, unknown>;
+  eligibility: Record<string, unknown>;
+  dates: Record<string, unknown>;
+};
+
 const doc = {
   name: "Infinity Merit", summary: "Merit award", description: "x".repeat(220),
   categories: ["merit"], amount: "Up to ₹50,000",
@@ -38,7 +54,7 @@ const fullDoc = {
 
 describe("toHubScholarshipPayload", () => {
   it("maps name→title, amount→benefits.amountText, criteria→eligibility.otherCriteria, class link→classesOrCourses", () => {
-    const p = toHubScholarshipPayload(doc as never, "Grade 10") as Record<string, any>;
+    const p = toHubScholarshipPayload(doc as never, "Grade 10") as MappedPayload;
     expect(p.title).toBe("Infinity Merit");                       // (a)
     expect(p.benefits.amountText).toBe("Up to ₹50,000");          // (b)
     expect(p.benefits.amountMin).toBe(10000);                     // (c)
@@ -52,22 +68,22 @@ describe("toHubScholarshipPayload", () => {
   // hardcoded "platform" return would fail this (unlike the old confounded
   // assertion, which used a fixture whose applicationMode already was "platform").
   it("passes through a non-default applicationMode instead of hardcoding it", () => {
-    const p = toHubScholarshipPayload(fullDoc as never) as Record<string, any>;
+    const p = toHubScholarshipPayload(fullDoc as never) as MappedPayload;
     expect(p.applicationMode).toBe("external");
   });
 
   // Separate case proving the "platform" default applies only when the doc
   // truly has no applicationMode.
   it("defaults applicationMode to platform when the doc has none", () => {
-    const { applicationMode, ...withoutMode } = doc;
-    const p = toHubScholarshipPayload(withoutMode as never) as Record<string, any>;
+    const { applicationMode: _applicationMode, ...withoutMode } = doc;
+    const p = toHubScholarshipPayload(withoutMode as never) as MappedPayload;
     expect(p.applicationMode).toBe("platform");
   });
 
   // FINDING 2 fix: one assertion per identity-passthrough field, so deleting
   // any single mapping line in the builder fails a specific assertion here.
   it("maps every identity-passthrough field verbatim", () => {
-    const p = toHubScholarshipPayload(fullDoc as never) as Record<string, any>;
+    const p = toHubScholarshipPayload(fullDoc as never) as MappedPayload;
     expect(p.summary).toBe("Merit award");
     expect(p.description).toBe("x".repeat(220));
     expect(p.categories).toEqual(["merit"]);
