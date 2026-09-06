@@ -1,7 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution } from "../helpers/factories";
-import { Activity, Institution, PlatformConnection, PlatformCredential, Result, SyncRun, Vacancy } from "@/models";
+import {
+  Activity,
+  Institution,
+  PlatformConnection,
+  PlatformCredential,
+  Result,
+  Scholarship,
+  SyncRun,
+  Vacancy,
+} from "@/models";
 import { decryptCredential, encryptCredential } from "@/lib/security/credentials";
 import { registerAdapter } from "@/lib/connectors";
 import { passpercentAdapter } from "@/lib/connectors/passpercent";
@@ -36,6 +45,9 @@ type FakeHooks = {
   /** Task 7: the presence of all three is what makes the service build a
    *  vacancy worklist for this adapter at all. */
   jobMethods?: boolean;
+  /** Task 9: the presence of both is what makes the service build a
+   *  scholarship worklist for this adapter at all. */
+  scholarshipMethods?: boolean;
 };
 
 function makeFakeAdapter(hooks: FakeHooks = {}): PlatformAdapter {
@@ -46,6 +58,22 @@ function makeFakeAdapter(hooks: FakeHooks = {}): PlatformAdapter {
         closeJob: async () => ({ kind: "OK" as const, jobId: "job-1" }),
       }
     : {};
+  const scholarship = hooks.scholarshipMethods
+    ? {
+        upsertScholarship: async () => ({
+          kind: "OK" as const,
+          hubId: "hub-1",
+          slug: "hub-1-slug",
+          remoteStatus: "published" as const,
+        }),
+        withdrawScholarship: async () => ({
+          kind: "OK" as const,
+          hubId: "hub-1",
+          slug: "hub-1-slug",
+          remoteStatus: "closed" as const,
+        }),
+      }
+    : {};
   return {
     platform: "PASSPERCENT",
     connectMode: "REQUEST_APPROVE_REDEEM",
@@ -54,6 +82,7 @@ function makeFakeAdapter(hooks: FakeHooks = {}): PlatformAdapter {
     connectWithKey: hooks.connectWithKey,
     sync: hooks.sync ?? (async () => ({ status: "SUCCESS", steps: [], warnings: [] })),
     ...job,
+    ...scholarship,
   };
 }
 
@@ -1290,6 +1319,36 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     return updated!;
   }
 
+  /** Task 9. Mirrors `makeVacancy` — an optional `listing` override, applied
+   *  as a second write so the required `hubId`/`externalRef`/`lastPushedAt`
+   *  fields have sensible defaults a test can still override. */
+  async function makeScholarship(institutionId: string, overrides: Record<string, unknown> = {}) {
+    const { listing, ...rest } = overrides as { listing?: Record<string, unknown> };
+    const scholarship = await Scholarship.create({
+      institutionId,
+      name: "Merit Scholarship",
+      status: "PUBLISHED",
+      ...rest,
+    });
+    if (!listing) return scholarship;
+    const updated = await Scholarship.findByIdAndUpdate(
+      scholarship._id,
+      {
+        $set: {
+          listing: {
+            hubId: "hub-1",
+            externalRef: `IDAP:${institutionId}:${String(scholarship._id)}`,
+            remoteStatus: "published",
+            lastPushedAt: new Date(),
+            ...listing,
+          },
+        },
+      },
+      { new: true, runValidators: true },
+    );
+    return updated!;
+  }
+
   /** A listing IDAP published under its platform key — Contract One. */
   const LIVE_LISTING = {
     jobId: "ef-job-1",
@@ -1725,6 +1784,38 @@ describe("syncNow — eduFleet vacancy reconciliation", () => {
     await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
     expect(captured?.vacancies).toHaveLength(1);
     expect(captured?.vacancies?.[0].listing?.remoteStatus).toBe("active");
+  });
+
+  it("MUTATION-DISTINGUISHING: only an adapter with both scholarship methods is given a scholarship worklist", async () => {
+    // Task 9. Mirrors the vacancy test directly above: an adapter with no
+    // scholarship contract at all must see exactly what it saw before Task 9
+    // existed, and only one with BOTH `upsertScholarship`/`withdrawScholarship`
+    // gets a populated `data.scholarships`.
+    let captured: SyncSourceData | undefined;
+    const capture: PlatformAdapter["sync"] = async (_ctx, _conn, data) => {
+      captured = data;
+      return { status: "SUCCESS", steps: [], warnings: [] };
+    };
+
+    await makeCredential();
+    await makeConnectableInstitution("INS0001");
+    await PlatformConnection.create({
+      institutionId: "INS0001",
+      platform: "PASSPERCENT",
+      status: "CONNECTED",
+      externalRef: "INS0001",
+      grantTokenEncrypted: encryptCredential("pp_pgrant_test"),
+    });
+    await makeScholarship("INS0001", { listing: { remoteStatus: "published" } });
+
+    registerAdapter(makeFakeAdapter({ sync: capture }));
+    await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+    expect(captured?.scholarships).toBeUndefined();
+
+    registerAdapter(makeFakeAdapter({ sync: capture, scholarshipMethods: true }));
+    await ConnectionService.syncNow("INS0001", "PASSPERCENT", actor);
+    expect(captured?.scholarships).toHaveLength(1);
+    expect(captured?.scholarships?.[0].listing?.remoteStatus).toBe("published");
   });
 
   it("a worklist action refused before the wire comes back as a VACANCY-scoped failure, with no HTTP call at all", async () => {

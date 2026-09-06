@@ -1,10 +1,17 @@
 import "server-only";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { Institution, PlatformConnection, PlatformCredential, SyncRun, Vacancy } from "@/models";
-import type { PlatformConnectionDoc, PlatformCredentialDoc, SyncRunDoc, VacancyDoc } from "@/models";
+import { Institution, PlatformConnection, PlatformCredential, Scholarship, SyncRun, Vacancy } from "@/models";
+import type {
+  PlatformConnectionDoc,
+  PlatformCredentialDoc,
+  ScholarshipDoc,
+  SyncRunDoc,
+  VacancyDoc,
+} from "@/models";
 import {
   PLATFORMS,
   PLATFORM_LABELS,
+  SCHOLARSHIP_MAX_PER_INSTITUTION,
   SYNC_LOCK_STALE_MINUTES,
   SYNC_RUN_KEEP,
   VACANCY_MAX_RECORDS,
@@ -27,6 +34,7 @@ import {
   type PlatformAdapter,
   type RefreshResult,
   type SyncOutcome,
+  type SyncScholarship,
   type SyncSourceData,
   type SyncVacancy,
   type VacancyActionResult,
@@ -34,6 +42,10 @@ import {
 import { ResultService } from "./result.service";
 import { ActivityService } from "./activity.service";
 import { VacancyPublishService, type VacancyPublishOutcome } from "./vacancy-publish.service";
+// Task 9: same one-way direction as `VacancyPublishService` above —
+// `scholarship-publish.service.ts` must never import this file back (see its
+// own docblock).
+import { ScholarshipPublishService, type ScholarshipPublishOutcome } from "./scholarship-publish.service";
 
 const ENTITY_TYPE = "PLATFORM_CONNECTION";
 
@@ -295,6 +307,106 @@ async function loadSyncVacancies(
   });
 
   return { vacancies, truncated };
+}
+
+/** What one service-owned scholarship action did, as a reconciling adapter
+ *  sees it — the exact shape `SyncScholarship.repush`/`close` declare. */
+type ScholarshipActionResult = Awaited<ReturnType<SyncScholarship["close"]>>;
+
+/**
+ * One scholarship action, as a reconciling adapter needs to see it. Mirrors
+ * `runVacancyAction` above — same two RUN-scoped statuses (`>= 500` is
+ * `upstreamError`'s 502; `429` is `RATE_LIMITED`, a fact about the platform
+ * key's budget rather than any one scholarship) and the same reason a
+ * `ConnectorAuthError` is not caught here: `ScholarshipPublishService` never
+ * throws one — Scholarship Hub carries no per-institution grant to revoke
+ * (Ruling B) — so this stays structurally consistent with the vacancy
+ * version rather than because this platform can reach that branch today.
+ */
+async function runScholarshipAction(
+  run: () => Promise<ScholarshipPublishOutcome>,
+): Promise<ScholarshipActionResult> {
+  let outcome: ScholarshipPublishOutcome;
+  try {
+    outcome = await run();
+  } catch (error) {
+    if (error instanceof AppError) {
+      const platformScoped = error.status >= 500 || error.status === 429;
+      return { ok: false, scope: platformScoped ? "RUN" : "SCHOLARSHIP", detail: error.message };
+    }
+    throw error;
+  }
+
+  switch (outcome.status) {
+    case "PUSHED":
+    case "CLOSED":
+      return { ok: true };
+    case "NOT_LISTED":
+      // Nothing was there to close — no HTTP call, nothing failed.
+      return { ok: true };
+    default:
+      // BLOCKED: Scholarship Hub answered and the service has already
+      // written the reason onto the listing, so the institution sees it on
+      // the card too. Reported here so the run says PARTIAL rather than
+      // SUCCESS.
+      return { ok: false, scope: "SCHOLARSHIP", detail: outcome.message };
+  }
+}
+
+/**
+ * The scholarship worklist an adapter's `sync` reconciles — mirrors
+ * `loadSyncVacancies` above for the same reasons: unfiltered (the rule that a
+ * sync never creates a listing lives in the adapter/publish service, not in
+ * this query), sorted oldest-first with `_id` breaking ties so a run's steps
+ * are reproducible and so which rows fall outside the bound is stable, and
+ * bounded by `SCHOLARSHIP_MAX_PER_INSTITUTION` — the same cap
+ * `ScholarshipService.create` already enforces, so this reader cannot see
+ * more than that route can ever produce.
+ *
+ * TENANT-SENSITIVE: `institutionId` scopes the read, and each closure passes
+ * it back into `ScholarshipPublishService`, which scopes its own reads and
+ * writes with it again. A scholarship id is not an authorisation on either
+ * side.
+ */
+async function loadSyncScholarships(
+  institutionId: string,
+  actor: Actor,
+): Promise<{ scholarships: SyncScholarship[]; truncated: boolean }> {
+  // `+ 1` rather than a bare limit, so "exactly at the cap" and "more than
+  // the cap" are distinguishable — a silent truncation reads as "everything
+  // was reconciled".
+  const rows = await Scholarship.find({ institutionId })
+    .select("name status listing")
+    .sort({ createdAt: 1, _id: 1 })
+    .limit(SCHOLARSHIP_MAX_PER_INSTITUTION + 1)
+    .lean<Pick<ScholarshipDoc, "_id" | "name" | "status" | "listing">[]>();
+
+  const truncated = rows.length > SCHOLARSHIP_MAX_PER_INSTITUTION;
+  const scholarships = (truncated ? rows.slice(0, SCHOLARSHIP_MAX_PER_INSTITUTION) : rows).map((row) => {
+    const scholarshipId = String(row._id);
+    return {
+      scholarshipId,
+      name: row.name,
+      status: row.status,
+      listing: row.listing
+        ? {
+            remoteStatus: row.listing.remoteStatus as "published" | "closed",
+            blockedReason: row.listing.blockedReason ?? undefined,
+          }
+        : undefined,
+      // Both actions re-read the scholarship themselves, so the snapshot
+      // above is only ever a plan: a row that changed since the load is
+      // acted on as it now is, or refused. `repush` cannot create a listing
+      // (`allowCreate: false`), which is what keeps a sync from ever being
+      // the thing that first puts a scholarship on Scholarship Hub.
+      repush: () =>
+        runScholarshipAction(() => ScholarshipPublishService.repush(institutionId, scholarshipId, actor)),
+      close: () =>
+        runScholarshipAction(() => ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor)),
+    };
+  });
+
+  return { scholarships, truncated };
 }
 
 /**
@@ -792,6 +904,13 @@ export const ConnectionService = {
       // exactly as before.
       const reconcilesVacancies = Boolean(adapter.createJob && adapter.patchJob && adapter.closeJob);
 
+      // Same capability check, for the scholarship methods: only an adapter
+      // that can actually push a scholarship (Scholarship Hub) gets a
+      // worklist, so eduFleet, PassPercent and FeesBasket — none of which
+      // has a scholarship contract — receive `scholarships: undefined`,
+      // exactly as before.
+      const reconcilesScholarships = Boolean(adapter.upsertScholarship && adapter.withdrawScholarship);
+
       const sourceData: SyncSourceData = {
         institution: institution as unknown as Record<string, unknown>,
         results: publishedResults as unknown as Record<string, unknown>[],
@@ -800,6 +919,10 @@ export const ConnectionService = {
           vacancies: w.vacancies,
           vacanciesTruncated: w.truncated,
         })) : { vacancies: undefined }),
+        ...(reconcilesScholarships ? await loadSyncScholarships(institutionId, actor).then((w) => ({
+          scholarships: w.scholarships,
+          scholarshipsTruncated: w.truncated,
+        })) : { scholarships: undefined }),
       };
 
       const state: ConnectionState = {

@@ -12,6 +12,10 @@ import {
 import { assertOwnedAcademicUnit } from "@/lib/academic/assert-owned";
 import { toPublicScholarship, type PublicScholarship } from "@/lib/scholarship/public-projection";
 import { ActivityService } from "./activity.service";
+// Task 9: one-way dependency, same direction `vacancy.service.ts` already
+// takes on `vacancy-publish.service.ts` — `ScholarshipPublishService` must
+// never import this file back (see its own docblock).
+import { ScholarshipPublishService } from "./scholarship-publish.service";
 
 export type ScholarshipDTO = {
   id: string;
@@ -236,6 +240,14 @@ export const ScholarshipService = {
       performedByName: actor.name,
     });
 
+    // Task 9: an edit to a published scholarship keeps its Hub listing in
+    // step. `pushEdit` never throws — the edit above is already committed,
+    // so "your change was saved" must not collapse into "and the push
+    // failed"; any failure is recorded on the listing instead.
+    if (updated.status === "PUBLISHED") {
+      await ScholarshipPublishService.pushEdit(institutionId, scholarshipId, actor);
+    }
+
     return serialize(enriched);
   },
 
@@ -278,6 +290,16 @@ export const ScholarshipService = {
       performedByName: actor.name,
     });
 
+    // Task 9: the explicit status action drives the Hub listing. `publish`
+    // is the institution's own explicit action — a hard connector error is
+    // allowed to surface to the caller, unlike `update`'s `pushEdit`, which
+    // never throws. `unpublish`/`archive` withdraw the listing the same way.
+    if (action === "publish") {
+      await ScholarshipPublishService.publish(institutionId, scholarshipId, actor);
+    } else {
+      await ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor);
+    }
+
     return serialize(enriched);
   },
 
@@ -288,6 +310,14 @@ export const ScholarshipService = {
   ): Promise<void> {
     await connectToDatabase();
     const before = await findOwned(institutionId, scholarshipId);
+
+    // Task 9: withdraw the Hub listing BEFORE the local row is gone, so a
+    // published scholarship never disappears from IDAP while staying live
+    // and orphaned on Scholarship Hub. Unlike `update`'s `pushEdit`, this is
+    // not wrapped — a hard connector error refuses the delete rather than
+    // risk exactly that orphan. Resolves quietly (`NOT_LISTED`) when there
+    // is nothing to close.
+    await ScholarshipPublishService.pushClose(institutionId, scholarshipId, actor);
 
     await Scholarship.deleteOne({ _id: before._id, institutionId });
 

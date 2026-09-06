@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearDatabase, startTestDatabase, stopTestDatabase } from "../helpers/db";
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { signSession, SESSION_COOKIE } from "@/lib/auth/session";
@@ -11,6 +11,7 @@ import {
 } from "@/app/api/settings/scholarships/[scholarshipId]/route";
 import { POST as publishScholarship } from "@/app/api/settings/scholarships/[scholarshipId]/publish/route";
 import { ScholarshipService } from "@/services/scholarship.service";
+import { ScholarshipPublishService } from "@/services/scholarship-publish.service";
 import { AcademicStructureService } from "@/services/academic-structure.service";
 import type { NextRequest } from "next/server";
 
@@ -65,6 +66,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   (await cookies()).delete(SESSION_COOKIE);
+  vi.restoreAllMocks();
 });
 
 describe("scholarship routes — admin CRUD over real HTTP", () => {
@@ -217,6 +219,14 @@ describe("scholarship routes — admin CRUD over real HTTP", () => {
   });
 
   it("POST …/publish with { action: \"publish\" } publishes", async () => {
+    // Task 9: `setStatus` now also calls `ScholarshipPublishService.publish`,
+    // which requires a Scholarship Hub connection and a fully
+    // Hub-publishable scholarship — neither of which this route test's
+    // `input()` fixture has, nor is Hub connectivity what this test (the
+    // route's own auth/plumbing) is about. Stubbed out the same way
+    // `scholarship-crud.test.ts` and `scholarship-public.test.ts` do.
+    vi.spyOn(ScholarshipPublishService, "publish").mockResolvedValue(undefined as never);
+
     const created = await ScholarshipService.create("INS0001", input(), actor);
     await signIn("INS0001", "INSTITUTION_ADMIN", "admin@infinityschool.edu.in");
 
