@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { createScholarshipSchema, updateScholarshipSchema } from "@/lib/validation/scholarship";
+import { pruneEmptyScholarshipSubdocs } from "@/lib/scholarship/prune-empty-subdocs";
 import type { ScholarshipDTO } from "@/services/scholarship.service";
 import type { AcademicUnitDTO } from "@/services/academic-structure.service";
 import {
@@ -306,10 +307,19 @@ export function ScholarshipForm({
     // and update schemas now, and only `null` survives `JSON.stringify` —
     // `undefined` keys are dropped, which the update schema treats as "leave
     // this field alone" rather than "clear it".
-    const body = {
+    // `pruneEmptyScholarshipSubdocs` drops `benefits`/`eligibility`/`dates`
+    // when the section was never touched: `defaultValues` above seeds them
+    // as non-empty sub-objects (booleans `false`, arrays `[]`), and RHF keeps
+    // those keys in form state even when the user opens nothing. Since
+    // `JSON.stringify` only drops keys whose *value* is `undefined` (not
+    // `false`/`[]`), submitting them as-is would give every save a spurious,
+    // mostly-empty sub-document — a data-hygiene regression against the
+    // pre-Task-10 baseline, where an untouched section left the field
+    // genuinely absent. A section the user DID populate survives untouched.
+    const body = pruneEmptyScholarshipSubdocs({
       ...values,
       academicUnitId: values.academicUnitId === ALL_UNITS ? null : values.academicUnitId,
-    };
+    });
 
     try {
       const response = await fetch(
