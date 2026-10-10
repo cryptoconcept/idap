@@ -6,6 +6,7 @@ export type ApiErrorCode =
   | "CONFLICT"
   | "RATE_LIMITED"
   | "INACTIVE_INSTITUTION"
+  | "UPSTREAM_ERROR"
   | "INTERNAL_ERROR";
 
 const DEFAULT_STATUS: Record<ApiErrorCode, number> = {
@@ -16,6 +17,7 @@ const DEFAULT_STATUS: Record<ApiErrorCode, number> = {
   CONFLICT: 409,
   RATE_LIMITED: 429,
   INACTIVE_INSTITUTION: 403,
+  UPSTREAM_ERROR: 502,
   INTERNAL_ERROR: 500,
 };
 
