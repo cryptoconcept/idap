@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/follow-up-reminders",
       "schedule": "0 2 * * *"
+    },
+    {
+      "path": "/api/cron/scholarship-hub-sync",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

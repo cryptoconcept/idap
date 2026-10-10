@@ -58,6 +58,40 @@ export const APPLICATION_STATUSES = [
 ] as const;
 export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
 
+/**
+ * Mirrors the Scholarship Hub's own application status values VERBATIM
+ * (lowercase, Hub-cased) — never retranslated, so there is no silent
+ * mapping bug between what the Hub sends and what IDAP stores. Excludes
+ * "draft": the Hub never syndicates a draft application (Plan 2A's partner
+ * list endpoint filters it out), so IDAP never sees one.
+ */
+export const HUB_APPLICATION_STATUSES = [
+  "submitted",
+  "under_review",
+  "shortlisted",
+  "additional_info_required",
+  "approved",
+  "rejected",
+  "withdrawn",
+] as const;
+export type HubApplicationStatus = (typeof HUB_APPLICATION_STATUSES)[number];
+
+/**
+ * IDAP's own institution workflow for a Scholarship Hub application —
+ * written once at creation (always "NEW") and thereafter only by the
+ * dashboard (Task 7's `updateReviewStatus`). Separate from `hubStatus`
+ * entirely: a withdrawn-on-Hub application can still carry any reviewStatus
+ * here, by design (see the plan's failure-matrix note in Task 3).
+ */
+export const SCHOLARSHIP_APPLICATION_REVIEW_STATUSES = [
+  "NEW",
+  "UNDER_REVIEW",
+  "SHORTLISTED",
+  "APPROVED",
+  "REJECTED",
+] as const;
+export type ScholarshipApplicationReviewStatus = (typeof SCHOLARSHIP_APPLICATION_REVIEW_STATUSES)[number];
+
 export const SOURCES = ["WEBSITE", "API", "MANUAL"] as const;
 export type Source = (typeof SOURCES)[number];
 
@@ -325,6 +359,13 @@ export const PERMISSIONS = [
   "APPLICATIONS_VIEW",
   "APPLICATIONS_CREATE",
   "APPLICATIONS_DECIDE",
+  // Scholarship Hub applications carry the same applicant-PII sensitivity as
+  // admission applications — a separate permission namespace (not reusing
+  // APPLICATIONS_*) because an institution may want different staff to see
+  // these than its admission pipeline.
+  "SCHOLARSHIP_APPLICATIONS_VIEW",
+  "SCHOLARSHIP_APPLICATIONS_DECIDE",
+  "SCHOLARSHIP_APPLICATIONS_ASSIGN",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -359,8 +400,17 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     "APPLICATIONS_VIEW",
     "APPLICATIONS_CREATE",
     "APPLICATIONS_DECIDE",
+    "SCHOLARSHIP_APPLICATIONS_VIEW",
+    "SCHOLARSHIP_APPLICATIONS_DECIDE",
+    "SCHOLARSHIP_APPLICATIONS_ASSIGN",
   ]),
-  COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP"]),
+  COUNSELOR: new Set([
+    "LEADS_VIEW_OWN",
+    "LEADS_UPDATE",
+    "LEADS_SET_FOLLOWUP",
+    "SCHOLARSHIP_APPLICATIONS_VIEW",
+    "SCHOLARSHIP_APPLICATIONS_DECIDE",
+  ]),
   FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),
 };
 

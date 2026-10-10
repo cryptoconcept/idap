@@ -21,3 +21,4 @@ export { SyncRun, type SyncRunDoc } from "./SyncRun";
 export { Achievement, type AchievementDoc } from "./Achievement";
 export { Alumnus, type AlumnusDoc } from "./Alumnus";
 export { Vacancy, type VacancyDoc } from "./Vacancy";
+export { ScholarshipApplication, type ScholarshipApplicationDoc } from "./ScholarshipApplication";
