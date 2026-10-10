@@ -359,6 +359,11 @@ export const PERMISSIONS = [
   "APPLICATIONS_VIEW",
   "APPLICATIONS_CREATE",
   "APPLICATIONS_DECIDE",
+  // Scholarship Hub applications carry the same applicant-PII sensitivity as
+  // admission applications — a separate permission namespace (not reusing
+  // APPLICATIONS_*) because an institution may want different staff to see
+  // these than its admission pipeline.
+  "SCHOLARSHIP_APPLICATIONS_VIEW",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -393,8 +398,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     "APPLICATIONS_VIEW",
     "APPLICATIONS_CREATE",
     "APPLICATIONS_DECIDE",
+    "SCHOLARSHIP_APPLICATIONS_VIEW",
   ]),
-  COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP"]),
+  COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP", "SCHOLARSHIP_APPLICATIONS_VIEW"]),
   FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),
 };
 
