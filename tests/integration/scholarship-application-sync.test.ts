@@ -178,7 +178,12 @@ describe("upsertFromHubPayload", () => {
     const payload = payloadFor(externalRef);
 
     const results = await Promise.all([upsertFromHubPayload(payload), upsertFromHubPayload(payload)]);
-    expect(results.map((r) => r.kind).sort()).toEqual(["INSERTED", "UPDATED"].sort());
+    // Both calls use the SAME payload (identical hubUpdatedAt), so under the
+    // atomic ordering guard the loser's write no longer matches
+    // `hubUpdatedAt: { $lt: hubUpdatedAt }` (the stored value is now EQUAL,
+    // not less than) and correctly no-ops as STALE — nothing new was written
+    // for the loser; the data was already there from the winner.
+    expect(results.map((r) => r.kind).sort()).toEqual(["INSERTED", "STALE"].sort());
     expect(await ScholarshipApplication.countDocuments({ institutionId, hubApplicationId: payload.hubApplicationId })).toBe(1);
   });
 });

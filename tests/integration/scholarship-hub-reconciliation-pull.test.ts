@@ -112,4 +112,24 @@ describe("runReconciliationPull", () => {
     const result = await runReconciliationPull();
     expect(result).toEqual({ scanned: 0, ingested: 0, cursorAdvanced: false });
   });
+
+  it("one item that fails validation does not kill the run — the batch continues and the good item ingests", async () => {
+    const { externalRef, institutionId } = await setup();
+    // applicant.name is required: true on the model, so this item throws out
+    // of upsertFromHubPayload — the per-item try/catch must swallow it and
+    // move on rather than losing the whole page.
+    const badItem = { ...item(externalRef, "bad1", "2026-09-06T00:00:00.000Z"), applicant: { name: "" } };
+    const goodItem = item(externalRef, "good1", "2026-09-06T00:01:00.000Z");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ items: [badItem, goodItem], nextCursor: "opaque-cursor-mixed", hasMore: false }), { status: 200 })),
+    );
+
+    const result = await runReconciliationPull();
+    expect(result).toEqual({ scanned: 2, ingested: 1, cursorAdvanced: true });
+    expect(await ScholarshipApplication.countDocuments({ institutionId })).toBe(1);
+
+    const credential = await PlatformCredential.findOne({ platform: "SCHOLARSHIP_HUB" }).lean();
+    expect(credential?.applicationsSyncCursor).toBe("opaque-cursor-mixed");
+  });
 });

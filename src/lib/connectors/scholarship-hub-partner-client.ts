@@ -1,4 +1,5 @@
 import "server-only";
+import { connectToDatabase } from "@/lib/db/mongoose";
 import { PlatformCredential } from "@/models";
 import type { PlatformCredentialDoc } from "@/models";
 import { credentialVaultReady, decryptCredential } from "@/lib/security/credentials";
@@ -23,6 +24,7 @@ export type ScholarshipHubPartnerContext = {
  */
 export async function loadScholarshipHubPartnerContext(): Promise<ScholarshipHubPartnerContext> {
   if (!credentialVaultReady()) throw notFound("Scholarship Hub is not configured");
+  await connectToDatabase();
   const credential = await PlatformCredential.findOne({ platform: PLATFORM, active: true })
     .select("+keyEncrypted")
     .lean();
@@ -43,6 +45,7 @@ export async function loadScholarshipHubPartnerContext(): Promise<ScholarshipHub
  */
 export async function loadScholarshipHubWebhookSecret(): Promise<string | null> {
   if (!credentialVaultReady()) return null;
+  await connectToDatabase();
   const credential = await PlatformCredential.findOne({ platform: PLATFORM, active: true })
     .select("+webhookSecretEncrypted")
     .lean();

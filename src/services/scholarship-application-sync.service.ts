@@ -1,5 +1,6 @@
 import "server-only";
 import { Types } from "mongoose";
+import { connectToDatabase } from "@/lib/db/mongoose";
 import { ScholarshipApplication, Scholarship, PlatformConnection, PlatformCredential } from "@/models";
 import { NotificationService } from "./notification.service";
 import { afterResponse } from "@/lib/after-response";
@@ -52,6 +53,8 @@ export async function upsertFromHubPayload(payload: HubApplicationPayload): Prom
   const parsed = parseExternalRef(payload.externalRef);
   if (!parsed) return { kind: "SKIPPED", reason: "MALFORMED_REF" };
   const { institutionId, scholarshipId } = parsed;
+
+  await connectToDatabase();
 
   const connection = await PlatformConnection.findOne({ institutionId, platform: "SCHOLARSHIP_HUB" })
     .select("status")
@@ -116,12 +119,20 @@ export async function upsertFromHubPayload(payload: HubApplicationPayload): Prom
     }
   }
 
+  // Atomic ordering guard: the write only lands if the stored hubUpdatedAt
+  // is still older than this payload's. Without this, two overlapping
+  // runReconciliationPull() calls (a cron pull and a webhook-triggered pull
+  // racing) could have the earlier-read, now-stale pull overwrite the
+  // later-read, newer pull's write unconditionally. "No match" now
+  // legitimately means a newer write already won the race — there is no
+  // delete path for this model, so "truly vanished" cannot happen — so
+  // STALE is the correct, safe outcome here, not an error.
   const updated = await ScholarshipApplication.findOneAndUpdate(
-    { institutionId, hubApplicationId: payload.hubApplicationId },
+    { institutionId, hubApplicationId: payload.hubApplicationId, hubUpdatedAt: { $lt: hubUpdatedAt } },
     { $set: hubOwnedFields },
     { new: true, projection: { _id: 1 } },
   ).lean();
-  if (!updated) throw new Error("scholarship-application sync: row vanished between insert and update");
+  if (!updated) return { kind: "STALE" };
   return { kind: "UPDATED", id: String(updated._id) };
 }
 
@@ -149,6 +160,7 @@ export async function runReconciliationPull(): Promise<{
   cursorAdvanced: boolean;
 }> {
   const ctx = await loadScholarshipHubPartnerContext();
+  await connectToDatabase();
   const stored = await PlatformCredential.findOne({ platform: "SCHOLARSHIP_HUB", active: true })
     .select("applicationsSyncCursor")
     .lean();
@@ -171,21 +183,38 @@ export async function runReconciliationPull(): Promise<{
     scanned += body.items.length;
 
     for (const item of body.items) {
-      const outcome = await upsertFromHubPayload(item);
-      if (outcome.kind === "INSERTED" || outcome.kind === "UPDATED") ingested += 1;
+      try {
+        const outcome = await upsertFromHubPayload(item);
+        if (outcome.kind === "INSERTED" || outcome.kind === "UPDATED") ingested += 1;
+      } catch (error) {
+        // One bad item (e.g. a Hub payload that fails IDAP's own schema
+        // validation) must not kill the whole run — spec §6: "that record
+        // rejected + logged; batch continues." Without this, every later
+        // cron/webhook-triggered pull would restart from the same stale
+        // cursor and die on the same item forever.
+        console.error("[scholarship-hub sync] failed to ingest item", {
+          hubApplicationId: item.hubApplicationId,
+          error,
+        });
+      }
     }
 
     if (body.nextCursor) cursor = body.nextCursor;
+
+    // Persist the cursor after EACH page, not just once at the end — so a
+    // later page's failure (a thrown error, a network blip) never discards
+    // progress already made on earlier pages.
+    if (cursor !== undefined && cursor !== initialCursor) {
+      await PlatformCredential.updateOne(
+        { platform: "SCHOLARSHIP_HUB" },
+        { $set: { applicationsSyncCursor: cursor } },
+      );
+    }
+
     if (!body.hasMore) break;
   }
 
   const cursorAdvanced = cursor !== undefined && cursor !== initialCursor;
-  if (cursorAdvanced) {
-    await PlatformCredential.updateOne(
-      { platform: "SCHOLARSHIP_HUB" },
-      { $set: { applicationsSyncCursor: cursor } },
-    );
-  }
 
   return { scanned, ingested, cursorAdvanced };
 }
