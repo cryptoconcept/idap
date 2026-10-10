@@ -28,6 +28,19 @@ export const NotificationService = {
     }));
   },
 
+  async notifyNewHubApplication(input: {
+    institutionId: string;
+    applicantName: string;
+    scholarshipTitle: string;
+  }) {
+    await dispatch(input.institutionId, (pushToken) => ({
+      pushToken,
+      title: "New scholarship application",
+      body: `${input.applicantName} — ${input.scholarshipTitle}`,
+      data: { type: "scholarship-application" },
+    }));
+  },
+
   async notifyNewLead(input: {
     institutionId: string;
     leadNumber: string;
