@@ -14,7 +14,7 @@
 
 - Work only inside `/Users/automicai/AEMPlatform`. Never touch `/Users/automicai/scholarship-hub` — that is Plan 2A's repo, already built separately.
 - **A completely separate, unrelated body of uncommitted work may exist in this working directory at execution time** (a UI-uplift effort, documented in `docs/platform-uplift-plan.md` if present) — it is NOT part of this plan, must NEVER be touched, staged, or committed alongside this plan's work, and this plan's own worktree (created fresh from the `main` branch's last commit) will not contain it regardless. If `git status` ever shows files this plan did not itself modify, stop and ask before touching them.
-- **The live partner contract this plan consumes** (built by Plan 2A, committed to scholarship-hub main): `GET /api/partner/applications?since=<cursor>&limit=<1-200,default 50>` → `{items: PartnerApplicationDTO[], nextCursor: string|null}` where `PartnerApplicationDTO = {hubApplicationId, externalRef, scholarshipTitle, applicant:{name,email?,mobile?}, answers, documents:[{key,label,filename,contentType}], status, applicationNo?, submittedAt?, withdrawnAt?, hubUpdatedAt}`. `nextCursor` is an opaque base64url string (`base64url(updatedAtISO|hubApplicationId)`) — treat it as opaque EXCEPT where Task 4 explicitly needs to construct one from a known item (documented there as a deliberate, flagged coupling to Plan 2A's exact format). `GET /api/partner/applications/:hubApplicationId/documents/:key/file` streams one document's raw bytes. `PUT /api/partner/webhook {url}` → `{webhookUrl, secret}` (called once, manually, during deploy setup — not by this plan's code). The inbound webhook IDAP will receive: `POST`, headers `X-SH-Signature: sha256=<hex>` (HMAC-SHA256 of the raw body) and `X-SH-Timestamp: <unix seconds>`, body `{event:"application.changed", externalRef, hubApplicationId, changedAt}`.
+- **The live partner contract this plan consumes** (built by Plan 2A, committed to scholarship-hub main — this contract was CORRECTED during 2A's final whole-branch review, after this plan's tasks were first drafted; two fields below differ from what an earlier draft of this plan assumed, and every task below has already been updated to match): `GET /api/partner/applications?since=<cursor>&limit=<1-200,default 50>` → `{items: PartnerApplicationDTO[], nextCursor: string|null, hasMore: boolean}` where `PartnerApplicationDTO = {hubApplicationId, externalRef, scholarshipTitle, applicant:{name,email?,mobile?}, answers, documents:[{key,label,filename,contentType}], documentsReadable: boolean, status, applicationNo?, submittedAt?, withdrawnAt?, hubUpdatedAt}`. **`nextCursor` is a real, usable, opaque base64url cursor whenever the page has ≥1 item — including the terminal/non-full page** (it is `null` only for a genuinely empty page). IDAP must persist/reuse `nextCursor` verbatim whenever it is non-null, and use `hasMore` — never `nextCursor`'s nullness — as the sole signal for whether to keep polling. (This supersedes the old behavior where a terminal page returned `nextCursor: null` and a consumer had to reconstruct one itself; no such reconstruction is needed or correct anymore — treat `nextCursor` as fully opaque, never decode or construct it.) `documentsReadable` is `false` exactly when `status` is `"withdrawn"` (mirrors the gate the document-streaming endpoint itself enforces — a withdrawn application's documents 404; this flag never lies about whether a fetch would succeed, so the UI/document-proxy consumer can treat a 404 on a `documentsReadable:false` row as an expected state, not an error to retry). `GET /api/partner/applications/:hubApplicationId/documents/:key/file` streams one document's raw bytes (404, not an error, for a withdrawn application's document). `PUT /api/partner/webhook {url}` → `{webhookUrl, secret}` (called once, manually, during deploy setup — not by this plan's code). **The inbound webhook IDAP will receive:** `POST`, headers `X-SH-Signature: sha256=<hex>` and `X-SH-Timestamp: <unix seconds>`. **The HMAC is computed over `${timestampSeconds}.${rawBody}` (Stripe-style, a literal `.` between the `X-SH-Timestamp` value and the exact raw request body string) — NOT the raw body alone.** Body: `{event:"application.changed", externalRef, hubApplicationId, changedAt}`.
 - `externalRef` format: `IDAP:{institutionId}:{scholarshipId}` (institutionId alphanumeric, scholarshipId a 24-char hex Mongo id).
 - Tenant scoping: every `ScholarshipApplication` row is scoped by `institutionId` (a plain string, mirroring `Lead`/`Application`) — reuse `tenantFilter`/`requireTenantUser`/`requirePermission` from `src/lib/tenant`, never a hand-rolled check.
 - `reviewStatus` is IDAP-owned: the ingestion core (Task 3) writes it exactly once, at creation, to `"NEW"`. No sync call — webhook or pull — may ever touch it again. Only the dashboard (Task 7) changes it after that.
@@ -930,24 +930,26 @@ function item(externalRef: string, hubApplicationId: string, hubUpdatedAt: strin
 }
 
 describe("runReconciliationPull", () => {
-  it("ingests every item on a single page and advances the stored cursor", async () => {
+  it("ingests every item on a single (terminal) page and advances the stored cursor", async () => {
     const { externalRef, institutionId } = await setup();
     const items = [item(externalRef, "a1", "2026-09-06T00:00:00.000Z"), item(externalRef, "a2", "2026-09-06T00:01:00.000Z")];
 
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 })));
+    // Terminal page: hasMore is false, but nextCursor is still a REAL value
+    // (the list endpoint only returns null for a genuinely empty page).
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items, nextCursor: "opaque-cursor-terminal", hasMore: false }), { status: 200 })));
 
     const result = await runReconciliationPull();
     expect(result).toEqual({ scanned: 2, ingested: 2, cursorAdvanced: true });
     expect(await ScholarshipApplication.countDocuments({ institutionId })).toBe(2);
 
     const credential = await PlatformCredential.findOne({ platform: "SCHOLARSHIP_HUB" }).lean();
-    expect(credential?.applicationsSyncCursor).toBeDefined();
+    expect(credential?.applicationsSyncCursor).toBe("opaque-cursor-terminal");
   });
 
-  it("follows nextCursor across multiple pages until caught up", async () => {
+  it("follows hasMore across multiple pages until caught up", async () => {
     const { externalRef } = await setup();
-    const page1 = { items: [item(externalRef, "a1", "2026-09-06T00:00:00.000Z")], nextCursor: "opaque-cursor-1" };
-    const page2 = { items: [item(externalRef, "a2", "2026-09-06T00:01:00.000Z")], nextCursor: null };
+    const page1 = { items: [item(externalRef, "a1", "2026-09-06T00:00:00.000Z")], nextCursor: "opaque-cursor-1", hasMore: true };
+    const page2 = { items: [item(externalRef, "a2", "2026-09-06T00:01:00.000Z")], nextCursor: "opaque-cursor-2", hasMore: false };
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -973,7 +975,7 @@ describe("runReconciliationPull", () => {
       "fetch",
       vi.fn(async (url: string) => {
         capturedUrl = url;
-        return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+        return new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 });
       }),
     );
 
@@ -984,11 +986,19 @@ describe("runReconciliationPull", () => {
   it("is idempotent: re-ingesting the same page a second time does not create duplicates", async () => {
     const { externalRef, institutionId } = await setup();
     const items = [item(externalRef, "a1", "2026-09-06T00:00:00.000Z")];
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items, nextCursor: null }), { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items, nextCursor: "opaque-cursor-1", hasMore: false }), { status: 200 })));
 
     await runReconciliationPull();
     await runReconciliationPull();
     expect(await ScholarshipApplication.countDocuments({ institutionId })).toBe(1);
+  });
+
+  it("an empty page returns nextCursor:null and does not advance or crash on a missing cursor", async () => {
+    await setup();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 })));
+
+    const result = await runReconciliationPull();
+    expect(result).toEqual({ scanned: 0, ingested: 0, cursorAdvanced: false });
   });
 });
 ```
@@ -1009,26 +1019,20 @@ import { PlatformCredential } from "@/models";
 type PartnerApplicationDTO = HubApplicationPayload; // Plan 2A's wire shape matches HubApplicationPayload exactly.
 
 /**
- * Builds the SAME cursor format Plan 2A's list endpoint itself produces
- * (`base64url(updatedAtISO|hubApplicationId)`) from the last item on a page.
- * This is a deliberate, FLAGGED coupling to that repo's exact encoding — if
- * Plan 2A's cursor format ever changes, this breaks. It exists because the
- * Hub only returns a `nextCursor` on a FULL page; on the final (possibly
- * partial) page `nextCursor` is null, and without this IDAP would have
- * nowhere to resume from except re-scanning everything on the next run.
- */
-function cursorAfter(item: PartnerApplicationDTO): string {
-  return Buffer.from(`${item.hubUpdatedAt}|${item.hubApplicationId}`, "utf8").toString("base64url");
-}
-
-/**
  * The reconciliation backbone — called by the cron (below) on a schedule,
  * and by the webhook receiver (Task 5) immediately on a valid signed ping.
  * Walks the partner list endpoint from the stored cursor until caught up
- * (a page whose `nextCursor` is null), ingesting every item through the
- * SAME `upsertFromHubPayload` the webhook path uses — this is what makes a
+ * (a page whose `hasMore` is false), ingesting every item through the SAME
+ * `upsertFromHubPayload` the webhook path uses — this is what makes a
  * missed or failed webhook non-fatal: the next scheduled run of this same
  * function backfills it.
+ *
+ * The list endpoint always returns a real, usable `nextCursor` whenever a
+ * page has ≥1 item (even the terminal/non-full page) — `nextCursor` is
+ * `null` only for a genuinely empty page. `hasMore` is the sole signal for
+ * whether another page exists; IDAP never decodes or reconstructs a
+ * cursor itself, it only ever persists and replays the opaque value the
+ * Hub hands back.
  */
 export async function runReconciliationPull(): Promise<{
   scanned: number;
@@ -1046,15 +1050,15 @@ export async function runReconciliationPull(): Promise<{
   let ingested = 0;
 
   // Bounded loop: a safety cap on pages so a misbehaving upstream (an
-  // endless `nextCursor` chain) can never hang this call forever. 50 pages
-  // at 200/page is 10,000 applications per run — far beyond one poll cycle's
-  // realistic volume.
+  // endless `hasMore: true` chain) can never hang this call forever. 50
+  // pages at 200/page is 10,000 applications per run — far beyond one poll
+  // cycle's realistic volume.
   for (let page = 0; page < 50; page += 1) {
     const query = cursor ? `?since=${encodeURIComponent(cursor)}&limit=200` : `?limit=200`;
     const resp = await ctx.http(`/api/partner/applications${query}`, { method: "GET", token: ctx.platformKey });
     if (resp.status !== 200) break;
 
-    const body = resp.body as { items: PartnerApplicationDTO[]; nextCursor: string | null };
+    const body = resp.body as { items: PartnerApplicationDTO[]; nextCursor: string | null; hasMore: boolean };
     scanned += body.items.length;
 
     for (const item of body.items) {
@@ -1062,10 +1066,8 @@ export async function runReconciliationPull(): Promise<{
       if (outcome.kind === "INSERTED" || outcome.kind === "UPDATED") ingested += 1;
     }
 
-    if (body.items.length > 0) {
-      cursor = cursorAfter(body.items[body.items.length - 1]!);
-    }
-    if (!body.nextCursor) break;
+    if (body.nextCursor) cursor = body.nextCursor;
+    if (!body.hasMore) break;
   }
 
   const cursorAdvanced = cursor !== undefined && cursor !== initialCursor;
@@ -1158,7 +1160,7 @@ describe("GET /api/cron/scholarship-hub-sync", () => {
       platform: "SCHOLARSHIP_HUB", keyEncrypted: encryptCredential("sh_pkey_test"),
       baseUrl: "https://hub.test", active: true,
     });
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 })));
 
     const { GET } = await import("@/app/api/cron/scholarship-hub-sync/route");
     const response = await GET(cronRequest("test-cron-secret"));
@@ -1250,8 +1252,14 @@ async function withSecret() {
   });
 }
 
-function sign(body: string, secret = SECRET): string {
-  return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
+/**
+ * Signs `${timestampSeconds}.${rawBody}` (Stripe-style) — the Hub's
+ * dispatcher signs this exact concatenation, not the raw body alone, so the
+ * timestamp itself is covered by the signature and can't be swapped onto a
+ * captured valid signature to defeat the replay window.
+ */
+function sign(body: string, timestampSeconds: string, secret = SECRET): string {
+  return `sha256=${createHmac("sha256", secret).update(`${timestampSeconds}.${body}`).digest("hex")}`;
 }
 
 function webhookRequest(body: string, opts: { signature?: string; timestamp?: string } = {}) {
@@ -1272,7 +1280,7 @@ describe("POST /api/webhooks/scholarship-hub", () => {
   it("401s when no webhook secret has been configured yet", async () => {
     const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
     const now = String(Math.floor(Date.now() / 1000));
-    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload), timestamp: now }));
+    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, now), timestamp: now }));
     expect(response.status).toBe(401);
   });
 
@@ -1288,15 +1296,18 @@ describe("POST /api/webhooks/scholarship-hub", () => {
     await withSecret();
     const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
     const now = String(Math.floor(Date.now() / 1000));
-    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, "sh_whsec_wrong"), timestamp: now }));
+    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, now, "sh_whsec_wrong"), timestamp: now }));
     expect(response.status).toBe(401);
   });
 
-  it("401s on a timestamp outside the replay window", async () => {
+  it("401s on a timestamp outside the replay window, even when genuinely signed with that stale timestamp", async () => {
     await withSecret();
     const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
+    // A real sender would sign `${old}.${body}` and send `X-SH-Timestamp: old`
+    // together — consistent, validly-signed, but stale. This must fail at
+    // the replay-window check, not the signature check.
     const old = String(Math.floor(Date.now() / 1000) - 10_000);
-    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload), timestamp: old }));
+    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, old), timestamp: old }));
     expect(response.status).toBe(401);
   });
 
@@ -1305,7 +1316,7 @@ describe("POST /api/webhooks/scholarship-hub", () => {
     const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
     const now = String(Math.floor(Date.now() / 1000));
     const badBody = JSON.stringify({ event: "application.changed" }); // missing required fields
-    const response = await POST(webhookRequest(badBody, { signature: sign(badBody), timestamp: now }));
+    const response = await POST(webhookRequest(badBody, { signature: sign(badBody, now), timestamp: now }));
     expect(response.status).toBe(400);
   });
 
@@ -1317,18 +1328,32 @@ describe("POST /api/webhooks/scholarship-hub", () => {
     // signature was computed over `validPayload`, so it must NOT verify
     // against this semantically-equal-but-byte-different body.
     const respaced = validPayload.replace('"event"', '"event" ');
-    const response = await POST(webhookRequest(respaced, { signature: sign(validPayload), timestamp: now }));
+    const response = await POST(webhookRequest(respaced, { signature: sign(validPayload, now), timestamp: now }));
+    expect(response.status).toBe(401);
+  });
+
+  it("401s when the signature was computed over a DIFFERENT timestamp than the one sent in the header", async () => {
+    await withSecret();
+    const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
+    const now = String(Math.floor(Date.now() / 1000));
+    const otherTimestamp = String(Number(now) - 1);
+    // Proves the timestamp is genuinely covered by the signature: signing
+    // with one timestamp and presenting a different one in the header (even
+    // one still inside the replay window) must fail verification — a
+    // captured valid signature can no longer be replayed with a fresh
+    // X-SH-Timestamp.
+    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, otherTimestamp), timestamp: now }));
     expect(response.status).toBe(401);
   });
 
   it("triggers a reconciliation pull and returns 200 on a validly signed, well-formed ping", async () => {
     await withSecret();
-    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 }));
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ items: [], nextCursor: null, hasMore: false }), { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
 
     const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
     const now = String(Math.floor(Date.now() / 1000));
-    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload), timestamp: now }));
+    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, now), timestamp: now }));
 
     expect(response.status).toBe(200);
     // The pull hit the Hub's list endpoint — proof it actually ran, not just
@@ -1338,15 +1363,14 @@ describe("POST /api/webhooks/scholarship-hub", () => {
 
   it("returns 500 (so the Hub retries) when the triggered pull itself fails", async () => {
     await withSecret();
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 500 })));
-    // A 500 from the Hub's own list endpoint makes runReconciliationPull's
-    // loop break early but not throw — so force a real throw instead by
-    // making fetch itself reject, simulating a network failure.
+    // Force a real throw (not just a non-2xx response) to simulate a
+    // network failure, which is what makes runReconciliationPull itself
+    // reject rather than just returning a PARTIAL/short result.
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
 
     const { POST } = await import("@/app/api/webhooks/scholarship-hub/route");
     const now = String(Math.floor(Date.now() / 1000));
-    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload), timestamp: now }));
+    const response = await POST(webhookRequest(validPayload, { signature: sign(validPayload, now), timestamp: now }));
     expect(response.status).toBe(500);
   });
 });
@@ -1387,15 +1411,24 @@ const webhookPayloadSchema = z.object({
 });
 
 /**
- * Verifies against the RAW body text — not a re-`JSON.stringify`d one,
- * which could differ in whitespace/key order from what was actually
- * signed. Mirrors `verifySecret`'s (`src/lib/security/tokens.ts`)
+ * Verifies against `${timestampHeader}.${rawBody}` (Stripe-style) — NOT the
+ * raw body alone. The timestamp value is the literal `X-SH-Timestamp`
+ * header string, taken as-is (not re-formatted), concatenated with a `.`
+ * then the exact raw body text — not a re-`JSON.stringify`d one, which
+ * could differ in whitespace/key order from what was actually signed.
+ * Covering the timestamp in the signature is what makes the replay window
+ * below meaningful: a captured valid signature can no longer be replayed
+ * with a fresh `X-SH-Timestamp`, because changing the timestamp changes
+ * what the signature must cover.
+ *
+ * Mirrors `verifySecret`'s (`src/lib/security/tokens.ts`)
  * length-check-before-`timingSafeEqual` shape: `timingSafeEqual` throws on
  * unequal-length buffers, so the length check must come first.
  */
-function verifySignature(rawBody: string, header: string | null, secret: string): boolean {
+function verifySignature(rawBody: string, timestampHeader: string, header: string | null, secret: string): boolean {
   if (!header?.startsWith("sha256=")) return false;
-  const expectedHex = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const signedPayload = `${timestampHeader}.${rawBody}`;
+  const expectedHex = createHmac("sha256", secret).update(signedPayload).digest("hex");
   const candidate = Buffer.from(header.slice("sha256=".length), "hex");
   const expected = Buffer.from(expectedHex, "hex");
   if (candidate.length === 0 || candidate.length !== expected.length) return false;
@@ -1405,11 +1438,13 @@ function verifySignature(rawBody: string, header: string | null, secret: string)
 /**
  * IDAP's first externally-reachable inbound POST receiver. Order of checks
  * is deliberate: rate limit and body-size cap first (cheap, protects
- * against flooding before any crypto work), THEN signature (the real
- * authentication — nothing below this line runs for an unsigned request),
- * THEN timestamp (replay protection), THEN shape validation, THEN the
- * actual work. No branch below the signature check can be reached without
- * a valid HMAC over this exact body.
+ * against flooding before any crypto work), THEN signature — which now
+ * requires the raw `X-SH-Timestamp` header value as an input, so that
+ * header is read (but NOT yet validated as "recent") before the signature
+ * check runs — THEN the replay-window check on that same timestamp value,
+ * THEN shape validation, THEN the actual work. No branch below the
+ * signature check can be reached without a valid HMAC over this exact
+ * body AND this exact timestamp.
  */
 export async function POST(request: NextRequest) {
   const ip = getClientIp(request);
@@ -1426,12 +1461,12 @@ export async function POST(request: NextRequest) {
   const secret = await loadScholarshipHubWebhookSecret();
   if (!secret) return new Response(null, { status: 401 });
 
-  if (!verifySignature(rawBody, request.headers.get("x-sh-signature"), secret)) {
+  const timestampHeader = request.headers.get("x-sh-timestamp");
+  if (!timestampHeader || !verifySignature(rawBody, timestampHeader, request.headers.get("x-sh-signature"), secret)) {
     return new Response(null, { status: 401 });
   }
 
-  const timestampHeader = request.headers.get("x-sh-timestamp");
-  const timestamp = timestampHeader ? Number(timestampHeader) : NaN;
+  const timestamp = Number(timestampHeader);
   if (!Number.isFinite(timestamp) || Math.abs(Date.now() / 1000 - timestamp) > SIGNATURE_WINDOW_SECONDS) {
     return new Response(null, { status: 401 });
   }
