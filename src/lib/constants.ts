@@ -364,6 +364,8 @@ export const PERMISSIONS = [
   // APPLICATIONS_*) because an institution may want different staff to see
   // these than its admission pipeline.
   "SCHOLARSHIP_APPLICATIONS_VIEW",
+  "SCHOLARSHIP_APPLICATIONS_DECIDE",
+  "SCHOLARSHIP_APPLICATIONS_ASSIGN",
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 
@@ -399,8 +401,16 @@ export const ROLE_PERMISSIONS: Record<UserRole, ReadonlySet<Permission>> = {
     "APPLICATIONS_CREATE",
     "APPLICATIONS_DECIDE",
     "SCHOLARSHIP_APPLICATIONS_VIEW",
+    "SCHOLARSHIP_APPLICATIONS_DECIDE",
+    "SCHOLARSHIP_APPLICATIONS_ASSIGN",
   ]),
-  COUNSELOR: new Set(["LEADS_VIEW_OWN", "LEADS_UPDATE", "LEADS_SET_FOLLOWUP", "SCHOLARSHIP_APPLICATIONS_VIEW"]),
+  COUNSELOR: new Set([
+    "LEADS_VIEW_OWN",
+    "LEADS_UPDATE",
+    "LEADS_SET_FOLLOWUP",
+    "SCHOLARSHIP_APPLICATIONS_VIEW",
+    "SCHOLARSHIP_APPLICATIONS_DECIDE",
+  ]),
   FRONT_DESK: new Set(["LEADS_VIEW_OWN", "LEADS_CREATE"]),
 };
 
