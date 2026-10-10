@@ -4,6 +4,8 @@ import { startTestDatabase, stopTestDatabase, clearDatabase } from "../helpers/d
 import { makeInstitution, makeUser } from "../helpers/factories";
 import { ScholarshipApplication, Activity } from "@/models";
 import { ScholarshipApplicationService } from "@/services/scholarship-application.service";
+import { scholarshipApplicationVisibilityFilter } from "@/lib/tenant/permissions";
+import type { CurrentUser } from "@/lib/auth/current-user";
 
 const actor = { id: "6a887abd755db527bea51204", name: "Infinity Admissions" };
 
@@ -82,6 +84,90 @@ describe("ScholarshipApplicationService.assign", () => {
         actor,
       }),
     ).rejects.toThrow();
+  });
+
+  it("rejects assigning to a non-existent user id", async () => {
+    const application = await makeApplication("INS0001");
+    await expect(
+      ScholarshipApplicationService.assign({
+        tenantClause: { institutionId: "INS0001" },
+        id: String(application._id),
+        assignedTo: String(new Types.ObjectId()),
+        actor,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects assigning to a user from a different institution", async () => {
+    const otherInstitutionUser = await makeUser("INS0002", "COUNSELOR");
+    const application = await makeApplication("INS0001");
+    await expect(
+      ScholarshipApplicationService.assign({
+        tenantClause: { institutionId: "INS0001" },
+        id: String(application._id),
+        assignedTo: String(otherInstitutionUser._id),
+        actor,
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects assigning to a user with role FRONT_DESK", async () => {
+    const frontDesk = await makeUser("INS0001", "FRONT_DESK");
+    const application = await makeApplication("INS0001");
+    await expect(
+      ScholarshipApplicationService.assign({
+        tenantClause: { institutionId: "INS0001" },
+        id: String(application._id),
+        assignedTo: String(frontDesk._id),
+        actor,
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("scholarshipApplicationVisibilityFilter (mirroring leads)", () => {
+  it("a COUNSELOR sees applications assigned to them and unassigned ones, but not another counselor's", async () => {
+    const counselorA = await makeUser("INS0001", "COUNSELOR", "counselor-a@example.test");
+    const counselorB = await makeUser("INS0001", "COUNSELOR", "counselor-b@example.test");
+    const mine = await makeApplication("INS0001", { assignedTo: String(counselorA._id) });
+    const unassigned = await makeApplication("INS0001");
+    const theirs = await makeApplication("INS0001", { assignedTo: String(counselorB._id) });
+
+    const counselorUser: CurrentUser = {
+      id: String(counselorA._id),
+      name: "Counselor A",
+      email: "counselor-a@example.test",
+      role: "COUNSELOR",
+      institutionId: "INS0001",
+    };
+    const clause = { institutionId: "INS0001", ...scholarshipApplicationVisibilityFilter(counselorUser) };
+
+    const result = await ScholarshipApplicationService.list(clause, {});
+    expect(result.items.map((i) => i.id).sort()).toEqual([String(mine._id), String(unassigned._id)].sort());
+
+    const gotMine = await ScholarshipApplicationService.get(clause, String(mine._id));
+    expect(gotMine.id).toBe(String(mine._id));
+    const gotUnassigned = await ScholarshipApplicationService.get(clause, String(unassigned._id));
+    expect(gotUnassigned.id).toBe(String(unassigned._id));
+
+    await expect(ScholarshipApplicationService.get(clause, String(theirs._id))).rejects.toThrow();
+  });
+
+  it("a role holding SCHOLARSHIP_APPLICATIONS_ASSIGN (INSTITUTION_ADMIN) sees everything, unfiltered", async () => {
+    const counselor = await makeUser("INS0001", "COUNSELOR");
+    const theirs = await makeApplication("INS0001", { assignedTo: String(counselor._id) });
+
+    const adminUser: CurrentUser = {
+      id: String(new Types.ObjectId()),
+      name: "Admin",
+      email: "admin@example.test",
+      role: "INSTITUTION_ADMIN",
+      institutionId: "INS0001",
+    };
+    const clause = { institutionId: "INS0001", ...scholarshipApplicationVisibilityFilter(adminUser) };
+
+    const got = await ScholarshipApplicationService.get(clause, String(theirs._id));
+    expect(got.id).toBe(String(theirs._id));
   });
 });
 

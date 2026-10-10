@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
-import { hasPermission } from "@/lib/tenant/permissions";
+import { hasPermission, scholarshipApplicationVisibilityFilter } from "@/lib/tenant/permissions";
 import { requireTenantUserPage, tenantFilter } from "@/lib/tenant";
 import { AppError } from "@/lib/api/errors";
 import { ScholarshipApplicationService } from "@/services/scholarship-application.service";
@@ -20,10 +20,11 @@ export default async function ScholarshipApplicationDetailPage(
   if (!hasPermission(user, "SCHOLARSHIP_APPLICATIONS_VIEW")) redirect("/dashboard");
   const { id } = await props.params;
   const clause = tenantFilter(user);
+  const filter = { ...clause, ...scholarshipApplicationVisibilityFilter(user) };
 
   let application;
   try {
-    application = await ScholarshipApplicationService.get(clause, id);
+    application = await ScholarshipApplicationService.get(filter, id);
   } catch (error) {
     // An application outside this tenant, or an id that is not an id at all,
     // is "no such page". Anything else is a real failure and must not be masked.

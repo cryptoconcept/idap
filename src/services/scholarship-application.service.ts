@@ -1,10 +1,10 @@
 import "server-only";
 import { Types, type FilterQuery } from "mongoose";
 import { connectToDatabase } from "@/lib/db/mongoose";
-import { ScholarshipApplication } from "@/models";
+import { ScholarshipApplication, User } from "@/models";
 import type { ScholarshipApplicationDoc } from "@/models";
 import { ActivityService } from "./activity.service";
-import { notFound } from "@/lib/api/errors";
+import { notFound, validationError } from "@/lib/api/errors";
 import type { ScholarshipApplicationQuery } from "@/lib/validation/scholarship-application";
 import type { HubApplicationStatus, ScholarshipApplicationReviewStatus } from "@/lib/constants";
 import { escapeRegex } from "@/lib/utils/serialize";
@@ -111,6 +111,34 @@ export const ScholarshipApplicationService = {
   }): Promise<ScholarshipApplicationDTO> {
     await connectToDatabase();
     if (!Types.ObjectId.isValid(input.id)) throw notFound("Scholarship application not found");
+
+    // Unassigning (assignedTo: null) needs no validation — only assigning
+    // TO someone requires proving they're a real, active counselor/admin at
+    // this same institution, mirroring LeadService.assign.
+    if (input.assignedTo) {
+      if (!Types.ObjectId.isValid(input.assignedTo)) {
+        throw validationError("assignedTo: not a valid id");
+      }
+      const existing = await ScholarshipApplication.findOne({ _id: input.id, ...input.tenantClause })
+        .select("institutionId")
+        .lean();
+      if (!existing) throw notFound("Scholarship application not found");
+
+      const target = await User.findOne({
+        _id: input.assignedTo,
+        institutionId: (existing as ScholarshipApplicationDoc).institutionId,
+      })
+        .select("role active")
+        .lean();
+      if (!target) throw notFound("Scholarship application not found");
+      if (target.role !== "INSTITUTION_ADMIN" && target.role !== "COUNSELOR") {
+        throw validationError("assignedTo: must be a counselor or admin at this institution");
+      }
+      if (target.active === false) {
+        throw validationError("assignedTo: this account is deactivated");
+      }
+    }
+
     const updated = await ScholarshipApplication.findOneAndUpdate(
       { _id: input.id, ...input.tenantClause },
       input.assignedTo

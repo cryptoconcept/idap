@@ -39,3 +39,17 @@ export function assertOwnsLead(
   if (user.role === "INSTITUTION_ADMIN") return;
   if (lead.assignedTo !== user.id) throw notFound("Enquiry not found");
 }
+
+/**
+ * Mirrors `leadVisibilityFilter`. There is no SCHOLARSHIP_APPLICATIONS_VIEW_ALL
+ * permission — SCHOLARSHIP_APPLICATIONS_ASSIGN is the natural "sees
+ * everything" gate instead, since only INSTITUTION_ADMIN holds it today and
+ * a counselor works the applications assigned to them while reassignment is
+ * an admin action. A role holding ASSIGN sees every application; otherwise
+ * the query is scoped to applications assigned to this user plus unassigned
+ * ones.
+ */
+export function scholarshipApplicationVisibilityFilter(user: CurrentUser): Record<string, unknown> {
+  if (hasPermission(user, "SCHOLARSHIP_APPLICATIONS_ASSIGN")) return {};
+  return { $or: [{ assignedTo: user.id }, { assignedTo: null }] };
+}

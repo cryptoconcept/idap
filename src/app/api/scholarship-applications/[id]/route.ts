@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { requireApiUser, tenantFilter } from "@/lib/tenant";
-import { requirePermission } from "@/lib/tenant/permissions";
+import { requirePermission, scholarshipApplicationVisibilityFilter } from "@/lib/tenant/permissions";
 import { assertSameOrigin } from "@/lib/api/csrf";
 import { updateScholarshipApplicationReviewStatusSchema } from "@/lib/validation/scholarship-application";
 import { ScholarshipApplicationService } from "@/services/scholarship-application.service";
@@ -22,7 +22,7 @@ export async function PATCH(
     const { reviewStatus } = updateScholarshipApplicationReviewStatusSchema.parse(body);
 
     const scholarshipApplication = await ScholarshipApplicationService.updateReviewStatus({
-      tenantClause: tenantFilter(user),
+      tenantClause: { ...tenantFilter(user), ...scholarshipApplicationVisibilityFilter(user) },
       id,
       reviewStatus,
       actor: { id: user.id, name: user.name },

@@ -4,6 +4,7 @@ import { ScholarshipApplicationService } from "@/services/scholarship-applicatio
 import { scholarshipApplicationQuerySchema } from "@/lib/validation/scholarship-application";
 import { HUB_APPLICATION_STATUSES, SCHOLARSHIP_APPLICATION_REVIEW_STATUSES } from "@/lib/constants";
 import { tenantFilter } from "@/lib/tenant";
+import { scholarshipApplicationVisibilityFilter } from "@/lib/tenant/permissions";
 import type { CurrentUser } from "@/lib/auth/current-user";
 import { PageHeader } from "@/components/shared/page-header";
 import { FilterBar, type FilterDefinition } from "@/components/shared/filter-bar";
@@ -23,7 +24,7 @@ export async function ScholarshipApplicationsListView({
     Object.fromEntries(Object.entries(searchParams).map(([key, value]) => [key, Array.isArray(value) ? value[0] : value])),
   );
 
-  const clause = tenantFilter(user);
+  const clause = { ...tenantFilter(user), ...scholarshipApplicationVisibilityFilter(user) };
   const result = await ScholarshipApplicationService.list(clause, query);
 
   const filters: FilterDefinition[] = [

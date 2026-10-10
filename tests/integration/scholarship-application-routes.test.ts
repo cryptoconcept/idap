@@ -24,11 +24,11 @@ async function signIn(institutionId: string, role: "INSTITUTION_ADMIN" | "COUNSE
   return user;
 }
 
-async function makeApplication(institutionId: string) {
+async function makeApplication(institutionId: string, overrides: Record<string, unknown> = {}) {
   return ScholarshipApplication.create({
     institutionId, scholarshipId: new Types.ObjectId(), externalRef: `IDAP:${institutionId}:${new Types.ObjectId().toHexString()}`,
     hubApplicationId: new Types.ObjectId().toHexString(), applicant: { name: "Asha Rao" }, hubStatus: "submitted",
-    hubUpdatedAt: new Date(), lastSyncedAt: new Date(),
+    hubUpdatedAt: new Date(), lastSyncedAt: new Date(), ...overrides,
   });
 }
 
@@ -57,6 +57,43 @@ describe("PATCH /api/scholarship-applications/[id]", () => {
       params: Promise.resolve({ id: String(application._id) }),
     });
     expect(response.status).toBe(403);
+  });
+
+  it("a COUNSELOR can decide on an application assigned to them", async () => {
+    await makeInstitution("INS0001");
+    const counselor = await signIn("INS0001", "COUNSELOR");
+    const application = await makeApplication("INS0001", { assignedTo: String(counselor._id) });
+
+    const { PATCH } = await import("@/app/api/scholarship-applications/[id]/route");
+    const response = await PATCH(cookieRequest({ body: { reviewStatus: "SHORTLISTED" } }), {
+      params: Promise.resolve({ id: String(application._id) }),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("a COUNSELOR can decide on an unassigned application", async () => {
+    await makeInstitution("INS0001");
+    await signIn("INS0001", "COUNSELOR");
+    const application = await makeApplication("INS0001");
+
+    const { PATCH } = await import("@/app/api/scholarship-applications/[id]/route");
+    const response = await PATCH(cookieRequest({ body: { reviewStatus: "SHORTLISTED" } }), {
+      params: Promise.resolve({ id: String(application._id) }),
+    });
+    expect(response.status).toBe(200);
+  });
+
+  it("404s for a COUNSELOR deciding on an application assigned to a DIFFERENT counselor (spec §4.6 visibility filter)", async () => {
+    await makeInstitution("INS0001");
+    await signIn("INS0001", "COUNSELOR");
+    const otherCounselor = await makeUser("INS0001", "COUNSELOR", "other-counselor@example.test");
+    const application = await makeApplication("INS0001", { assignedTo: String(otherCounselor._id) });
+
+    const { PATCH } = await import("@/app/api/scholarship-applications/[id]/route");
+    const response = await PATCH(cookieRequest({ body: { reviewStatus: "SHORTLISTED" } }), {
+      params: Promise.resolve({ id: String(application._id) }),
+    });
+    expect(response.status).toBe(404);
   });
 });
 
