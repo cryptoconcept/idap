@@ -1,8 +1,9 @@
 import "server-only";
 import { Types } from "mongoose";
-import { ScholarshipApplication, Scholarship, PlatformConnection } from "@/models";
+import { ScholarshipApplication, Scholarship, PlatformConnection, PlatformCredential } from "@/models";
 import { NotificationService } from "./notification.service";
 import { afterResponse } from "@/lib/after-response";
+import { loadScholarshipHubPartnerContext } from "@/lib/connectors/scholarship-hub-partner-client";
 
 export type HubApplicationPayload = {
   hubApplicationId: string;
@@ -122,4 +123,69 @@ export async function upsertFromHubPayload(payload: HubApplicationPayload): Prom
   ).lean();
   if (!updated) throw new Error("scholarship-application sync: row vanished between insert and update");
   return { kind: "UPDATED", id: String(updated._id) };
+}
+
+type PartnerApplicationDTO = HubApplicationPayload; // Plan 2A's wire shape matches HubApplicationPayload exactly.
+
+/**
+ * The reconciliation backbone — called by the cron (below) on a schedule,
+ * and by the webhook receiver (Task 5) immediately on a valid signed ping.
+ * Walks the partner list endpoint from the stored cursor until caught up
+ * (a page whose `hasMore` is false), ingesting every item through the SAME
+ * `upsertFromHubPayload` the webhook path uses — this is what makes a
+ * missed or failed webhook non-fatal: the next scheduled run of this same
+ * function backfills it.
+ *
+ * The list endpoint always returns a real, usable `nextCursor` whenever a
+ * page has ≥1 item (even the terminal/non-full page) — `nextCursor` is
+ * `null` only for a genuinely empty page. `hasMore` is the sole signal for
+ * whether another page exists; IDAP never decodes or reconstructs a
+ * cursor itself, it only ever persists and replays the opaque value the
+ * Hub hands back.
+ */
+export async function runReconciliationPull(): Promise<{
+  scanned: number;
+  ingested: number;
+  cursorAdvanced: boolean;
+}> {
+  const ctx = await loadScholarshipHubPartnerContext();
+  const stored = await PlatformCredential.findOne({ platform: "SCHOLARSHIP_HUB", active: true })
+    .select("applicationsSyncCursor")
+    .lean();
+
+  let cursor = stored?.applicationsSyncCursor;
+  const initialCursor = cursor;
+  let scanned = 0;
+  let ingested = 0;
+
+  // Bounded loop: a safety cap on pages so a misbehaving upstream (an
+  // endless `hasMore: true` chain) can never hang this call forever. 50
+  // pages at 200/page is 10,000 applications per run — far beyond one poll
+  // cycle's realistic volume.
+  for (let page = 0; page < 50; page += 1) {
+    const query = cursor ? `?since=${encodeURIComponent(cursor)}&limit=200` : `?limit=200`;
+    const resp = await ctx.http(`/api/partner/applications${query}`, { method: "GET", token: ctx.platformKey });
+    if (resp.status !== 200) break;
+
+    const body = resp.body as { items: PartnerApplicationDTO[]; nextCursor: string | null; hasMore: boolean };
+    scanned += body.items.length;
+
+    for (const item of body.items) {
+      const outcome = await upsertFromHubPayload(item);
+      if (outcome.kind === "INSERTED" || outcome.kind === "UPDATED") ingested += 1;
+    }
+
+    if (body.nextCursor) cursor = body.nextCursor;
+    if (!body.hasMore) break;
+  }
+
+  const cursorAdvanced = cursor !== undefined && cursor !== initialCursor;
+  if (cursorAdvanced) {
+    await PlatformCredential.updateOne(
+      { platform: "SCHOLARSHIP_HUB" },
+      { $set: { applicationsSyncCursor: cursor } },
+    );
+  }
+
+  return { scanned, ingested, cursorAdvanced };
 }
