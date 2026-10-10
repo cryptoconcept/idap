@@ -46,6 +46,12 @@ describe("ScholarshipApplicationService.list", () => {
     expect(page.totalPages).toBe(3);
     expect(page.items).toHaveLength(2);
   });
+
+  it("treats regex special characters in q as literal text instead of throwing", async () => {
+    await makeApplication("INS0001");
+    const result = await ScholarshipApplicationService.list({ institutionId: "INS0001" }, { q: "(" });
+    expect(result.total).toBe(0);
+  });
 });
 
 describe("ScholarshipApplicationService.assign", () => {

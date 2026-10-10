@@ -7,6 +7,7 @@ import { ActivityService } from "./activity.service";
 import { notFound } from "@/lib/api/errors";
 import type { ScholarshipApplicationQuery } from "@/lib/validation/scholarship-application";
 import type { HubApplicationStatus, ScholarshipApplicationReviewStatus } from "@/lib/constants";
+import { escapeRegex } from "@/lib/utils/serialize";
 
 export type ScholarshipApplicationDTO = {
   id: string;
@@ -60,7 +61,7 @@ function buildFilter(
   if (query.hubStatus) filter.hubStatus = query.hubStatus;
   if (query.reviewStatus) filter.reviewStatus = query.reviewStatus;
   if (query.assignedTo) filter.assignedTo = query.assignedTo;
-  if (query.q) filter["applicant.name"] = { $regex: `^${query.q.trim()}`, $options: "i" };
+  if (query.q) filter["applicant.name"] = { $regex: `^${escapeRegex(query.q.trim())}`, $options: "i" };
   if (query.from || query.to) {
     filter.createdAt = {
       ...(query.from ? { $gte: new Date(query.from) } : {}),
